@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, Stack } from "expo-router";
 import {
   Image,
   ScrollView,
@@ -8,114 +8,63 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/color";
 
 export default function RescueConfirmed() {
   return (
-    <View style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
-      {/* =================================================
-          HEADER — SAME AS CART
-      ================================================= */}
-
+      {/* HEADER */}
       <View style={styles.header}>
         <View style={styles.logoContainer}>
           <Text style={styles.logo}>RESERVE</Text>
-
-          <Text style={styles.logoSubtitle}>
-            Consumer Portal
-          </Text>
+          <Text style={styles.logoSubtitle}>Consumer Portal</Text>
         </View>
 
         <View style={styles.locationPill}>
-          <Ionicons
-            name="location-outline"
-            size={14}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.locationText}>
-            Lapu-Lapu City
-          </Text>
+          <Ionicons name="location-outline" size={13} color={Colors.primary} />
+          <Text style={styles.locationText}>Lapu-Lapu City</Text>
         </View>
       </View>
 
-      {/* =================================================
-          CONTENT
-      ================================================= */}
-
+      {/* CONTENT */}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-
-        {/* =================================================
-            PAGE TITLE
-        ================================================= */}
-
         <View style={styles.titleSection}>
-
           <View style={styles.titleRow}>
             <TouchableOpacity
               style={styles.backButton}
               activeOpacity={0.7}
               onPress={() => router.replace("/consumer/claims")}
             >
-              <Ionicons
-                name="arrow-back"
-                size={20}
-                color={Colors.primary}
-              />
+              <Ionicons name="arrow-back" size={18} color={Colors.primary} />
             </TouchableOpacity>
 
             <View>
-              <Text style={styles.pageTitle}>
-                Rescue Confirmed
-              </Text>
-
-              <Text style={styles.pageSubtitle}>
-                Your food rescue has been successfully confirmed.
-              </Text>
+              <Text style={styles.pageTitle}>Rescue Confirmed</Text>
+              <Text style={styles.pageSubtitle}>Your food rescue has been successfully confirmed.</Text>
             </View>
-
           </View>
-
         </View>
 
-        {/* =================================================
-            SUCCESS
-        ================================================= */}
-
+        {/* SUCCESS */}
         <View style={styles.successSection}>
-
           <View style={styles.successCircle}>
-            <Ionicons
-              name="checkmark"
-              size={42}
-              color={Colors.white}
-            />
+            <Ionicons name="checkmark" size={36} color={Colors.white} />
           </View>
 
-          <Text style={styles.successText}>
-            Rescue Made Successfully!
-          </Text>
-
-          <Text style={styles.successSubtext}>
-            Your rescue item has been reserved successfully.
-          </Text>
-
+          <Text style={styles.successText}>Rescue Made Successfully!</Text>
+          <Text style={styles.successSubtext}>Your rescue item has been reserved successfully.</Text>
         </View>
 
-        {/* =================================================
-            PROOF OF TRANSACTION
-        ================================================= */}
-
+        {/* PROOF OF TRANSACTION */}
         <View style={styles.proofCard}>
-
-          <Text style={styles.proofTitle}>
-            Proof of Transaction
-          </Text>
+          <Text style={styles.proofTitle}>Proof of Transaction</Text>
 
           <View style={styles.qrContainer}>
             <Image
@@ -125,273 +74,107 @@ export default function RescueConfirmed() {
             />
           </View>
 
-          <Text style={styles.voucherText}>
-            Your QR Voucher
-          </Text>
-
-          <Text style={styles.referenceLabel}>
-            Reference Number
-          </Text>
-
-          <Text style={styles.referenceNumber}>
-            FBK-2024-0315-A123
-          </Text>
-
+          <Text style={styles.voucherText}>Your QR Voucher</Text>
+          <Text style={styles.referenceLabel}>Reference Number</Text>
+          <Text style={styles.referenceNumber}>FBK-2024-0315-A123</Text>
         </View>
 
-        {/* =================================================
-            IMPORTANT NOTICE
-        ================================================= */}
-
+        {/* IMPORTANT NOTICE */}
         <View style={styles.noticeCard}>
-
           <View style={styles.noticeIconContainer}>
-            <Ionicons
-              name="information-circle-outline"
-              size={20}
-              color={Colors.primary}
-            />
+            <Ionicons name="information-circle-outline" size={18} color={Colors.primary} />
           </View>
-
           <View style={styles.noticeContent}>
-
-            <Text style={styles.noticeTitle}>
-              Pickup Reminder
-            </Text>
-
+            <Text style={styles.noticeTitle}>Pickup Reminder</Text>
             <Text style={styles.noticeText}>
-              Please arrive at{" "}
-              <Text style={styles.noticeBold}>
-                Nena's Bakery (Pusok, Lapu-Lapu)
-              </Text>{" "}
-              not later than{" "}
-              <Text style={styles.noticeBold}>
-                4:30 PM
-              </Text>
-              .
+              Please arrive at <Text style={styles.noticeBold}>Nena's Bakery (Pusok, Lapu-Lapu)</Text> not later than <Text style={styles.noticeBold}>4:30 PM</Text>.
             </Text>
-
           </View>
-
         </View>
 
-        {/* =================================================
-            PAYMENT SUMMARY
-        ================================================= */}
-
-        <Text style={styles.sectionTitle}>
-          Payment Summary
-        </Text>
-
+        {/* PAYMENT SUMMARY */}
+        <Text style={styles.sectionTitle}>Payment Summary</Text>
         <View style={styles.summaryCard}>
-
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>
-              Total Value
-            </Text>
-
-            <Text style={styles.summaryValue}>
-              ₱100.00
-            </Text>
+            <Text style={styles.summaryLabel}>Total Value</Text>
+            <Text style={styles.summaryValue}>₱100.00</Text>
           </View>
 
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>
-              Paid Today
-            </Text>
-
-            <Text style={styles.summaryValue}>
-              ₱10.00
-            </Text>
+            <Text style={styles.summaryLabel}>Paid Today</Text>
+            <Text style={styles.summaryValue}>₱10.00</Text>
           </View>
 
           <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>
-              Remaining Balance
-            </Text>
-
-            <Text style={styles.summaryValue}>
-              ₱90.00
-            </Text>
+            <Text style={styles.summaryLabel}>Remaining Balance</Text>
+            <Text style={styles.summaryValue}>₱90.00</Text>
           </View>
-
         </View>
 
-        {/* =================================================
-            DONE BUTTON
-        ================================================= */}
-
+        {/* DONE BUTTON */}
         <TouchableOpacity
           style={styles.doneButton}
-          activeOpacity={0.8}
-          onPress={() =>
-            router.replace("/consumer/claims")
-          }
+          activeOpacity={0.85}
+          onPress={() => router.replace("/consumer/claims")}
         >
-          <Ionicons
-            name="receipt-outline"
-            size={17}
-            color={Colors.white}
-          />
-
-          <Text style={styles.doneButtonText}>
-            View My Claims
-          </Text>
-
-          <Ionicons
-            name="arrow-forward"
-            size={17}
-            color={Colors.white}
-          />
+          <Ionicons name="receipt-outline" size={16} color={Colors.white} />
+          <Text style={styles.doneButtonText}>View My Claims</Text>
+          <Ionicons name="arrow-forward" size={16} color={Colors.white} />
         </TouchableOpacity>
 
-        <Text style={styles.secureText}>
-          Keep your QR voucher ready when claiming your rescue item.
-        </Text>
-
+        <Text style={styles.secureText}>Keep your QR voucher ready when claiming your rescue item.</Text>
         <View style={styles.bottomSpace} />
-
       </ScrollView>
 
-      {/* =================================================
-          BOTTOM NAV — SAME AS CART
-      ================================================= */}
-
+      {/* BOTTOM NAV */}
       <View style={styles.bottomNav}>
-
-        {/* HOME */}
+        <TouchableOpacity
+          style={styles.navItem}
+          activeOpacity={0.7}
+          onPress={() => router.replace("/consumer/homepage")}
+        >
+          <Ionicons name="home-outline" size={22} color={Colors.icon} />
+          <Text style={styles.navText}>Home</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.navItem}
           activeOpacity={0.7}
-          onPress={() =>
-            router.replace("/consumer/homepage")
-          }
+          onPress={() => router.replace("/consumer/cart")}
         >
-          <Ionicons
-            name="home-outline"
-            size={21}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.navLabel}>
-            Home
-          </Text>
+          <Ionicons name="cart-outline" size={22} color={Colors.icon} />
+          <Text style={styles.navText}>My Cart</Text>
         </TouchableOpacity>
 
-        {/* SEARCH */}
+        <TouchableOpacity
+          style={[styles.navItem, styles.navItemActive]}
+          activeOpacity={1}
+        >
+          <Ionicons name="receipt" size={22} color={Colors.primary} />
+          <Text style={[styles.navText, styles.navTextActive]}>My Claims</Text>
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.navItem}
           activeOpacity={0.7}
+          onPress={() => router.replace("/consumer/profile")}
         >
-          <Ionicons
-            name="search-outline"
-            size={21}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.navLabel}>
-            Search
-          </Text>
+          <Ionicons name="person-outline" size={22} color={Colors.icon} />
+          <Text style={styles.navText}>Profile</Text>
         </TouchableOpacity>
-
-        {/* CART */}
-
-        <TouchableOpacity
-          style={styles.navItem}
-          activeOpacity={0.7}
-          onPress={() =>
-            router.replace("/consumer/cart")
-          }
-        >
-          <Ionicons
-            name="cart-outline"
-            size={21}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.navLabel}>
-            My Cart
-          </Text>
-        </TouchableOpacity>
-
-        {/* CLAIMS */}
-
-        <TouchableOpacity
-          style={[
-            styles.navItem,
-            styles.navItemActive,
-          ]}
-          activeOpacity={0.7}
-          onPress={() =>
-            router.replace("/consumer/claims")
-          }
-        >
-          <Ionicons
-            name="receipt"
-            size={21}
-            color={Colors.primary}
-          />
-
-          <Text
-            style={[
-              styles.navLabel,
-              styles.navLabelActive,
-            ]}
-          >
-            My Claims
-          </Text>
-        </TouchableOpacity>
-
-        {/* PROFILE */}
-
-        <TouchableOpacity
-          style={styles.navItem}
-          activeOpacity={0.7}
-          onPress={() =>
-            router.replace("/consumer/profile")
-          }
-        >
-          <Ionicons
-            name="person-circle-outline"
-            size={21}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.navLabel}>
-            Profile
-          </Text>
-        </TouchableOpacity>
-
       </View>
-
-    </View>
+    </SafeAreaView>
   );
 }
 
-// =========================================================
-// STYLES
-// =========================================================
-
 const styles = StyleSheet.create({
-
-  // =======================================================
-  // MAIN
-  // =======================================================
-
   container: {
     flex: 1,
     backgroundColor: Colors.background,
   },
-
-  // =======================================================
-  // HEADER — EXACT CART STYLE
-  // =======================================================
-
   header: {
-    height: 70,
-    paddingHorizontal: 18,
+    height: 64,
+    paddingHorizontal: 16,
     backgroundColor: Colors.background,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
@@ -399,366 +182,261 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   logoContainer: {
     justifyContent: "center",
   },
-
   logo: {
     fontFamily: "PoppinsBold",
-    fontSize: 23,
-    lineHeight: 26,
+    fontSize: 22,
     color: Colors.primary,
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
   },
-
   logoSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    lineHeight: 11,
+    fontSize: 10,
     color: Colors.primary1,
-    marginTop: -1,
+    marginTop: -3,
   },
-
   locationPill: {
-    height: 30,
-    paddingHorizontal: 10,
+    height: 32,
+    paddingHorizontal: 12,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 20,
+    borderRadius: 16,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 4,
   },
-
   locationText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 9,
-    lineHeight: 12,
-    color: Colors.text,
-    marginLeft: 4,
+    fontFamily: "PoppinsMedium",
+    fontSize: 11,
+    color: Colors.primary2,
   },
-
-  // =======================================================
-  // SCROLL
-  // =======================================================
-
   scrollContent: {
-    paddingHorizontal: 18,
-    paddingTop: 22,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 24,
   },
-
-  // =======================================================
-  // TITLE
-  // =======================================================
-
   titleSection: {
-    marginBottom: 18,
+    marginBottom: 16,
   },
-
   titleRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
   },
-
   backButton: {
     width: 34,
     height: 34,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 9,
+    borderRadius: 10,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
   },
-
   pageTitle: {
     fontFamily: "PoppinsBold",
     fontSize: 24,
-    lineHeight: 29,
     color: Colors.primary2,
   },
-
   pageSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    lineHeight: 15,
+    fontSize: 12,
     color: Colors.primary1,
     marginTop: 2,
   },
-
-  // =======================================================
-  // SUCCESS
-  // =======================================================
-
   successSection: {
     alignItems: "center",
-    marginBottom: 18,
+    marginBottom: 16,
   },
-
   successCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: Colors.button,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 12,
+    marginBottom: 10,
   },
-
   successText: {
     fontFamily: "PoppinsBold",
     fontSize: 17,
-    lineHeight: 22,
     color: Colors.primary2,
     textAlign: "center",
   },
-
   successSubtext: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9,
-    lineHeight: 14,
+    fontSize: 11,
     color: Colors.primary1,
     textAlign: "center",
-    marginTop: 3,
+    marginTop: 2,
   },
-
-  // =======================================================
-  // PROOF CARD
-  // =======================================================
-
   proofCard: {
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
-    padding: 14,
+    borderRadius: 14,
+    padding: 16,
     alignItems: "center",
-    marginBottom: 15,
+    marginBottom: 14,
   },
-
   proofTitle: {
-    fontFamily: "PoppinsBold",
+    fontFamily: "PoppinsSemiBold",
     fontSize: 14,
-    lineHeight: 18,
     color: Colors.primary2,
     marginBottom: 8,
   },
-
   qrContainer: {
-    width: 170,
-    height: 170,
+    width: 155,
+    height: 155,
     backgroundColor: Colors.white,
     alignItems: "center",
     justifyContent: "center",
   },
-
   qrImage: {
-    width: 155,
-    height: 155,
+    width: 140,
+    height: 140,
   },
-
   voucherText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    lineHeight: 14,
+    fontSize: 11,
     color: Colors.primary2,
-    marginTop: 2,
+    marginTop: 4,
   },
-
   referenceLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    lineHeight: 12,
+    fontSize: 10,
     color: Colors.placeholder,
-    marginTop: 7,
+    marginTop: 6,
   },
-
   referenceNumber: {
     fontFamily: "PoppinsBold",
     fontSize: 15,
-    lineHeight: 20,
     color: Colors.primary,
     marginTop: 1,
   },
-
-  // =======================================================
-  // NOTICE — SAME CARD LANGUAGE AS CART
-  // =======================================================
-
   noticeCard: {
-    backgroundColor: "#EEF3EF",
+    backgroundColor: "#E8EFEA",
     borderWidth: 1,
-    borderColor: "#D3DED6",
-    borderRadius: 10,
-    padding: 11,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    padding: 12,
     flexDirection: "row",
-    marginBottom: 20,
+    gap: 10,
+    marginBottom: 16,
   },
-
   noticeIconContainer: {
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: "#E0EAE3",
+    backgroundColor: Colors.white,
     alignItems: "center",
     justifyContent: "center",
   },
-
   noticeContent: {
     flex: 1,
-    marginLeft: 9,
   },
-
   noticeTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    lineHeight: 14,
+    fontSize: 11,
     color: Colors.primary2,
     marginBottom: 2,
   },
-
   noticeText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    lineHeight: 14,
+    fontSize: 11,
     color: Colors.primary1,
+    lineHeight: 16,
   },
-
   noticeBold: {
     fontFamily: "PoppinsSemiBold",
     color: Colors.primary2,
   },
-
-  // =======================================================
-  // SECTION TITLE
-  // =======================================================
-
   sectionTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 14,
-    lineHeight: 18,
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 15,
     color: Colors.primary2,
-    marginBottom: 9,
+    marginBottom: 6,
   },
-
-  // =======================================================
-  // SUMMARY — SAME AS CART
-  // =======================================================
-
   summaryCard: {
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
-    padding: 14,
-    marginBottom: 15,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 16,
   },
-
   summaryRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 11,
+    marginBottom: 10,
   },
-
   summaryLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
-    lineHeight: 13,
+    fontSize: 11,
     color: Colors.primary1,
   },
-
   summaryValue: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    lineHeight: 14,
+    fontFamily: "PoppinsMedium",
+    fontSize: 11,
     color: Colors.primary2,
   },
-
-  // =======================================================
-  // BUTTON
-  // =======================================================
-
   doneButton: {
-    height: 50,
+    height: 48,
     backgroundColor: Colors.button,
-    borderRadius: 9,
+    borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 7,
+    gap: 6,
   },
-
   doneButtonText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: 12,
     color: Colors.white,
   },
-
   secureText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
-    lineHeight: 12,
+    fontSize: 10,
     color: Colors.placeholder,
     textAlign: "center",
     marginTop: 8,
   },
-
   bottomSpace: {
-    height: 20,
+    height: 16,
   },
-
-  // =======================================================
-  // BOTTOM NAV — EXACT CART STYLE
-  // =======================================================
-
   bottomNav: {
-    height: 64,
+    height: 84,
+    paddingBottom: 20,
     backgroundColor: Colors.white,
+    flexDirection: "row",
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-around",
-    elevation: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowRadius: 5,
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
+    elevation: 8,
+    paddingHorizontal: 2,
   },
-
   navItem: {
-    height: 48,
-    minWidth: 62,
-    paddingHorizontal: 6,
-    borderRadius: 9,
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    marginVertical: 4,
+    borderRadius: 8,
   },
-
   navItemActive: {
     backgroundColor: "#E8EFEA",
   },
-
-  navLabel: {
+  navText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
-    lineHeight: 11,
+    fontSize: 10,
     color: Colors.icon,
-    marginTop: 3,
+    marginTop: 2,
   },
-
-  navLabelActive: {
+  navTextActive: {
     fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
     color: Colors.primary,
   },
-
 });

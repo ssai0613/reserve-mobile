@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, Stack } from "expo-router";
 import {
   SafeAreaView,
   ScrollView,
@@ -108,6 +108,7 @@ const recentImpact = [
 export default function EstablishmentImpact() {
   return (
     <SafeAreaView style={styles.container}>
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
       {/* =================================================
           HEADER
@@ -131,7 +132,7 @@ export default function EstablishmentImpact() {
             style={styles.headerIconButton}
             activeOpacity={0.7}
             onPress={() =>
-              router.push(
+              router.replace(
                 "/establishment/notifications"
               )
             }
@@ -148,7 +149,7 @@ export default function EstablishmentImpact() {
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() =>
-              router.push(
+              router.replace(
                 "/establishment/profile"
               )
             }
@@ -185,6 +186,9 @@ export default function EstablishmentImpact() {
 
           <Text style={styles.pageTitle}>
             Your impact
+          </Text>
+          <Text style={styles.pageSubtitle}>
+            Monitor your environmental contributions and community reach
           </Text>
 
         </View>
@@ -494,14 +498,17 @@ export default function EstablishmentImpact() {
 
             <View
               key={impact.id}
-              style={styles.recentRow}
+              style={[
+                styles.recentRow,
+                index === recentImpact.length - 1 && styles.recentRowLast,
+              ]}
             >
 
               <View style={styles.recentIcon}>
 
                 <Ionicons
                   name={impact.icon}
-                  size={17}
+                  size={18}
                   color={Colors.primary}
                 />
 
@@ -565,7 +572,7 @@ export default function EstablishmentImpact() {
 
         </View>
 
-        <View style={{ height: 30 }} />
+        <View style={{ height: 35 }} />
 
       </ScrollView>
 
@@ -599,7 +606,7 @@ export default function EstablishmentImpact() {
           icon="basket-outline"
           label="Orders"
           onPress={() =>
-            router.push(
+            router.replace(
               "/establishment/orders"
             )
           }
@@ -609,7 +616,7 @@ export default function EstablishmentImpact() {
           icon="cash-outline"
           label="Earnings"
           onPress={() =>
-            router.push(
+            router.replace(
               "/establishment/earnings"
             )
           }
@@ -630,7 +637,7 @@ export default function EstablishmentImpact() {
           label="Impact"
           active
           onPress={() =>
-            router.push(
+            router.replace(
               "/establishment/impact"
             )
           }
@@ -664,7 +671,7 @@ function ImpactStatCard({
 
         <Ionicons
           name={icon}
-          size={19}
+          size={20}
           color={Colors.primary}
         />
 
@@ -708,7 +715,7 @@ function ImpactRow({
 
         <Ionicons
           name={icon}
-          size={18}
+          size={20}
           color={Colors.primary}
         />
 
@@ -757,13 +764,13 @@ function BottomNavItem({
         styles.navItem,
         active && styles.navItemActive,
       ]}
-      activeOpacity={0.7}
-      onPress={onPress}
+      activeOpacity={active ? 1 : 0.7}
+      onPress={active ? undefined : onPress}
     >
 
       <Ionicons
         name={icon}
-        size={21}
+        size={24}
         color={
           active
             ? Colors.primary
@@ -805,81 +812,62 @@ const styles = StyleSheet.create({
 
   header: {
     minHeight: 70,
-
     backgroundColor: Colors.background,
-
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-
     paddingHorizontal: 18,
-
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-
   logo: {
     fontFamily: "PoppinsBold",
-    fontSize: 23,
+    fontSize: 26, 
     color: Colors.primary,
     letterSpacing: 0.7,
   },
-
   headerSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
+    fontSize: 12, 
     color: Colors.primary1,
-    marginTop: -1,
+    marginTop: -2,
   },
-
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
     gap: 15,
   },
-
   headerIconButton: {
     position: "relative",
     padding: 4,
   },
-
   notificationDot: {
     position: "absolute",
-
     width: 7,
     height: 7,
-
     borderRadius: 4,
-
     backgroundColor: "#A94A3A",
-
     right: 3,
     top: 2,
-
     borderWidth: 1.5,
     borderColor: Colors.background,
   },
-
   profileCircle: {
     width: 34,
     height: 34,
-
     borderRadius: 17,
-
     backgroundColor: Colors.primary,
-
     alignItems: "center",
     justifyContent: "center",
   },
-
   /* ===================================================
      SCROLL
   =================================================== */
 
   scrollContent: {
     paddingHorizontal: 17,
-    paddingTop: 20,
-    paddingBottom: 20,
+    paddingTop: 18,
+    paddingBottom: 90,
   },
 
   /* ===================================================
@@ -887,22 +875,21 @@ const styles = StyleSheet.create({
   =================================================== */
 
   pageHeader: {
-    marginBottom: 17,
+    marginBottom: 16,
   },
 
   pageTitle: {
     fontFamily: "PoppinsBold",
     fontSize: 24,
+    lineHeight: 31,
     color: Colors.primary2,
   },
 
   pageSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9,
+    fontSize: 12,
     color: Colors.primary1,
-    lineHeight: 14,
-    marginTop: 3,
-    maxWidth: "95%",
+    marginTop: 2,
   },
 
   /* ===================================================
@@ -912,41 +899,31 @@ const styles = StyleSheet.create({
   impactHero: {
     backgroundColor: Colors.primary,
 
-    borderRadius: 11,
+    borderRadius: 14,
 
-    padding: 16,
+    padding: 18,
 
-    marginBottom: 22,
+    marginBottom: 24,
   },
 
   heroIcon: {
-    width: 46,
-    height: 46,
+    width: 48,
+    height: 48,
 
-    borderRadius: 23,
+    borderRadius: 24,
 
     backgroundColor: Colors.button,
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   heroTitle: {
     fontFamily: "PoppinsBold",
-    fontSize: 17,
+    fontSize: 19,
     color: Colors.white,
-  },
-
-  heroDescription: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    color: "#D8E3DD",
-
-    lineHeight: 13,
-
-    marginTop: 3,
   },
 
   heroDivider: {
@@ -954,7 +931,7 @@ const styles = StyleSheet.create({
 
     backgroundColor: "rgba(255,255,255,0.18)",
 
-    marginVertical: 13,
+    marginVertical: 14,
   },
 
   heroBottom: {
@@ -965,22 +942,22 @@ const styles = StyleSheet.create({
 
   heroNumber: {
     fontFamily: "PoppinsBold",
-    fontSize: 19,
+    fontSize: 22,
     color: Colors.white,
   },
 
   heroLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11.5,
     color: "#D8E3DD",
-    marginTop: -1,
+    marginTop: 1,
   },
 
   heroLeafIcon: {
-    width: 38,
-    height: 38,
+    width: 42,
+    height: 42,
 
-    borderRadius: 19,
+    borderRadius: 21,
 
     backgroundColor: Colors.white,
 
@@ -998,13 +975,13 @@ const styles = StyleSheet.create({
 
   sectionTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 17,
+    fontSize: 16,
     color: Colors.primary2,
   },
 
   sectionSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9,
+    fontSize: 11,
     color: Colors.primary1,
     marginTop: 1,
   },
@@ -1019,7 +996,7 @@ const styles = StyleSheet.create({
 
     justifyContent: "space-between",
 
-    marginBottom: 22,
+    marginBottom: 24,
   },
 
   statCard: {
@@ -1027,47 +1004,47 @@ const styles = StyleSheet.create({
 
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    padding: 12,
+    padding: 14,
 
-    marginBottom: 9,
+    marginBottom: 10,
   },
 
   statIcon: {
-    width: 34,
-    height: 34,
+    width: 40,
+    height: 40,
 
-    borderRadius: 17,
+    borderRadius: 20,
 
     backgroundColor: "#E8EFEA",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginBottom: 8,
+    marginBottom: 10,
   },
 
   statValue: {
     fontFamily: "PoppinsBold",
-    fontSize: 17,
+    fontSize: 20,
     color: Colors.primary,
   },
 
   statLabel: {
     fontFamily: "PoppinsMedium",
-    fontSize: 8.5,
+    fontSize: 12,
     color: Colors.primary2,
 
-    marginTop: 1,
+    marginTop: 2,
   },
 
   statUnit: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.primary1,
 
     marginTop: 1,
@@ -1080,14 +1057,14 @@ const styles = StyleSheet.create({
   chartCard: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    padding: 13,
+    padding: 16,
 
-    marginBottom: 22,
+    marginBottom: 24,
   },
 
   chartTop: {
@@ -1095,20 +1072,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
 
-    marginBottom: 13,
+    marginBottom: 14,
   },
 
   chartTotal: {
     fontFamily: "PoppinsBold",
-    fontSize: 18,
+    fontSize: 20,
     color: Colors.primary,
   },
 
   chartLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.primary1,
-    marginTop: -1,
+    marginTop: 1,
   },
 
   growthBadge: {
@@ -1119,28 +1096,28 @@ const styles = StyleSheet.create({
 
     borderRadius: 12,
 
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
 
   growthText: {
     fontFamily: "PoppinsMedium",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.button,
 
-    marginLeft: 3,
+    marginLeft: 4,
   },
 
   chart: {
-    height: 160,
+    height: 165,
 
     flexDirection: "row",
   },
 
   chartYAxis: {
-    width: 27,
+    width: 35,
 
-    height: 130,
+    height: 135,
 
     justifyContent: "space-between",
     alignItems: "flex-start",
@@ -1148,14 +1125,14 @@ const styles = StyleSheet.create({
 
   axisText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 6.5,
+    fontSize: 10,
     color: Colors.primary1,
   },
 
   chartArea: {
     flex: 1,
 
-    height: 145,
+    height: 150,
 
     position: "relative",
 
@@ -1174,7 +1151,7 @@ const styles = StyleSheet.create({
   },
 
   barsRow: {
-    height: 145,
+    height: 150,
 
     flexDirection: "row",
 
@@ -1182,11 +1159,11 @@ const styles = StyleSheet.create({
 
     justifyContent: "space-around",
 
-    paddingHorizontal: 7,
+    paddingHorizontal: 8,
   },
 
   barColumn: {
-    height: 145,
+    height: 150,
 
     alignItems: "center",
 
@@ -1194,19 +1171,19 @@ const styles = StyleSheet.create({
   },
 
   bar: {
-    width: 24,
+    width: 26,
 
-    borderTopLeftRadius: 5,
-    borderTopRightRadius: 5,
+    borderTopLeftRadius: 6,
+    borderTopRightRadius: 6,
 
     backgroundColor: Colors.button,
 
-    marginBottom: 6,
+    marginBottom: 8,
   },
 
   barLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7,
+    fontSize: 11,
     color: Colors.primary1,
   },
 
@@ -1217,36 +1194,36 @@ const styles = StyleSheet.create({
   communityCard: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
 
-    marginBottom: 22,
+    marginBottom: 24,
   },
 
   impactRow: {
     flexDirection: "row",
     alignItems: "center",
 
-    paddingVertical: 11,
+    paddingVertical: 13,
   },
 
   impactRowIcon: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
 
-    borderRadius: 18,
+    borderRadius: 20,
 
     backgroundColor: "#E8EFEA",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 10,
+    marginRight: 12,
   },
 
   impactRowContent: {
@@ -1255,23 +1232,23 @@ const styles = StyleSheet.create({
 
   impactRowTitle: {
     fontFamily: "PoppinsMedium",
-    fontSize: 9,
+    fontSize: 13,
     color: Colors.primary2,
   },
 
   impactRowDescription: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.primary1,
 
-    lineHeight: 11,
+    lineHeight: 15,
 
-    marginTop: 1,
+    marginTop: 2,
   },
 
   impactRowValue: {
     fontFamily: "PoppinsBold",
-    fontSize: 12,
+    fontSize: 15,
     color: Colors.primary,
   },
 
@@ -1288,27 +1265,27 @@ const styles = StyleSheet.create({
   environmentCard: {
     backgroundColor: "#E9EFE9",
 
-    borderRadius: 10,
+    borderRadius: 14,
 
-    padding: 13,
+    padding: 16,
 
     flexDirection: "row",
 
-    marginBottom: 22,
+    marginBottom: 24,
   },
 
   environmentIcon: {
-    width: 42,
-    height: 42,
+    width: 45,
+    height: 45,
 
-    borderRadius: 21,
+    borderRadius: 22,
 
     backgroundColor: Colors.white,
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 10,
+    marginRight: 12,
   },
 
   environmentContent: {
@@ -1317,18 +1294,18 @@ const styles = StyleSheet.create({
 
   environmentTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 10.5,
+    fontSize: 14,
     color: Colors.primary2,
   },
 
   environmentDescription: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.8,
+    fontSize: 11.5,
     color: Colors.primary1,
 
-    lineHeight: 12,
+    lineHeight: 17,
 
-    marginTop: 2,
+    marginTop: 3,
   },
 
   /* ===================================================
@@ -1338,18 +1315,18 @@ const styles = StyleSheet.create({
   recentCard: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
 
-    marginBottom: 22,
+    marginBottom: 24,
   },
 
   recentRow: {
-    minHeight: 68,
+    minHeight: 72,
 
     flexDirection: "row",
     alignItems: "center",
@@ -1363,17 +1340,17 @@ const styles = StyleSheet.create({
   },
 
   recentIcon: {
-    width: 35,
-    height: 35,
+    width: 38,
+    height: 38,
 
-    borderRadius: 18,
+    borderRadius: 19,
 
     backgroundColor: "#E8EFEA",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 9,
+    marginRight: 11,
   },
 
   recentContent: {
@@ -1382,30 +1359,30 @@ const styles = StyleSheet.create({
 
   recentTitle: {
     fontFamily: "PoppinsMedium",
-    fontSize: 8.8,
+    fontSize: 12.5,
     color: Colors.primary2,
   },
 
   recentDescription: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.3,
+    fontSize: 11,
     color: Colors.primary1,
 
-    lineHeight: 11,
+    lineHeight: 15,
 
     marginTop: 2,
 
-    paddingRight: 5,
+    paddingRight: 6,
   },
 
   recentDate: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7,
+    fontSize: 11,
     color: Colors.primary1,
 
     alignSelf: "flex-start",
 
-    marginTop: 16,
+    marginTop: 18,
   },
 
   /* ===================================================
@@ -1415,28 +1392,28 @@ const styles = StyleSheet.create({
   motivationCard: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    padding: 13,
+    padding: 16,
 
     flexDirection: "row",
   },
 
   motivationIcon: {
-    width: 39,
-    height: 39,
+    width: 42,
+    height: 42,
 
-    borderRadius: 20,
+    borderRadius: 21,
 
     backgroundColor: "#E8EFEA",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 10,
+    marginRight: 12,
   },
 
   motivationContent: {
@@ -1445,18 +1422,18 @@ const styles = StyleSheet.create({
 
   motivationTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
+    fontSize: 14,
     color: Colors.primary2,
   },
 
   motivationDescription: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.8,
+    fontSize: 11.5,
     color: Colors.primary1,
 
-    lineHeight: 12,
+    lineHeight: 17,
 
-    marginTop: 2,
+    marginTop: 3,
   },
 
   /* ===================================================
@@ -1464,17 +1441,17 @@ const styles = StyleSheet.create({
   =================================================== */
 
   bottomNav: {
-    height: 64,
-
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 90,
+    paddingBottom: 25,
     backgroundColor: Colors.white,
-
     flexDirection: "row",
-
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-
     elevation: 10,
-
     paddingHorizontal: 2,
   },
 
@@ -1496,13 +1473,14 @@ const styles = StyleSheet.create({
 
   navText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7,
+    fontSize: 11,
     color: Colors.icon,
-    marginTop: 3,
+    marginTop: 4,
   },
 
   navTextActive: {
     fontFamily: "PoppinsSemiBold",
+    fontSize: 11,
     color: Colors.primary,
   },
 

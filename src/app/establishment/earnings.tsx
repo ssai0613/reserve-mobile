@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, Stack } from "expo-router";
 import { useState } from "react";
 import {
   SafeAreaView,
@@ -97,6 +97,7 @@ export default function EstablishmentEarnings() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
       {/* =================================================
           HEADER
@@ -122,7 +123,7 @@ export default function EstablishmentEarnings() {
             style={styles.headerIconButton}
             activeOpacity={0.7}
             onPress={() =>
-              router.push("/establishment/notifications")
+              router.replace("/establishment/notifications")
             }
           >
             <Ionicons
@@ -139,7 +140,7 @@ export default function EstablishmentEarnings() {
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() =>
-              router.push("/establishment/profile")
+              router.replace("/establishment/profile")
             }
           >
             <View style={styles.profileCircle}>
@@ -173,6 +174,9 @@ export default function EstablishmentEarnings() {
           <Text style={styles.pageTitle}>
             My Earnings Analytics
           </Text>
+          <Text style={styles.pageSubtitle}>
+            Track revenue, wallet balances, and payout history
+          </Text>
 
         </View>
 
@@ -189,7 +193,7 @@ export default function EstablishmentEarnings() {
             <View style={styles.statIcon}>
               <Ionicons
                 name="cash-outline"
-                size={19}
+                size={20}
                 color={Colors.primary}
               />
             </View>
@@ -225,7 +229,7 @@ export default function EstablishmentEarnings() {
             >
               <Ionicons
                 name="wallet-outline"
-                size={19}
+                size={20}
                 color={Colors.white}
               />
             </View>
@@ -261,7 +265,7 @@ export default function EstablishmentEarnings() {
             <View style={styles.statIcon}>
               <Ionicons
                 name="leaf-outline"
-                size={19}
+                size={20}
                 color={Colors.primary}
               />
             </View>
@@ -297,7 +301,7 @@ export default function EstablishmentEarnings() {
             >
               <Ionicons
                 name="checkmark-circle-outline"
-                size={19}
+                size={20}
                 color={Colors.primary}
               />
             </View>
@@ -815,7 +819,7 @@ export default function EstablishmentEarnings() {
 
                   <Ionicons
                     name="receipt-outline"
-                    size={25}
+                    size={26}
                     color={Colors.primary}
                   />
 
@@ -837,7 +841,7 @@ export default function EstablishmentEarnings() {
 
         </View>
 
-        <View style={{ height: 25 }} />
+        <View style={{ height: 35 }} />
 
       </ScrollView>
 
@@ -1000,13 +1004,13 @@ function BottomNavItem({
         styles.navItem,
         active && styles.navItemActive,
       ]}
-      activeOpacity={0.7}
-      onPress={onPress}
+      activeOpacity={active ? 1 : 0.7}
+      onPress={active ? undefined : onPress}
     >
 
       <Ionicons
         name={icon}
-        size={21}
+        size={24}
         color={
           active
             ? Colors.primary
@@ -1049,69 +1053,51 @@ const styles = StyleSheet.create({
 
   header: {
     minHeight: 70,
-
     backgroundColor: Colors.background,
-
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-
     paddingHorizontal: 18,
-
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-
   logo: {
     fontFamily: "PoppinsBold",
-    fontSize: 23,
+    fontSize: 26, 
     color: Colors.primary,
     letterSpacing: 0.7,
   },
-
   headerSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
+    fontSize: 12, 
     color: Colors.primary1,
-    marginTop: -1,
+    marginTop: -2,
   },
-
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
     gap: 15,
   },
-
   headerIconButton: {
     position: "relative",
     padding: 4,
   },
-
   notificationDot: {
     position: "absolute",
-
     width: 7,
     height: 7,
-
     borderRadius: 4,
-
     backgroundColor: "#A94A3A",
-
     right: 3,
     top: 2,
-
     borderWidth: 1.5,
     borderColor: Colors.background,
   },
-
   profileCircle: {
     width: 34,
     height: 34,
-
     borderRadius: 17,
-
     backgroundColor: Colors.primary,
-
     alignItems: "center",
     justifyContent: "center",
   },
@@ -1122,8 +1108,8 @@ const styles = StyleSheet.create({
 
   scrollContent: {
     paddingHorizontal: 17,
-    paddingTop: 20,
-    paddingBottom: 20,
+    paddingTop: 18,
+    paddingBottom: 90,
   },
 
   /* ===================================================
@@ -1131,18 +1117,19 @@ const styles = StyleSheet.create({
   =================================================== */
 
   pageHeader: {
-    marginBottom: 18,
+    marginBottom: 16,
   },
 
   pageTitle: {
     fontFamily: "PoppinsBold",
     fontSize: 24,
+    lineHeight: 31,
     color: Colors.primary2,
   },
 
   pageSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
+    fontSize: 12,
     color: Colors.primary1,
     marginTop: 2,
   },
@@ -1163,7 +1150,7 @@ const styles = StyleSheet.create({
 
   sectionSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
+    fontSize: 11,
     color: Colors.primary1,
     marginTop: 1,
   },
@@ -1175,23 +1162,23 @@ const styles = StyleSheet.create({
   statsGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 9,
-    marginBottom: 17,
+    gap: 10,
+    marginBottom: 16,
   },
 
   statCard: {
     width: "48.5%",
 
-    minHeight: 76,
+    minHeight: 85,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     backgroundColor: Colors.white,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    padding: 10,
+    padding: 14,
 
     flexDirection: "row",
     alignItems: "center",
@@ -1208,17 +1195,17 @@ const styles = StyleSheet.create({
   },
 
   statIcon: {
-    width: 36,
-    height: 36,
+    width: 42,
+    height: 42,
 
-    borderRadius: 18,
+    borderRadius: 21,
 
     backgroundColor: "#E7EEE9",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 8,
+    marginRight: 11,
   },
 
   statIconGreen: {
@@ -1235,8 +1222,9 @@ const styles = StyleSheet.create({
 
   statNumber: {
     fontFamily: "PoppinsBold",
-    fontSize: 18,
+    fontSize: 22,
     color: Colors.primary2,
+    lineHeight: 28,
   },
 
   statNumberWhite: {
@@ -1245,13 +1233,13 @@ const styles = StyleSheet.create({
 
   statLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11.5,
     color: Colors.primary1,
     marginTop: 1,
   },
 
   statLabelWhite: {
-    color: "#D8E3DD",
+    color: "rgba(255,255,255,0.8)",
   },
 
   /* ===================================================
@@ -1261,16 +1249,16 @@ const styles = StyleSheet.create({
   chartCard: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    padding: 11,
+    padding: 14,
 
-    height: 230,
+    height: 245,
 
-    marginBottom: 12,
+    marginBottom: 16,
   },
 
   cardHeader: {
@@ -1278,18 +1266,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
 
-    marginBottom: 6,
+    marginBottom: 8,
   },
 
   cardTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
+    fontSize: 14,
     color: Colors.primary2,
   },
 
   cardSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.primary1,
     marginTop: 1,
   },
@@ -1297,15 +1285,15 @@ const styles = StyleSheet.create({
   chartBadge: {
     backgroundColor: "#E7F0E9",
 
-    borderRadius: 9,
+    borderRadius: 10,
 
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
 
   chartBadgeText: {
     fontFamily: "PoppinsMedium",
-    fontSize: 7,
+    fontSize: 11,
     color: Colors.button,
   },
 
@@ -1315,16 +1303,16 @@ const styles = StyleSheet.create({
   },
 
   yAxis: {
-    width: 42,
+    width: 48,
 
     justifyContent: "space-between",
 
-    paddingBottom: 18,
+    paddingBottom: 20,
   },
 
   axisText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 6,
+    fontSize: 10,
     color: Colors.primary1,
   },
 
@@ -1333,7 +1321,7 @@ const styles = StyleSheet.create({
 
     position: "relative",
 
-    marginLeft: 3,
+    marginLeft: 4,
   },
 
   gridLine: {
@@ -1350,12 +1338,12 @@ const styles = StyleSheet.create({
   bars: {
     position: "absolute",
 
-    left: 3,
-    right: 3,
+    left: 4,
+    right: 4,
 
-    bottom: 18,
+    bottom: 20,
 
-    height: 140,
+    height: 145,
 
     flexDirection: "row",
 
@@ -1365,12 +1353,12 @@ const styles = StyleSheet.create({
   },
 
   bar: {
-    width: 12,
+    width: 14,
 
     backgroundColor: Colors.button,
 
-    borderTopLeftRadius: 3,
-    borderTopRightRadius: 3,
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
   },
 
   xAxis: {
@@ -1381,7 +1369,7 @@ const styles = StyleSheet.create({
 
     bottom: 0,
 
-    height: 15,
+    height: 18,
 
     flexDirection: "row",
 
@@ -1392,12 +1380,12 @@ const styles = StyleSheet.create({
 
   chartFooter: {
     fontFamily: "PoppinsRegular",
-    fontSize: 6.5,
+    fontSize: 10.5,
     color: Colors.primary1,
 
     textAlign: "center",
 
-    marginTop: 1,
+    marginTop: 4,
   },
 
   /* ===================================================
@@ -1407,14 +1395,14 @@ const styles = StyleSheet.create({
   walletCard: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    padding: 11,
+    padding: 16,
 
-    marginBottom: 18,
+    marginBottom: 22,
   },
 
   walletHeader: {
@@ -1422,14 +1410,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
 
-    marginBottom: 8,
+    marginBottom: 12,
   },
 
   walletIcon: {
-    width: 35,
-    height: 35,
+    width: 40,
+    height: 40,
 
-    borderRadius: 18,
+    borderRadius: 20,
 
     backgroundColor: "#E7EEE9",
 
@@ -1440,57 +1428,57 @@ const styles = StyleSheet.create({
   walletBalance: {
     backgroundColor: "#E7F0E9",
 
-    borderRadius: 8,
+    borderRadius: 12,
 
     alignItems: "center",
 
-    paddingVertical: 10,
+    paddingVertical: 14,
 
-    marginBottom: 8,
+    marginBottom: 12,
   },
 
   walletAmount: {
     fontFamily: "PoppinsBold",
-    fontSize: 20,
+    fontSize: 24,
     color: Colors.primary2,
   },
 
   walletLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.primary1,
-    marginTop: 1,
+    marginTop: 2,
   },
 
   withdrawButton: {
-    minHeight: 38,
+    minHeight: 45,
 
     backgroundColor: Colors.button,
 
-    borderRadius: 7,
+    borderRadius: 12,
 
     alignItems: "center",
     justifyContent: "center",
 
     flexDirection: "row",
 
-    gap: 5,
+    gap: 8,
 
-    marginBottom: 11,
+    marginBottom: 16,
   },
 
   withdrawText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 9,
+    fontSize: 14,
     color: Colors.white,
   },
 
   withdrawTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 9,
+    fontSize: 14,
     color: Colors.primary2,
 
-    marginBottom: 6,
+    marginBottom: 8,
   },
 
   miniTable: {
@@ -1498,7 +1486,7 @@ const styles = StyleSheet.create({
 
     borderColor: Colors.border,
 
-    borderRadius: 6,
+    borderRadius: 10,
 
     overflow: "hidden",
   },
@@ -1508,8 +1496,8 @@ const styles = StyleSheet.create({
 
     backgroundColor: "#F7F9F7",
 
-    paddingHorizontal: 7,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
   },
 
   miniHeaderText: {
@@ -1517,7 +1505,7 @@ const styles = StyleSheet.create({
 
     fontFamily: "PoppinsMedium",
 
-    fontSize: 6.5,
+    fontSize: 11,
 
     color: Colors.primary2,
 
@@ -1529,8 +1517,8 @@ const styles = StyleSheet.create({
 
     alignItems: "center",
 
-    paddingHorizontal: 7,
-    paddingVertical: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
 
     borderTopWidth: 1,
     borderTopColor: Colors.border,
@@ -1541,7 +1529,7 @@ const styles = StyleSheet.create({
 
     fontFamily: "PoppinsRegular",
 
-    fontSize: 6.5,
+    fontSize: 11.5,
 
     color: Colors.primary2,
 
@@ -1558,20 +1546,20 @@ const styles = StyleSheet.create({
   },
 
   miniStatusDot: {
-    width: 5,
-    height: 5,
+    width: 6,
+    height: 6,
 
     borderRadius: 3,
 
     backgroundColor: Colors.button,
 
-    marginRight: 3,
+    marginRight: 5,
   },
 
   miniStatusText: {
     fontFamily: "PoppinsMedium",
 
-    fontSize: 6.5,
+    fontSize: 11,
 
     color: Colors.button,
   },
@@ -1581,17 +1569,17 @@ const styles = StyleSheet.create({
   =================================================== */
 
   transactionSection: {
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   transactionHeader: {
-    marginBottom: 9,
+    marginBottom: 10,
   },
 
   searchContainer: {
-    minHeight: 42,
+    minHeight: 45,
 
-    borderRadius: 8,
+    borderRadius: 12,
 
     backgroundColor: Colors.white,
 
@@ -1601,9 +1589,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
 
-    paddingHorizontal: 11,
+    paddingHorizontal: 12,
 
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   searchInput: {
@@ -1611,13 +1599,13 @@ const styles = StyleSheet.create({
 
     fontFamily: "PoppinsRegular",
 
-    fontSize: 9.5,
+    fontSize: 13,
 
     color: Colors.primary2,
 
     marginLeft: 8,
 
-    paddingVertical: 7,
+    paddingVertical: 8,
   },
 
   /* ===================================================
@@ -1625,11 +1613,11 @@ const styles = StyleSheet.create({
   =================================================== */
 
   transactionTable: {
-    width: 730,
+    width: 820,
 
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
@@ -1646,7 +1634,7 @@ const styles = StyleSheet.create({
 
     alignItems: "center",
 
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
 
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
@@ -1655,23 +1643,23 @@ const styles = StyleSheet.create({
   tableHeaderText: {
     fontFamily: "PoppinsSemiBold",
 
-    fontSize: 7.5,
+    fontSize: 11,
 
     color: Colors.primary2,
 
-    width: 120,
+    width: 135,
 
     textAlign: "center",
   },
 
   tableRow: {
-    minHeight: 43,
+    minHeight: 52,
 
     flexDirection: "row",
 
     alignItems: "center",
 
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
 
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
@@ -1682,11 +1670,11 @@ const styles = StyleSheet.create({
   tableText: {
     fontFamily: "PoppinsRegular",
 
-    fontSize: 7.5,
+    fontSize: 11.5,
 
     color: Colors.primary2,
 
-    width: 120,
+    width: 135,
 
     textAlign: "center",
   },
@@ -1706,7 +1694,7 @@ const styles = StyleSheet.create({
 
     justifyContent: "center",
 
-    paddingVertical: 35,
+    paddingVertical: 45,
 
     backgroundColor: Colors.white,
   },
@@ -1714,21 +1702,21 @@ const styles = StyleSheet.create({
   noTransactionsTitle: {
     fontFamily: "PoppinsSemiBold",
 
-    fontSize: 11,
+    fontSize: 15,
 
     color: Colors.primary2,
 
-    marginTop: 8,
+    marginTop: 10,
   },
 
   noTransactionsText: {
     fontFamily: "PoppinsRegular",
 
-    fontSize: 8,
+    fontSize: 12,
 
     color: Colors.primary1,
 
-    marginTop: 2,
+    marginTop: 3,
   },
 
   /* ===================================================
@@ -1736,17 +1724,17 @@ const styles = StyleSheet.create({
   =================================================== */
 
   bottomNav: {
-    height: 64,
-
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 90,
+    paddingBottom: 25,
     backgroundColor: Colors.white,
-
     flexDirection: "row",
-
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-
     elevation: 10,
-
     paddingHorizontal: 2,
   },
 
@@ -1769,15 +1757,17 @@ const styles = StyleSheet.create({
   navText: {
     fontFamily: "PoppinsRegular",
 
-    fontSize: 7,
+    fontSize: 11,
 
     color: Colors.icon,
 
-    marginTop: 3,
+    marginTop: 4,
   },
 
   navTextActive: {
     fontFamily: "PoppinsSemiBold",
+
+    fontSize: 11,
 
     color: Colors.primary,
   },

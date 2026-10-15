@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, Stack } from "expo-router";
 import { useState } from "react";
 import {
   Image,
@@ -340,7 +340,7 @@ export default function EstablishmentOrders() {
 
   return (
     <SafeAreaView style={styles.container}>
-
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
       {/* =================================================
           HEADER
       ================================================= */}
@@ -363,8 +363,9 @@ export default function EstablishmentOrders() {
             style={styles.headerIconButton}
             activeOpacity={0.7}
             onPress={() =>
-              router.push(
-                "/establishment/notifications"
+              router.replace(
+                { pathname: "/establishment/notifications" },
+                { animation: "none" } as any
               )
             }
           >
@@ -380,8 +381,9 @@ export default function EstablishmentOrders() {
           <TouchableOpacity
             activeOpacity={0.7}
             onPress={() =>
-              router.push(
-                "/establishment/profile"
+              router.replace(
+                { pathname: "/establishment/profile" },
+                { animation: "none" } as any
               )
             }
           >
@@ -415,6 +417,9 @@ export default function EstablishmentOrders() {
 
           <Text style={styles.pageTitle}>
             Orders management
+          </Text>
+          <Text style={styles.pageSubTitle}>
+            Manage active pickups and order history
           </Text>
 
         </View>
@@ -747,70 +752,14 @@ export default function EstablishmentOrders() {
       {/* =================================================
           BOTTOM NAVIGATION
       ================================================= */}
-
+      {/* BOTTOM NAVIGATION WITH ROUTER.REPLACE */}
       <View style={styles.bottomNav}>
-
-        <BottomNavItem
-          icon="grid-outline"
-          label="Home"
-          onPress={() =>
-            router.replace(
-              "/establishment/dashboard"
-            )
-          }
-        />
-
-        <BottomNavItem
-          icon="restaurant-outline"
-          label="Listings"
-          onPress={() =>
-            router.replace(
-              "/establishment/listing"
-            )
-          }
-        />
-
-        <BottomNavItem
-          icon="basket"
-          label="Orders"
-          active
-          onPress={() =>
-            router.replace(
-              "/establishment/orders"
-            )
-          }
-        />
-
-        <BottomNavItem
-          icon="cash-outline"
-          label="Earnings"
-          onPress={() =>
-            router.push(
-              "/establishment/earnings"
-            )
-          }
-        />
-
-        <BottomNavItem
-          icon="heart-outline"
-          label="Donation"
-          onPress={() =>
-            router.replace(
-              "/establishment/donation"
-            )
-          }
-        />
-
-        <BottomNavItem
-          icon="person-outline"
-          label="Impact"
-          onPress={() =>
-            router.push(
-              "/establishment/impact"
-            )
-          }
-        />
-
+        <BottomNavItem icon="grid-outline" label="Home" onPress={() => router.replace("/establishment/dashboard")} />
+        <BottomNavItem icon="restaurant-outline" label="Listings" onPress={() => router.replace("/establishment/listing")} />
+        <BottomNavItem icon="basket" label="Orders" active onPress={() => router.replace("/establishment/orders")} />
+        <BottomNavItem icon="cash-outline" label="Earnings" onPress={() => router.replace("/establishment/earnings")} />
+        <BottomNavItem icon="heart-outline" label="Donation" onPress={() => router.replace("/establishment/donation")} />
+        <BottomNavItem icon="person-outline" label="Impact" onPress={() => router.replace("/establishment/impact")} />
       </View>
 
       {/* =================================================
@@ -1451,7 +1400,7 @@ function OrdersTable({
 
                   <Ionicons
                     name="eye-outline"
-                    size={15}
+                    size={16}
                     color={Colors.icon}
                   />
 
@@ -1470,7 +1419,7 @@ function OrdersTable({
 
                     <Ionicons
                       name="checkmark"
-                      size={15}
+                      size={16}
                       color={Colors.white}
                     />
 
@@ -1513,7 +1462,7 @@ function DetailRow({
 
         <Ionicons
           name={icon}
-          size={15}
+          size={16}
           color={Colors.primary}
         />
 
@@ -1554,7 +1503,7 @@ function EmptyOrders({
 
         <Ionicons
           name="basket-outline"
-          size={25}
+          size={26}
           color={Colors.primary}
         />
 
@@ -1594,13 +1543,13 @@ function BottomNavItem({
         styles.navItem,
         active && styles.navItemActive,
       ]}
-      activeOpacity={0.7}
-      onPress={onPress}
+      activeOpacity={active ? 1 : 0.7}
+      onPress={active ? undefined : onPress}
     >
 
       <Ionicons
         name={icon}
-        size={21}
+        size={24}
         color={
           active
             ? Colors.primary
@@ -1642,81 +1591,62 @@ const styles = StyleSheet.create({
 
   header: {
     minHeight: 70,
-
     backgroundColor: Colors.background,
-
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-
     paddingHorizontal: 18,
-
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
   },
-
   logo: {
     fontFamily: "PoppinsBold",
-    fontSize: 23,
+    fontSize: 26, 
     color: Colors.primary,
     letterSpacing: 0.7,
   },
-
   headerSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
+    fontSize: 12, 
     color: Colors.primary1,
-    marginTop: -1,
+    marginTop: -2,
   },
-
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
     gap: 15,
   },
-
   headerIconButton: {
     position: "relative",
     padding: 4,
   },
-
   notificationDot: {
     position: "absolute",
-
     width: 7,
     height: 7,
-
     borderRadius: 4,
-
     backgroundColor: "#A94A3A",
-
     right: 3,
     top: 2,
-
     borderWidth: 1.5,
     borderColor: Colors.background,
   },
-
   profileCircle: {
     width: 34,
     height: 34,
-
     borderRadius: 17,
-
     backgroundColor: Colors.primary,
-
     alignItems: "center",
     justifyContent: "center",
   },
-
   /* ===================================================
      SCROLL
   =================================================== */
 
   scrollContent: {
     paddingHorizontal: 17,
-    paddingTop: 20,
-    paddingBottom: 20,
+    paddingTop: 18,
+    paddingBottom: 90,
   },
 
   /* ===================================================
@@ -1724,13 +1654,21 @@ const styles = StyleSheet.create({
   =================================================== */
 
   pageHeader: {
-    marginBottom: 17,
+    marginBottom: 16,
   },
 
   pageTitle: {
     fontFamily: "PoppinsBold",
     fontSize: 24,
+    lineHeight: 31,
     color: Colors.primary2,
+  },
+
+  pageSubTitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 12,
+    color: Colors.primary1,
+    marginTop: 2,
   },
 
   /* ===================================================
@@ -1739,23 +1677,23 @@ const styles = StyleSheet.create({
 
   statsRow: {
     flexDirection: "row",
-    gap: 9,
-    marginBottom: 17,
+    gap: 10,
+    marginBottom: 16,
   },
 
   statCard: {
     flex: 1,
 
-    minHeight: 72,
+    minHeight: 85,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     backgroundColor: Colors.white,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    padding: 11,
+    padding: 14,
 
     flexDirection: "row",
     alignItems: "center",
@@ -1767,17 +1705,17 @@ const styles = StyleSheet.create({
   },
 
   statIcon: {
-    width: 38,
-    height: 38,
+    width: 42,
+    height: 42,
 
-    borderRadius: 19,
+    borderRadius: 21,
 
     backgroundColor: "#E7EEE9",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 9,
+    marginRight: 11,
   },
 
   statIconGreen: {
@@ -1790,8 +1728,9 @@ const styles = StyleSheet.create({
 
   statNumber: {
     fontFamily: "PoppinsBold",
-    fontSize: 19,
+    fontSize: 22,
     color: Colors.primary2,
+    lineHeight: 28,
   },
 
   statNumberWhite: {
@@ -1800,13 +1739,13 @@ const styles = StyleSheet.create({
 
   statLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11.5,
     color: Colors.primary1,
     marginTop: 1,
   },
 
   statLabelWhite: {
-    color: "#D8E3DD",
+    color: "rgba(255,255,255,0.8)",
   },
 
   /* ===================================================
@@ -1814,9 +1753,9 @@ const styles = StyleSheet.create({
   =================================================== */
 
   searchContainer: {
-    minHeight: 42,
+    minHeight: 45,
 
-    borderRadius: 8,
+    borderRadius: 12,
 
     backgroundColor: Colors.white,
 
@@ -1826,22 +1765,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
 
-    paddingHorizontal: 11,
+    paddingHorizontal: 12,
 
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   searchInput: {
     flex: 1,
 
     fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
+    fontSize: 13,
 
     color: Colors.primary2,
 
     marginLeft: 8,
 
-    paddingVertical: 7,
+    paddingVertical: 8,
   },
 
   /* ===================================================
@@ -1850,16 +1789,16 @@ const styles = StyleSheet.create({
 
   filterRow: {
     flexDirection: "row",
-    gap: 7,
-    marginBottom: 17,
+    gap: 8,
+    marginBottom: 16,
   },
 
   filterButton: {
-    minWidth: 63,
+    minWidth: 75,
 
-    height: 31,
+    height: 38,
 
-    borderRadius: 16,
+    borderRadius: 12,
 
     borderWidth: 1,
     borderColor: Colors.border,
@@ -1869,7 +1808,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
 
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
   },
 
   filterButtonActive: {
@@ -1878,8 +1817,8 @@ const styles = StyleSheet.create({
   },
 
   filterText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
+    fontFamily: "PoppinsMedium",
+    fontSize: 12,
     color: Colors.primary1,
   },
 
@@ -1893,13 +1832,13 @@ const styles = StyleSheet.create({
   =================================================== */
 
   scanButton: {
-    minHeight: 64,
+    minHeight: 65,
 
     backgroundColor: Colors.primary,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
 
     flexDirection: "row",
     alignItems: "center",
@@ -1908,17 +1847,17 @@ const styles = StyleSheet.create({
   },
 
   scanIcon: {
-    width: 39,
-    height: 39,
+    width: 42,
+    height: 42,
 
-    borderRadius: 20,
+    borderRadius: 21,
 
     backgroundColor: Colors.button,
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 11,
+    marginRight: 12,
   },
 
   scanTextContainer: {
@@ -1927,14 +1866,14 @@ const styles = StyleSheet.create({
 
   scanTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
+    fontSize: 15,
     color: Colors.white,
   },
 
   scanSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
-    color: "#D8E3DD",
+    fontSize: 11.5,
+    color: "rgba(255,255,255,0.8)",
     marginTop: 1,
   },
 
@@ -1943,7 +1882,7 @@ const styles = StyleSheet.create({
   =================================================== */
 
   orderSection: {
-    marginBottom: 20,
+    marginBottom: 22,
   },
 
   sectionHeader: {
@@ -1962,7 +1901,7 @@ const styles = StyleSheet.create({
 
   sectionSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
+    fontSize: 11,
     color: Colors.primary1,
     marginTop: 1,
   },
@@ -1972,13 +1911,13 @@ const styles = StyleSheet.create({
 
     borderRadius: 10,
 
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
 
   sectionBadgeText: {
     fontFamily: "PoppinsMedium",
-    fontSize: 7,
+    fontSize: 11,
     color: Colors.button,
   },
 
@@ -1997,7 +1936,7 @@ const styles = StyleSheet.create({
   tableOuter: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
@@ -2006,11 +1945,11 @@ const styles = StyleSheet.create({
   },
 
   table: {
-    width: 760,
+    width: 820,
   },
 
   tableHeader: {
-    height: 38,
+    height: 42,
 
     backgroundColor: "#F3F6F4",
 
@@ -2023,14 +1962,14 @@ const styles = StyleSheet.create({
 
   tableHeaderText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.primary2,
 
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
   },
 
   tableRow: {
-    minHeight: 43,
+    minHeight: 52,
 
     flexDirection: "row",
     alignItems: "center",
@@ -2045,10 +1984,10 @@ const styles = StyleSheet.create({
 
   tableCell: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11.5,
     color: Colors.primary2,
 
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
   },
 
   /* ===================================================
@@ -2056,36 +1995,36 @@ const styles = StyleSheet.create({
   =================================================== */
 
   tableId: {
-    width: 82,
+    width: 90,
   },
 
   tableCustomer: {
-    width: 95,
+    width: 110,
   },
 
   tableItem: {
-    width: 125,
+    width: 130,
   },
 
   tableQty: {
-    width: 55,
+    width: 65,
     textAlign: "center",
   },
 
   tableTime: {
-    width: 125,
+    width: 130,
   },
 
   tableExpiry: {
-    width: 85,
+    width: 95,
   },
 
   tableStatus: {
-    width: 115,
+    width: 125,
   },
 
   tableActions: {
-    width: 78,
+    width: 85,
   },
 
   /* ===================================================
@@ -2101,10 +2040,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
 
-    borderRadius: 10,
+    borderRadius: 12,
 
-    paddingHorizontal: 6,
-    paddingVertical: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
   },
 
   pendingBadge: {
@@ -2116,12 +2055,12 @@ const styles = StyleSheet.create({
   },
 
   statusDot: {
-    width: 5,
-    height: 5,
+    width: 6,
+    height: 6,
 
     borderRadius: 3,
 
-    marginRight: 4,
+    marginRight: 5,
   },
 
   pendingDot: {
@@ -2134,7 +2073,7 @@ const styles = StyleSheet.create({
 
   statusTextSmall: {
     fontFamily: "PoppinsMedium",
-    fontSize: 6.5,
+    fontSize: 10.5,
   },
 
   pendingStatusText: {
@@ -2158,14 +2097,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-start",
-    gap: 5,
+    gap: 8,
   },
 
   viewButton: {
-    width: 28,
-    height: 28,
+    width: 32,
+    height: 32,
 
-    borderRadius: 6,
+    borderRadius: 8,
 
     borderWidth: 1,
     borderColor: Colors.border,
@@ -2177,10 +2116,10 @@ const styles = StyleSheet.create({
   },
 
   confirmButton: {
-    width: 28,
-    height: 28,
+    width: 32,
+    height: 32,
 
-    borderRadius: 6,
+    borderRadius: 8,
 
     backgroundColor: Colors.button,
 
@@ -2200,43 +2139,43 @@ const styles = StyleSheet.create({
   emptyCard: {
     backgroundColor: Colors.white,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     borderWidth: 1,
     borderColor: Colors.border,
 
-    paddingVertical: 35,
+    paddingVertical: 45,
     paddingHorizontal: 20,
 
     alignItems: "center",
   },
 
   emptyIcon: {
-    width: 50,
-    height: 50,
+    width: 56,
+    height: 56,
 
-    borderRadius: 25,
+    borderRadius: 28,
 
     backgroundColor: "#E7EEE9",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginBottom: 9,
+    marginBottom: 12,
   },
 
   emptyTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
+    fontSize: 15,
     color: Colors.primary2,
   },
 
   emptyDescription: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
+    fontSize: 12,
     color: Colors.primary1,
     textAlign: "center",
-    marginTop: 3,
+    marginTop: 4,
   },
 
   /* ===================================================
@@ -2244,17 +2183,17 @@ const styles = StyleSheet.create({
   =================================================== */
 
   bottomNav: {
-    height: 64,
-
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 90,
+    paddingBottom: 25,
     backgroundColor: Colors.white,
-
     flexDirection: "row",
-
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-
     elevation: 10,
-
     paddingHorizontal: 2,
   },
 
@@ -2276,9 +2215,9 @@ const styles = StyleSheet.create({
 
   navText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7,
+    fontSize: 11,
     color: Colors.icon,
-    marginTop: 3,
+    marginTop: 4,
   },
 
   navTextActive: {
@@ -2293,7 +2232,7 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
 
-    backgroundColor: "rgba(0,0,0,0.35)",
+    backgroundColor: "rgba(0,0,0,0.45)",
 
     justifyContent: "flex-end",
   },
@@ -2305,8 +2244,8 @@ const styles = StyleSheet.create({
 
     backgroundColor: Colors.background,
 
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
 
     overflow: "hidden",
   },
@@ -2314,7 +2253,7 @@ const styles = StyleSheet.create({
   modalHeader: {
     minHeight: 70,
 
-    paddingHorizontal: 17,
+    paddingHorizontal: 18,
 
     flexDirection: "row",
     alignItems: "center",
@@ -2328,22 +2267,22 @@ const styles = StyleSheet.create({
 
   modalTitle: {
     fontFamily: "PoppinsBold",
-    fontSize: 16,
+    fontSize: 18,
     color: Colors.primary2,
   },
 
   modalSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
+    fontSize: 12,
     color: Colors.primary1,
     marginTop: 2,
   },
 
   closeButton: {
-    width: 35,
-    height: 35,
+    width: 38,
+    height: 38,
 
-    borderRadius: 18,
+    borderRadius: 19,
 
     backgroundColor: "#E8EFEA",
 
@@ -2352,37 +2291,38 @@ const styles = StyleSheet.create({
   },
 
   viewModalContent: {
-    paddingHorizontal: 17,
-    paddingTop: 17,
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 30,
   },
 
   viewImage: {
     width: "100%",
-    height: 190,
+    height: 200,
 
-    borderRadius: 10,
+    borderRadius: 14,
 
     backgroundColor: Colors.input,
 
-    marginBottom: 14,
+    marginBottom: 16,
   },
 
   viewTitleRow: {
     flexDirection: "row",
     alignItems: "flex-start",
 
-    marginBottom: 15,
+    marginBottom: 16,
   },
 
   viewFoodName: {
     fontFamily: "PoppinsBold",
-    fontSize: 19,
+    fontSize: 20,
     color: Colors.primary2,
   },
 
   viewEstablishment: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9,
+    fontSize: 12,
     color: Colors.primary1,
     marginTop: 2,
   },
@@ -2397,10 +2337,10 @@ const styles = StyleSheet.create({
 
     backgroundColor: "#F4EEDF",
 
-    borderRadius: 12,
+    borderRadius: 14,
 
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
 
     marginLeft: 8,
   },
@@ -2410,14 +2350,14 @@ const styles = StyleSheet.create({
   },
 
   activeDot: {
-    width: 6,
-    height: 6,
+    width: 7,
+    height: 7,
 
-    borderRadius: 3,
+    borderRadius: 4,
 
     backgroundColor: Colors.accent,
 
-    marginRight: 5,
+    marginRight: 6,
   },
 
   successOrderDot: {
@@ -2426,7 +2366,7 @@ const styles = StyleSheet.create({
 
   activeText: {
     fontFamily: "PoppinsMedium",
-    fontSize: 7,
+    fontSize: 11,
 
     color: Colors.accent,
   },
@@ -2444,18 +2384,18 @@ const styles = StyleSheet.create({
 
     backgroundColor: "#E9EFE9",
 
-    borderRadius: 9,
+    borderRadius: 12,
 
-    padding: 12,
+    padding: 14,
 
     justifyContent: "space-between",
 
-    marginBottom: 10,
+    marginBottom: 12,
   },
 
   orderIdText: {
     fontFamily: "PoppinsBold",
-    fontSize: 12,
+    fontSize: 14,
     color: Colors.primary,
   },
 
@@ -2468,31 +2408,31 @@ const styles = StyleSheet.create({
 
     backgroundColor: "#E9EFE9",
 
-    borderRadius: 9,
+    borderRadius: 12,
 
-    padding: 12,
+    padding: 14,
 
     justifyContent: "space-between",
 
-    marginBottom: 17,
+    marginBottom: 18,
   },
 
   viewLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11,
     color: Colors.primary1,
     marginBottom: 2,
   },
 
   viewPrice: {
     fontFamily: "PoppinsBold",
-    fontSize: 14,
+    fontSize: 16,
     color: Colors.primary,
   },
 
   viewValue: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 9,
+    fontSize: 13,
     color: Colors.primary2,
   },
 
@@ -2506,25 +2446,25 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
 
-    paddingBottom: 14,
+    paddingBottom: 15,
   },
 
   viewSectionTitle: {
     fontFamily: "PoppinsBold",
-    fontSize: 12,
+    fontSize: 14,
 
     color: Colors.primary2,
 
-    marginBottom: 9,
+    marginBottom: 10,
   },
 
   viewDescription: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9,
+    fontSize: 12,
 
     color: Colors.primary1,
 
-    lineHeight: 15,
+    lineHeight: 18,
   },
 
   /* ===================================================
@@ -2535,33 +2475,33 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
 
-    marginBottom: 9,
+    marginBottom: 10,
   },
 
   detailIcon: {
-    width: 31,
-    height: 31,
+    width: 35,
+    height: 35,
 
-    borderRadius: 16,
+    borderRadius: 18,
 
     backgroundColor: "#E8EFEA",
 
     alignItems: "center",
     justifyContent: "center",
 
-    marginRight: 9,
+    marginRight: 11,
   },
 
   detailLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
+    fontSize: 11,
 
     color: Colors.primary1,
   },
 
   detailValue: {
     fontFamily: "PoppinsMedium",
-    fontSize: 9,
+    fontSize: 12.5,
 
     color: Colors.primary2,
 
@@ -2575,17 +2515,17 @@ const styles = StyleSheet.create({
   viewActions: {
     flexDirection: "row",
 
-    gap: 9,
+    gap: 10,
 
-    marginTop: 2,
+    marginTop: 5,
   },
 
   viewCloseButton: {
     flex: 1,
 
-    height: 44,
+    height: 48,
 
-    borderRadius: 8,
+    borderRadius: 12,
 
     borderWidth: 1,
     borderColor: Colors.border,
@@ -2598,7 +2538,7 @@ const styles = StyleSheet.create({
 
   viewCloseButtonText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 9.5,
+    fontSize: 14,
 
     color: Colors.primary1,
   },

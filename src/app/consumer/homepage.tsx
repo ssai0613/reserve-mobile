@@ -1,12 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { router } from "expo-router";
+import { router, Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   Alert,
   Image,
   Modal,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,12 +13,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Colors } from "@/constants/color";
-
-/* =====================================================
-   TYPES
-===================================================== */
+import { api } from "../../../services/api";
 
 type FoodItem = {
   id: string;
@@ -27,11 +24,18 @@ type FoodItem = {
   establishment: string;
   price: number;
   originalPrice: number;
+  floorPrice: number;
   discount: number;
   quantity: number;
+  unit: string;          
+  expiryDate: string;    
+  expiryTime: string;    
+  storageCondition: string;
+  preparationDate: string;
   image: string;
   category: string;
   distance: string;
+  expiryTimestamp: number;
 };
 
 type Establishment = {
@@ -42,130 +46,112 @@ type Establishment = {
   image: string;
 };
 
-/* =====================================================
-   MOCK DATA
-===================================================== */
-
-const featuredRescues: FoodItem[] = [
-  {
-    id: "F001",
-    name: "Fresh Bread Bundle",
-    establishment: "Bread & Co.",
-    price: 65,
-    originalPrice: 95,
-    discount: 32,
-    quantity: 5,
-    image:
-      "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
-    category: "Bakery",
-    distance: "0.8 km",
-  },
-  {
-    id: "F002",
-    name: "Chicken Meal",
-    establishment: "Good Eats",
-    price: 85,
-    originalPrice: 120,
-    discount: 29,
-    quantity: 8,
-    image:
-      "https://images.unsplash.com/photo-1532550907401-a500c9a57435?auto=format&fit=crop&w=700&q=80",
-    category: "Meals",
-    distance: "1.2 km",
-  },
-  {
-    id: "F003",
-    name: "Creamy Pasta",
-    establishment: "Pasta Corner",
-    price: 75,
-    originalPrice: 110,
-    discount: 32,
-    quantity: 4,
-    image:
-      "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=700&q=80",
-    category: "Pasta",
-    distance: "1.5 km",
-  },
-];
-
-const recommendations: FoodItem[] = [
-  {
-    id: "F004",
-    name: "Assorted Pastries",
-    establishment: "Daily Bake",
-    price: 55,
-    originalPrice: 80,
-    discount: 31,
-    quantity: 6,
-    image:
-      "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
-    category: "Bakery",
-    distance: "1.0 km",
-  },
-  {
-    id: "F005",
-    name: "Classic Burger",
-    establishment: "Burger House",
-    price: 70,
-    originalPrice: 100,
-    discount: 30,
-    quantity: 3,
-    image:
-      "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?auto=format&fit=crop&w=700&q=80",
-    category: "Fast Food",
-    distance: "1.8 km",
-  },
-  {
-    id: "F006",
-    name: "Fresh Salad Bowl",
-    establishment: "Green Plate",
-    price: 60,
-    originalPrice: 90,
-    discount: 33,
-    quantity: 5,
-    image:
-      "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=700&q=80",
-    category: "Healthy",
-    distance: "2.0 km",
-  },
-];
-
 const establishments: Establishment[] = [
   {
     id: "E001",
     name: "Bread & Co.",
     category: "Bakery",
     distance: "0.8 km",
-    image:
-      "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
+    image: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
   },
   {
     id: "E002",
     name: "Good Eats",
     category: "Restaurant",
     distance: "1.2 km",
-    image:
-      "https://images.unsplash.com/photo-1515003197210-e0cd71810b5f?auto=format&fit=crop&w=700&q=80",
+    image: "https://images.unsplash.com/photo-1515003197210-e0cd71810b5f?auto=format&fit=crop&w=700&q=80",
   },
   {
     id: "E003",
     name: "Pasta Corner",
     category: "Italian",
     distance: "1.5 km",
-    image:
-      "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=700&q=80",
+    image: "https://images.unsplash.com/photo-1473093295043-cdd812d0e601?auto=format&fit=crop&w=700&q=80",
   },
 ];
 
-/* =====================================================
-   STORAGE
-===================================================== */
-
 const CART_STORAGE_KEY = "@reserve_cart";
 
-/* =====================================================
-   COMPONENT
-===================================================== */
+const parseSafeDate = (dateStr: string, timeStr?: string) => {
+  try {
+    let full = timeStr ? `${dateStr} ${timeStr}` : dateStr;
+    full = full.replace(/,/g, '').replace(/\s+/g, ' ').trim(); 
+    
+    const parts = full.split(' '); 
+    const monthIndex = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(parts[0]);
+    const day = parseInt(parts[1], 10);
+    const year = parseInt(parts[2], 10);
+    
+    let hours = 0;
+    let minutes = 0;
+    
+    if (parts[3]) {
+      const timeParts = parts[3].split(':');
+      hours = parseInt(timeParts[0], 10);
+      minutes = parseInt(timeParts[1], 10);
+      
+      const fullUpper = full.toUpperCase();
+      if (fullUpper.includes('PM') && hours < 12) hours += 12;
+      if (fullUpper.includes('AM') && hours === 12) hours = 0;
+    }
+
+    return new Date(year, monthIndex, day, hours, minutes).getTime();
+  } catch (error) {
+    return new Date().getTime(); 
+  }
+};
+
+const getLivePricingData = (prepDate: string, expDate: string, expTime: string, initialPrice: number, minPrice: number) => {
+  const startTime = parseSafeDate(prepDate);
+  const endTime = parseSafeDate(expDate, expTime);
+  const now = new Date().getTime();
+  const distance = endTime - now;
+
+  if (distance <= 0) {
+    return { timeLeft: "Time's up", livePrice: minPrice > 0 ? minPrice : initialPrice, isExpired: true };
+  }
+
+  const d = Math.floor(distance / (1000 * 60 * 60 * 24));
+  const h = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const m = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+  const s = Math.floor((distance % (1000 * 60)) / 1000);
+  
+  const timeLeft = d > 0 ? `${d}d ${h}h ${m}m ${s}s` : `${h}h ${m}m ${s}s`;
+
+  const totalHours = (endTime - startTime) / (1000 * 60 * 60);
+  const totalDrop = initialPrice - minPrice;
+  const hourlyDropAmount = totalHours > 0 ? (totalDrop / totalHours) : 0;
+  const hoursPassed = Math.floor((now - startTime) / (1000 * 60 * 60));
+
+  let livePrice = initialPrice;
+  if (hoursPassed > 0) {
+    livePrice = initialPrice - (hourlyDropAmount * hoursPassed);
+    if (livePrice < minPrice) livePrice = minPrice;
+  }
+
+  return { timeLeft, livePrice: Math.round(livePrice * 100) / 100, isExpired: false };
+};
+
+const LiveCountdown = ({ prepDate, expiryDate, expiryTime, initialPrice, floorPrice, textStyle }: { prepDate: string; expiryDate: string; expiryTime: string; initialPrice: number; floorPrice: number; textStyle?: any }) => {
+  const [data, setData] = useState(() => getLivePricingData(prepDate, expiryDate, expiryTime, initialPrice, floorPrice));
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setData(getLivePricingData(prepDate, expiryDate, expiryTime, initialPrice, floorPrice));
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [prepDate, expiryDate, expiryTime, initialPrice, floorPrice]);
+
+  return (
+    <View style={styles.timerRow}>
+      <Ionicons name="time-outline" size={13} color={data.isExpired ? "#B3261E" : Colors.primary} />
+      <Text style={[styles.timerText, data.isExpired && styles.timerExpiredText, textStyle]} numberOfLines={1}>
+        {data.timeLeft}
+      </Text>
+    </View>
+  );
+};
 
 export default function Homepage() {
   const [searchText, setSearchText] = useState("");
@@ -173,26 +159,37 @@ export default function Homepage() {
   const [quantity, setQuantity] = useState(1);
   const [cartCount, setCartCount] = useState(0);
 
-  /* =====================================================
-     LOAD CART COUNT
-  ===================================================== */
+  const [liveListings, setLiveListings] = useState<FoodItem[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const [modalLivePrice, setModalLivePrice] = useState(0);
 
   useEffect(() => {
     loadCart();
+    fetchMarketplaceListings();
   }, []);
+
+  useEffect(() => {
+    if (!selectedFood) return;
+    const interval = setInterval(() => {
+      const res = getLivePricingData(
+        selectedFood.preparationDate,
+        selectedFood.expiryDate, 
+        selectedFood.expiryTime, 
+        selectedFood.price, 
+        selectedFood.floorPrice
+      );
+      setModalLivePrice(res.livePrice);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [selectedFood]);
 
   const loadCart = async () => {
     try {
       const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
-
       if (storedCart) {
         const cart = JSON.parse(storedCart);
-
-        const totalItems = cart.reduce(
-          (total: number, item: any) => total + (item.quantity || 0),
-          0
-        );
-
+        const totalItems = cart.reduce((total: number, item: any) => total + (item.quantity || 0), 0);
         setCartCount(totalItems);
       }
     } catch (error) {
@@ -200,59 +197,80 @@ export default function Homepage() {
     }
   };
 
-  /* =====================================================
-     ADD TO CART
-  ===================================================== */
+  const fetchMarketplaceListings = async () => {
+    try {
+      setLoading(true);
+      const response = await api.get("listings/");
+      
+      const formatted = response.data.map((item: any, index: number) => {
+        const orig = Number(item.original_price || item.orig_price || 0);
+        const current = Number(item.price || item.discounted_price || 0);
+        const floor = Number(item.floor_price || 0);
+        const discountVal = orig > 0 ? Math.round(((orig - current) / orig) * 100) : 0;
+        const expDateStr = item.expiry_date || "Sep 21, 2026";
+        const expTimeStr = item.expiry_time || "11:59 PM";
+
+        return {
+          id: String(item.prod_id || item.id || `fallback-${index}`),
+          name: item.prod_name || "Surplus Item",
+          establishment: item.merchant_name || "Partner Merchant", 
+          price: current,
+          originalPrice: orig,
+          floorPrice: floor,
+          discount: discountVal > 0 ? discountVal : 15,
+          quantity: Number(item.qty_available ?? item.quantity ?? 0),
+          unit: item.unit_name || item.unit || "pcs",
+          preparationDate: item.safely_anchor_time || item.preparation_date || "Sep 20, 2026, 12:00 AM",
+          expiryDate: expDateStr,
+          expiryTime: expTimeStr,
+          storageCondition: item.storage_condition || "Ambient (25°C)",
+          image: item.image_path || "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
+          category: typeof item.category === "string" ? item.category : "General",
+          distance: "1.0 km",
+          expiryTimestamp: parseSafeDate(expDateStr, expTimeStr),
+        };
+      });
+
+      formatted.sort((a: FoodItem, b: FoodItem) => a.expiryTimestamp - b.expiryTimestamp);
+      setLiveListings(formatted);
+    } catch (error) {
+      console.log("Error fetching marketplace listings:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const addToCart = async (food: FoodItem, qty: number) => {
     try {
       const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
-
       let cart = storedCart ? JSON.parse(storedCart) : [];
 
-      const existingIndex = cart.findIndex(
-        (item: any) => item.id === food.id
-      );
+      const existingIndex = cart.findIndex((item: any) => item.id === food.id);
+      const finalCartPrice = modalLivePrice > 0 ? modalLivePrice : food.price;
 
       if (existingIndex !== -1) {
         cart[existingIndex].quantity += qty;
+        cart[existingIndex].price = finalCartPrice;
       } else {
-        cart.push({
-          ...food,
-          quantity: qty,
-        });
+        cart.push({ ...food, price: finalCartPrice, quantity: qty });
       }
 
       await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
-
-      const totalItems = cart.reduce(
-        (total: number, item: any) => total + (item.quantity || 0),
-        0
-      );
-
+      const totalItems = cart.reduce((total: number, item: any) => total + (item.quantity || 0), 0);
       setCartCount(totalItems);
 
       setSelectedFood(null);
       setQuantity(1);
 
-      Alert.alert(
-        "Added to Cart",
-        `${food.name} has been added to your cart.`
-      );
+      Alert.alert("Added to Cart", `${food.name} has been added to your cart at ₱${finalCartPrice}!`);
     } catch (error) {
       console.log("Error adding to cart:", error);
     }
   };
 
-  /* =====================================================
-     SEARCH
-  ===================================================== */
-
   const searchFilter = (items: FoodItem[]) => {
     if (!searchText.trim()) return items;
-
     const search = searchText.toLowerCase();
-
     return items.filter(
       (item) =>
         item.name.toLowerCase().includes(search) ||
@@ -261,225 +279,104 @@ export default function Homepage() {
     );
   };
 
-  const filteredFeatured = searchFilter(featuredRescues);
-  const filteredRecommendations = searchFilter(recommendations);
-
-  /* =====================================================
-     OPEN FOOD
-  ===================================================== */
+  const filteredListings = searchFilter(liveListings);
 
   const openFood = (food: FoodItem) => {
     setSelectedFood(food);
     setQuantity(1);
+    const initialCalc = getLivePricingData(food.preparationDate, food.expiryDate, food.expiryTime, food.price, food.floorPrice);
+    setModalLivePrice(initialCalc.livePrice);
   };
 
-  /* =====================================================
-     FOOD CARD
-  ===================================================== */
+  const FoodCard = ({ item, horizontal = false }: { item: FoodItem; horizontal?: boolean }) => {
+    const cardCalc = getLivePricingData(item.preparationDate, item.expiryDate, item.expiryTime, item.price, item.floorPrice);
 
-  const FoodCard = ({
-    item,
-    horizontal = false,
-  }: {
-    item: FoodItem;
-    horizontal?: boolean;
-  }) => {
     return (
       <TouchableOpacity
-        activeOpacity={0.85}
+        activeOpacity={0.88}
         style={horizontal ? styles.featuredCard : styles.foodCard}
         onPress={() => openFood(item)}
       >
-        <View
-          style={
-            horizontal
-              ? styles.featuredImageContainer
-              : styles.foodImageContainer
-          }
-        >
-          <Image
-            source={{ uri: item.image }}
-            style={horizontal ? styles.featuredImage : styles.foodImage}
-          />
-
+        <View style={horizontal ? styles.featuredImageContainer : styles.foodImageContainer}>
+          <Image source={{ uri: item.image }} style={horizontal ? styles.featuredImage : styles.foodImage} />
           <View style={styles.discountBadge}>
-            <Text style={styles.discountText}>
-              {item.discount}% OFF
-            </Text>
+            <Text style={styles.discountText}>{item.discount}% OFF</Text>
           </View>
         </View>
 
-        <View
-          style={
-            horizontal
-              ? styles.featuredContent
-              : styles.foodCardContent
-          }
-        >
-          <Text
-            style={styles.foodName}
-            numberOfLines={1}
-          >
-            {item.name}
-          </Text>
-
-          <Text
-            style={styles.establishmentName}
-            numberOfLines={1}
-          >
-            {item.establishment}
-          </Text>
+        <View style={horizontal ? styles.featuredContent : styles.foodCardContent}>
+          <Text style={styles.foodName} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.establishmentName} numberOfLines={1}>{item.establishment}</Text>
 
           <View style={styles.priceRow}>
-            <Text style={styles.foodPrice}>
-              ₱{item.price}
-            </Text>
+            <Text style={styles.foodPrice}>₱{cardCalc.livePrice.toFixed(2)}</Text>
+            {item.originalPrice > cardCalc.livePrice && (
+              <Text style={styles.originalPrice}>₱{item.originalPrice}</Text>
+            )}
+          </View>
 
-            <Text style={styles.originalPrice}>
-              ₱{item.originalPrice}
-            </Text>
+          <View style={styles.detailsMetaRow}>
+            <LiveCountdown 
+              prepDate={item.preparationDate} 
+              expiryDate={item.expiryDate} 
+              expiryTime={item.expiryTime} 
+              initialPrice={item.price} 
+              floorPrice={item.floorPrice} 
+            />
           </View>
 
           <View style={styles.foodBottomRow}>
             <View style={styles.distanceRow}>
-              <Ionicons
-                name="location-outline"
-                size={12}
-                color={Colors.icon}
-              />
-
-              <Text style={styles.distanceText}>
-                {item.distance}
-              </Text>
+              <Ionicons name="location-outline" size={12} color={Colors.icon} />
+              <Text style={styles.distanceText}>{item.distance}</Text>
             </View>
-
-            <Text style={styles.availableText}>
-              {item.quantity} left
-            </Text>
+            <Text style={styles.availableText}>{item.quantity} {item.unit} left</Text>
           </View>
         </View>
       </TouchableOpacity>
     );
   };
 
-  /* =====================================================
-     ESTABLISHMENT CARD
-  ===================================================== */
-
-  const EstablishmentCard = ({
-    item,
-  }: {
-    item: Establishment;
-  }) => {
+  const EstablishmentCard = ({ item }: { item: Establishment }) => {
     return (
-      <TouchableOpacity
-        activeOpacity={0.85}
-        style={styles.establishmentCard}
-      >
-        <Image
-          source={{ uri: item.image }}
-          style={styles.establishmentImage}
-        />
-
+      <TouchableOpacity activeOpacity={0.88} style={styles.establishmentCard}>
+        <Image source={{ uri: item.image }} style={styles.establishmentImage} />
         <View style={styles.establishmentInfo}>
-          <Text
-            style={styles.establishmentNameLarge}
-            numberOfLines={1}
-          >
-            {item.name}
-          </Text>
-
-          <Text style={styles.establishmentCategory}>
-            {item.category}
-          </Text>
-
+          <Text style={styles.establishmentNameLarge} numberOfLines={1}>{item.name}</Text>
+          <Text style={styles.establishmentCategory}>{item.category}</Text>
           <View style={styles.distanceRow}>
-            <Ionicons
-              name="location-outline"
-              size={12}
-              color={Colors.icon}
-            />
-
-            <Text style={styles.distanceText}>
-              {item.distance} away
-            </Text>
+            <Ionicons name="location-outline" size={12} color={Colors.icon} />
+            <Text style={styles.distanceText}>{item.distance} away</Text>
           </View>
         </View>
-
-        <Ionicons
-          name="chevron-forward"
-          size={18}
-          color={Colors.icon}
-        />
+        <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
       </TouchableOpacity>
     );
   };
-
-  /* =====================================================
-     RENDER
-  ===================================================== */
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* =================================================
-          HEADER
-      ================================================= */}
+    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
       <View style={styles.header}>
         <View>
           <Text style={styles.logo}>RESERVE</Text>
-
-          <Text style={styles.logoSubtitle}>
-            Consumer Portal
-          </Text>
+          <Text style={styles.logoSubtitle}>Consumer Portal</Text>
         </View>
-
         <View style={styles.locationPill}>
-          <Ionicons
-            name="location-outline"
-            size={14}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.locationText}>
-            Lapu-Lapu City
-          </Text>
+          <Ionicons name="location-outline" size={13} color={Colors.primary} />
+          <Text style={styles.locationText}>Lapu-Lapu City</Text>
         </View>
       </View>
 
-      {/* =================================================
-          CONTENT
-      ================================================= */}
-
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        {/* =================================================
-            WELCOME
-        ================================================= */}
-
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.welcomeSection}>
-          <Text style={styles.welcomeText}>
-            Welcome, Sky!
-          </Text>
-
-          <Text style={styles.welcomeSubtext}>
-            Discover affordable surplus food near you.
-          </Text>
+          <Text style={styles.welcomeText}>Welcome, Sky!</Text>
+          <Text style={styles.welcomeSubtext}>Discover affordable surplus food near you.</Text>
         </View>
 
-        {/* =================================================
-            SEARCH
-        ================================================= */}
-
         <View style={styles.searchContainer}>
-          <Ionicons
-            name="search-outline"
-            size={20}
-            color={Colors.icon}
-          />
-
+          <Ionicons name="search-outline" size={18} color={Colors.icon} />
           <TextInput
             value={searchText}
             onChangeText={setSearchText}
@@ -487,308 +384,147 @@ export default function Homepage() {
             placeholderTextColor={Colors.placeholder}
             style={styles.searchInput}
           />
-
           {searchText.length > 0 && (
-            <TouchableOpacity
-              onPress={() => setSearchText("")}
-            >
-              <Ionicons
-                name="close-circle"
-                size={19}
-                color={Colors.icon}
-              />
+            <TouchableOpacity onPress={() => setSearchText("")}>
+              <Ionicons name="close-circle" size={18} color={Colors.icon} />
             </TouchableOpacity>
           )}
         </View>
 
-        {/* =================================================
-            FEATURED
-        ================================================= */}
-
         <View style={styles.sectionHeader}>
           <View>
-            <Text style={styles.sectionTitle}>
-              Featured Rescues
-            </Text>
-
-            <Text style={styles.sectionSubtitle}>
-              Great food, lower prices.
-            </Text>
+            <Text style={styles.sectionTitle}>Featured Rescues</Text>
+            <Text style={styles.sectionSubtitle}>Great food, lower prices.</Text>
           </View>
-
-          <TouchableOpacity>
-            <Text style={styles.viewAllText}>
-              View all
-            </Text>
-          </TouchableOpacity>
         </View>
 
-        {filteredFeatured.length > 0 ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.featuredScroll}
-          >
-            {filteredFeatured.map((item) => (
-              <FoodCard
-                key={item.id}
-                item={item}
-                horizontal
-              />
+        {filteredListings.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.featuredScroll}>
+            {filteredListings.map((item, index) => (
+              <FoodCard key={item.id || index} item={item} horizontal />
             ))}
           </ScrollView>
         ) : (
           <View style={styles.emptySearch}>
-            <Ionicons
-              name="search-outline"
-              size={24}
-              color={Colors.icon}
-            />
-
-            <Text style={styles.emptySearchText}>
-              No food found.
-            </Text>
+            <Ionicons name="search-outline" size={24} color={Colors.icon} />
+            <Text style={styles.emptySearchText}>{loading ? "Loading listings..." : "No food found."}</Text>
           </View>
         )}
 
-        {/* =================================================
-            RECOMMENDATIONS
-        ================================================= */}
-
         <View style={styles.sectionHeader}>
           <View>
-            <Text style={styles.sectionTitle}>
-              Recommended for You
-            </Text>
-
-            <Text style={styles.sectionSubtitle}>
-              Popular surplus food nearby.
-            </Text>
+            <Text style={styles.sectionTitle}>Recommended for You</Text>
+            <Text style={styles.sectionSubtitle}>Popular surplus food nearby.</Text>
           </View>
-
-          <TouchableOpacity>
-            <Text style={styles.viewAllText}>
-              View all
-            </Text>
-          </TouchableOpacity>
         </View>
 
-        {filteredRecommendations.length > 0 ? (
+        {filteredListings.length > 0 ? (
           <View style={styles.foodGrid}>
-            {filteredRecommendations.map((item) => (
-              <FoodCard
-                key={item.id}
-                item={item}
-              />
+            {filteredListings.map((item, index) => (
+              <FoodCard key={item.id || index} item={item} />
             ))}
           </View>
         ) : (
           <View style={styles.emptySearch}>
-            <Ionicons
-              name="search-outline"
-              size={24}
-              color={Colors.icon}
-            />
-
-            <Text style={styles.emptySearchText}>
-              No recommendations found.
-            </Text>
+            <Ionicons name="search-outline" size={24} color={Colors.icon} />
+            <Text style={styles.emptySearchText}>{loading ? "Loading recommendations..." : "No recommendations found."}</Text>
           </View>
         )}
 
-        {/* =================================================
-            NEARBY ESTABLISHMENTS
-        ================================================= */}
-
         <View style={styles.sectionHeader}>
           <View>
-            <Text style={styles.sectionTitle}>
-              Nearby Establishments
-            </Text>
-
-            <Text style={styles.sectionSubtitle}>
-              Find surplus food around your area.
-            </Text>
+            <Text style={styles.sectionTitle}>Nearby Establishments</Text>
+            <Text style={styles.sectionSubtitle}>Find surplus food around your area.</Text>
           </View>
-
-          <TouchableOpacity>
-            <Text style={styles.viewAllText}>
-              View all
-            </Text>
-          </TouchableOpacity>
         </View>
 
         <View style={styles.establishmentList}>
           {establishments.map((item) => (
-            <EstablishmentCard
-              key={item.id}
-              item={item}
-            />
+            <EstablishmentCard key={item.id} item={item} />
           ))}
         </View>
-
         <View style={styles.bottomSpacing} />
       </ScrollView>
 
-      {/* =====================================================
-          FOOD DETAIL MODAL
-      ===================================================== */}
-
-      <Modal
-        visible={selectedFood !== null}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setSelectedFood(null)}
-      >
+      {/* FOOD DETAIL MODAL */}
+      <Modal visible={selectedFood !== null} transparent animationType="slide" onRequestClose={() => setSelectedFood(null)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalSheet}>
             {selectedFood && (
               <>
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>
-                    Food Details
-                  </Text>
-
-                  <TouchableOpacity
-                    onPress={() => setSelectedFood(null)}
-                  >
-                    <Ionicons
-                      name="close"
-                      size={23}
-                      color={Colors.text}
-                    />
+                  <Text style={styles.modalTitle}>Food Details</Text>
+                  <TouchableOpacity style={styles.modalCloseButton} onPress={() => setSelectedFood(null)}>
+                    <Ionicons name="close" size={20} color={Colors.primary2} />
                   </TouchableOpacity>
                 </View>
 
-                <ScrollView
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={styles.modalScroll}
-                >
-                  <Image
-                    source={{
-                      uri: selectedFood.image,
-                    }}
-                    style={styles.modalFoodImage}
-                  />
+                <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScroll}>
+                  <Image source={{ uri: selectedFood.image }} style={styles.modalFoodImage} />
 
                   <View style={styles.modalDiscountBadge}>
-                    <Text style={styles.discountText}>
-                      {selectedFood.discount}% OFF
-                    </Text>
+                    <Text style={styles.discountText}>{selectedFood.discount}% OFF</Text>
                   </View>
 
-                  <Text style={styles.modalFoodName}>
-                    {selectedFood.name}
-                  </Text>
-
-                  <Text style={styles.modalEstablishment}>
-                    {selectedFood.establishment}
-                  </Text>
+                  <Text style={styles.modalFoodName}>{selectedFood.name}</Text>
+                  <Text style={styles.modalEstablishment}>{selectedFood.establishment}</Text>
 
                   <View style={styles.modalInfoRow}>
                     <View style={styles.modalInfoItem}>
-                      <Ionicons
-                        name="location-outline"
-                        size={16}
-                        color={Colors.icon}
-                      />
-
-                      <Text style={styles.modalInfoText}>
-                        {selectedFood.distance}
-                      </Text>
+                      <Ionicons name="location-outline" size={15} color={Colors.icon} />
+                      <Text style={styles.modalInfoText}>{selectedFood.distance}</Text>
                     </View>
 
                     <View style={styles.modalInfoItem}>
-                      <Ionicons
-                        name="cube-outline"
-                        size={16}
-                        color={Colors.icon}
-                      />
+                      <Ionicons name="cube-outline" size={15} color={Colors.icon} />
+                      <Text style={styles.modalInfoText}>{selectedFood.quantity} {selectedFood.unit} available</Text>
+                    </View>
+                  </View>
 
-                      <Text style={styles.modalInfoText}>
-                        {selectedFood.quantity} available
-                      </Text>
+                  <View style={styles.modalTimerBox}>
+                    <Ionicons name="time-outline" size={18} color={Colors.primary} />
+                    <View style={{ marginLeft: 10, flex: 1 }}>
+                      <Text style={styles.modalTimerLabel}>Expiry Countdown & Deadline</Text>
+                      <LiveCountdown 
+                        prepDate={selectedFood.preparationDate}
+                        expiryDate={selectedFood.expiryDate} 
+                        expiryTime={selectedFood.expiryTime} 
+                        initialPrice={selectedFood.price}
+                        floorPrice={selectedFood.floorPrice}
+                        textStyle={{ fontSize: 13, fontFamily: "PoppinsBold" }} 
+                      />
+                      <Text style={styles.modalStorageText}>Storage: {selectedFood.storageCondition} • Due: {selectedFood.expiryDate} {selectedFood.expiryTime}</Text>
                     </View>
                   </View>
 
                   <View style={styles.modalPriceBox}>
                     <View>
-                      <Text style={styles.modalPriceLabel}>
-                        Rescue Price
-                      </Text>
-
-                      <Text style={styles.modalPrice}>
-                        ₱{selectedFood.price}
-                      </Text>
+                      <Text style={styles.modalPriceLabel}>Live Rescue Price</Text>
+                      <Text style={styles.modalPrice}>₱{(modalLivePrice > 0 ? modalLivePrice : selectedFood.price).toFixed(2)}</Text>
                     </View>
-
-                    <Text style={styles.modalOriginalPrice}>
-                      ₱{selectedFood.originalPrice}
-                    </Text>
+                    <Text style={styles.modalOriginalPrice}>₱{selectedFood.originalPrice}</Text>
                   </View>
 
-                  {/* QUANTITY */}
-
-                  <Text style={styles.quantityLabel}>
-                    Quantity
-                  </Text>
-
+                  <Text style={styles.quantityLabel}>Quantity</Text>
                   <View style={styles.quantitySelector}>
                     <TouchableOpacity
                       style={styles.quantityButton}
-                      onPress={() =>
-                        setQuantity((prev) =>
-                          Math.max(1, prev - 1)
-                        )
-                      }
+                      onPress={() => setQuantity((prev) => Math.max(1, prev - 1))}
                     >
-                      <Ionicons
-                        name="remove"
-                        size={18}
-                        color={Colors.primary}
-                      />
+                      <Ionicons name="remove" size={16} color={Colors.primary} />
                     </TouchableOpacity>
-
-                    <Text style={styles.quantityText}>
-                      {quantity}
-                    </Text>
-
+                    <Text style={styles.quantityText}>{quantity}</Text>
                     <TouchableOpacity
                       style={styles.quantityButton}
-                      onPress={() =>
-                        setQuantity((prev) =>
-                          Math.min(
-                            selectedFood.quantity,
-                            prev + 1
-                          )
-                        )
-                      }
+                      onPress={() => setQuantity((prev) => Math.min(selectedFood.quantity, prev + 1))}
                     >
-                      <Ionicons
-                        name="add"
-                        size={18}
-                        color={Colors.primary}
-                      />
+                      <Ionicons name="add" size={16} color={Colors.primary} />
                     </TouchableOpacity>
                   </View>
 
-                  {/* ADD TO CART */}
-
-                  <TouchableOpacity
-                    style={styles.addToCartButton}
-                    onPress={() =>
-                      addToCart(selectedFood, quantity)
-                    }
-                  >
-                    <Ionicons
-                      name="cart-outline"
-                      size={19}
-                      color={Colors.white}
-                    />
-
-                    <Text style={styles.addToCartText}>
-                      Add to Cart
-                    </Text>
+                  <TouchableOpacity style={styles.addToCartButton} onPress={() => addToCart(selectedFood, quantity)}>
+                    <Ionicons name="cart-outline" size={18} color={Colors.white} />
+                    <Text style={styles.addToCartText}>Add to Cart</Text>
                   </TouchableOpacity>
                 </ScrollView>
               </>
@@ -797,153 +533,52 @@ export default function Homepage() {
         </View>
       </Modal>
 
-      {/* =====================================================
-          BOTTOM NAVIGATION
-      ===================================================== */}
-
+      {/* BOTTOM NAVIGATION */}
       <View style={styles.bottomNav}>
-        {/* HOME */}
-
-        <TouchableOpacity
-          style={[
-            styles.navItem,
-            styles.navItemActive,
-          ]}
-          onPress={() =>
-            router.replace("/consumer/homepage")
-          }
-        >
-          <Ionicons
-            name="home"
-            size={21}
-            color={Colors.primary}
-          />
-
-          <Text
-            style={[
-              styles.navLabel,
-              styles.navLabelActive,
-            ]}
-          >
-            Home
-          </Text>
+        <TouchableOpacity style={[styles.navItem, styles.navItemActive]} activeOpacity={1}>
+          <Ionicons name="home" size={22} color={Colors.primary} />
+          <Text style={[styles.navText, styles.navTextActive]}>Home</Text>
         </TouchableOpacity>
 
-        {/* SEARCH */}
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => setSearchText("")}
-        >
-          <Ionicons
-            name="search-outline"
-            size={21}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.navLabel}>
-            Search
-          </Text>
-        </TouchableOpacity>
-
-        {/* CART */}
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() =>
-            router.push("/consumer/cart")
-          }
-        >
+        <TouchableOpacity style={styles.navItem} activeOpacity={0.7} onPress={() => router.replace("/consumer/cart")}>
           <View style={styles.cartIconWrapper}>
-            <Ionicons
-              name="cart-outline"
-              size={21}
-              color={Colors.icon}
-            />
-
+            <Ionicons name="cart-outline" size={22} color={Colors.icon} />
             {cartCount > 0 && (
               <View style={styles.cartBadge}>
-                <Text style={styles.cartBadgeText}>
-                  {cartCount > 99 ? "99+" : cartCount}
-                </Text>
+                <Text style={styles.cartBadgeText}>{cartCount > 99 ? "99+" : cartCount}</Text>
               </View>
             )}
           </View>
-
-          <Text style={styles.navLabel}>
-            My Cart
-          </Text>
+          <Text style={styles.navText}>My Cart</Text>
         </TouchableOpacity>
 
-        {/* CLAIMS */}
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() =>
-            router.push("/consumer/claims")
-          }
-        >
-          <Ionicons
-            name="receipt-outline"
-            size={21}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.navLabel}>
-            My Claims
-          </Text>
+        <TouchableOpacity style={styles.navItem} activeOpacity={0.7} onPress={() => router.replace("/consumer/claims")}>
+          <Ionicons name="receipt-outline" size={22} color={Colors.icon} />
+          <Text style={styles.navText}>Claims</Text>
         </TouchableOpacity>
 
-        {/* PROFILE */}
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() =>
-            router.push("/consumer/profile")
-          }
-        >
-          <Ionicons
-            name="person-circle-outline"
-            size={21}
-            color={Colors.icon}
-          />
-
-          <Text style={styles.navLabel}>
-            Profile
-          </Text>
+        <TouchableOpacity style={styles.navItem} activeOpacity={0.7} onPress={() => router.replace("/consumer/profile")}>
+          <Ionicons name="person-outline" size={22} color={Colors.icon} />
+          <Text style={styles.navText}>Profile</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
 }
 
-/* =====================================================
-   STYLES
-===================================================== */
-
 const styles = StyleSheet.create({
-  /* =====================================================
-     CONTAINER
-  ===================================================== */
-
   container: {
     flex: 1,
     backgroundColor: Colors.background,
   },
-
   scrollContent: {
-    paddingHorizontal: 18,
-    paddingTop: 22,
-    paddingBottom: 10,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 24,
   },
-
-  /* =====================================================
-     HEADER
-  ===================================================== */
-
   header: {
-    height: 70,
-    paddingHorizontal: 18,
+    height: 64,
+    paddingHorizontal: 16,
     backgroundColor: Colors.background,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
@@ -951,364 +586,286 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   logo: {
     fontFamily: "PoppinsBold",
-    fontSize: 23,
-    lineHeight: 26,
+    fontSize: 22,
     color: Colors.primary,
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
   },
-
   logoSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    lineHeight: 11,
+    fontSize: 10,
     color: Colors.primary1,
-    marginTop: -1,
+    marginTop: -3,
   },
-
   locationPill: {
-    height: 30,
-    paddingHorizontal: 10,
+    height: 32,
+    paddingHorizontal: 12,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 20,
+    borderRadius: 16,
     flexDirection: "row",
     alignItems: "center",
+    gap: 4,
   },
-
   locationText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 9,
-    lineHeight: 12,
-    color: Colors.text,
-    marginLeft: 4,
+    fontFamily: "PoppinsMedium",
+    fontSize: 11,
+    color: Colors.primary2,
   },
-
-  /* =====================================================
-     WELCOME
-  ===================================================== */
-
   welcomeSection: {
-    marginBottom: 17,
+    marginBottom: 16,
   },
-
   welcomeText: {
     fontFamily: "PoppinsBold",
     fontSize: 24,
-    lineHeight: 30,
     color: Colors.primary2,
   },
-
   welcomeSubtext: {
     fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    lineHeight: 17,
+    fontSize: 12,
     color: Colors.primary1,
     marginTop: 2,
   },
-
-  /* =====================================================
-     SEARCH
-  ===================================================== */
-
   searchContainer: {
-    height: 45,
-    paddingHorizontal: 13,
-    backgroundColor: Colors.input,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 25,
-  },
-
-  searchInput: {
-    flex: 1,
-    fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    color: Colors.text,
-    marginLeft: 9,
-    paddingVertical: 0,
-  },
-
-  /* =====================================================
-     SECTION HEADER
-  ===================================================== */
-
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    marginBottom: 12,
-  },
-
-  sectionTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 17,
-    lineHeight: 22,
-    color: Colors.primary2,
-  },
-
-  sectionSubtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 9,
-    lineHeight: 14,
-    color: Colors.primary1,
-    marginTop: 1,
-  },
-
-  viewAllText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 9,
-    color: Colors.primary,
-    marginBottom: 2,
-  },
-
-  /* =====================================================
-     FEATURED
-  ===================================================== */
-
-  featuredScroll: {
-    paddingRight: 4,
-    paddingBottom: 3,
-  },
-
-  featuredCard: {
-    width: 225,
+    height: 46,
+    paddingHorizontal: 12,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
-    overflow: "hidden",
-    marginRight: 12,
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.02,
+    shadowRadius: 4,
+    elevation: 1,
   },
-
+  searchInput: {
+    flex: 1,
+    fontFamily: "PoppinsRegular",
+    fontSize: 12,
+    color: Colors.primary2,
+    marginLeft: 8,
+    paddingVertical: 0,
+  },
+  sectionHeader: {
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  sectionTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 17,
+    color: Colors.primary2,
+  },
+  sectionSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    color: Colors.primary1,
+  },
+  featuredScroll: {
+    paddingBottom: 4,
+    gap: 12,
+  },
+  featuredCard: {
+    width: 230,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 14,
+    overflow: "hidden",
+  },
   featuredImageContainer: {
     width: "100%",
-    height: 145,
+    height: 140,
     position: "relative",
   },
-
   featuredImage: {
     width: "100%",
     height: "100%",
     resizeMode: "cover",
   },
-
   featuredContent: {
-    padding: 11,
+    padding: 12,
   },
-
-  /* =====================================================
-     FOOD CARDS
-  ===================================================== */
-
   foodGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     justifyContent: "space-between",
   },
-
   foodCard: {
     width: "48.5%",
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
+    borderRadius: 14,
     overflow: "hidden",
-    marginBottom: 14,
+    marginBottom: 12,
   },
-
   foodImageContainer: {
     width: "100%",
     height: 125,
     position: "relative",
   },
-
   foodImage: {
     width: "100%",
     height: "100%",
     resizeMode: "cover",
   },
-
   discountBadge: {
     position: "absolute",
     top: 8,
     left: 8,
     paddingHorizontal: 7,
-    paddingVertical: 4,
+    paddingVertical: 3,
     backgroundColor: Colors.primary,
-    borderRadius: 5,
+    borderRadius: 6,
   },
-
   discountText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 7.5,
-    lineHeight: 10,
+    fontSize: 9,
     color: Colors.white,
   },
-
   foodCardContent: {
     padding: 10,
   },
-
   foodName: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: 13,
     color: Colors.primary2,
   },
-
   establishmentName: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    lineHeight: 12,
+    fontSize: 10,
     color: Colors.primary1,
     marginTop: 1,
   },
-
   priceRow: {
     flexDirection: "row",
     alignItems: "center",
     marginTop: 6,
   },
-
   foodPrice: {
     fontFamily: "PoppinsBold",
-    fontSize: 13,
-    lineHeight: 17,
+    fontSize: 15,
     color: Colors.primary,
   },
-
   originalPrice: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
+    fontSize: 10,
     color: Colors.placeholder,
     textDecorationLine: "line-through",
-    marginLeft: 5,
+    marginLeft: 6,
   },
-
+  detailsMetaRow: {
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  timerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  timerText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 10,
+    color: Colors.primary,
+    marginLeft: 4,
+  },
+  timerExpiredText: {
+    color: "#B3261E",
+    fontFamily: "PoppinsBold",
+  },
   foodBottomRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 7,
+    marginTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    paddingTop: 6,
   },
-
   distanceRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 3,
   },
-
   distanceText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
-    lineHeight: 11,
+    fontSize: 10,
     color: Colors.icon,
-    marginLeft: 3,
   },
-
   availableText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 7.5,
-    lineHeight: 11,
+    fontFamily: "PoppinsMedium",
+    fontSize: 10,
     color: Colors.primary1,
   },
-
-  /* =====================================================
-     ESTABLISHMENTS
-  ===================================================== */
-
   establishmentList: {
-    gap: 9,
+    gap: 10,
   },
-
   establishmentCard: {
-    minHeight: 76,
-    padding: 9,
+    padding: 10,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
+    borderRadius: 14,
     flexDirection: "row",
     alignItems: "center",
   },
-
   establishmentImage: {
-    width: 58,
-    height: 58,
-    borderRadius: 8,
+    width: 56,
+    height: 56,
+    borderRadius: 10,
     resizeMode: "cover",
   },
-
   establishmentInfo: {
     flex: 1,
-    marginLeft: 10,
+    marginLeft: 12,
   },
-
   establishmentNameLarge: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
-    lineHeight: 15,
+    fontSize: 13,
     color: Colors.primary2,
   },
-
   establishmentCategory: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    lineHeight: 12,
+    fontSize: 10,
     color: Colors.primary1,
     marginTop: 1,
-    marginBottom: 4,
+    marginBottom: 2,
   },
-
-  /* =====================================================
-     EMPTY
-  ===================================================== */
-
   emptySearch: {
     height: 100,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 25,
+    marginBottom: 16,
   },
-
   emptySearchText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 10,
+    fontSize: 11,
     color: Colors.primary1,
-    marginTop: 5,
+    marginTop: 4,
   },
-
-  /* =====================================================
-     MODAL
-  ===================================================== */
-
   modalOverlay: {
     flex: 1,
-    backgroundColor: "rgba(18,55,44,0.50)",
+    backgroundColor: "rgba(18,55,44,0.5)",
     justifyContent: "flex-end",
   },
-
   modalSheet: {
     backgroundColor: Colors.white,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     maxHeight: "88%",
     overflow: "hidden",
   },
-
   modalHeader: {
-    height: 58,
-    paddingHorizontal: 18,
+    height: 56,
+    paddingHorizontal: 16,
     backgroundColor: Colors.background,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
@@ -1316,244 +873,217 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   modalTitle: {
     fontFamily: "PoppinsBold",
     fontSize: 17,
     color: Colors.primary2,
   },
-
-  modalScroll: {
-    padding: 18,
-    paddingBottom: 28,
+  modalCloseButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
   },
-
+  modalScroll: {
+    padding: 16,
+    paddingBottom: 24,
+  },
   modalFoodImage: {
     width: "100%",
     height: 210,
-    borderRadius: 10,
+    borderRadius: 12,
     resizeMode: "cover",
   },
-
   modalDiscountBadge: {
     alignSelf: "flex-start",
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     backgroundColor: Colors.primary,
-    borderRadius: 5,
+    borderRadius: 6,
     marginTop: 12,
   },
-
   modalFoodName: {
     fontFamily: "PoppinsBold",
-    fontSize: 21,
-    lineHeight: 27,
+    fontSize: 20,
     color: Colors.primary2,
-    marginTop: 10,
+    marginTop: 8,
   },
-
   modalEstablishment: {
     fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    lineHeight: 15,
+    fontSize: 11,
     color: Colors.primary1,
-    marginTop: 2,
   },
-
   modalInfoRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 14,
-    gap: 18,
+    marginTop: 12,
+    gap: 16,
   },
-
   modalInfoItem: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 4,
   },
-
   modalInfoText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9,
+    fontSize: 11,
     color: Colors.icon,
-    marginLeft: 4,
   },
-
+  modalTimerBox: {
+    marginTop: 14,
+    padding: 12,
+    backgroundColor: Colors.input,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  modalTimerLabel: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 10,
+    color: Colors.primary1,
+  },
+  modalStorageText: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10,
+    color: Colors.icon,
+    marginTop: 2,
+  },
   modalPriceBox: {
-    marginTop: 16,
+    marginTop: 14,
     padding: 12,
     backgroundColor: Colors.background,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 9,
+    borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
   },
-
   modalPriceLabel: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
+    fontSize: 10,
     color: Colors.primary1,
   },
-
   modalPrice: {
     fontFamily: "PoppinsBold",
     fontSize: 22,
-    lineHeight: 28,
     color: Colors.primary,
-    marginTop: 1,
   },
-
   modalOriginalPrice: {
     fontFamily: "PoppinsRegular",
-    fontSize: 10,
+    fontSize: 12,
     color: Colors.placeholder,
     textDecorationLine: "line-through",
   },
-
-  /* =====================================================
-     QUANTITY
-  ===================================================== */
-
   quantityLabel: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
+    fontSize: 11,
     color: Colors.primary2,
-    marginTop: 18,
-    marginBottom: 8,
+    marginTop: 16,
+    marginBottom: 6,
   },
-
   quantitySelector: {
-    height: 42,
-    width: 125,
+    height: 44,
+    width: 130,
     backgroundColor: Colors.input,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 9,
+    borderRadius: 10,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 5,
+    paddingHorizontal: 6,
   },
-
   quantityButton: {
     width: 32,
     height: 32,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 7,
+    borderRadius: 8,
     alignItems: "center",
     justifyContent: "center",
   },
-
   quantityText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
+    fontSize: 13,
     color: Colors.primary2,
   },
-
-  /* =====================================================
-     ADD TO CART
-  ===================================================== */
-
   addToCartButton: {
-    height: 46,
+    height: 48,
     backgroundColor: Colors.button,
-    borderRadius: 9,
+    borderRadius: 12,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 18,
+    marginTop: 20,
+    gap: 6,
   },
-
   addToCartText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
+    fontSize: 12,
     color: Colors.white,
-    marginLeft: 7,
   },
-
-  /* =====================================================
-     BOTTOM NAV
-  ===================================================== */
-
   bottomNav: {
-    height: 64,
+    height: 84,
+    paddingBottom: 20,
     backgroundColor: Colors.white,
+    flexDirection: "row",
     borderTopWidth: 1,
     borderTopColor: Colors.border,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-around",
-    elevation: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowRadius: 5,
-    shadowOffset: {
-      width: 0,
-      height: -2,
-    },
+    elevation: 8,
+    paddingHorizontal: 2,
   },
-
   navItem: {
-    height: 48,
-    minWidth: 62,
-    paddingHorizontal: 6,
-    borderRadius: 9,
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
+    marginVertical: 4,
+    borderRadius: 8,
   },
-
   navItemActive: {
     backgroundColor: "#E8EFEA",
   },
-
-  navLabel: {
+  navText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
-    lineHeight: 11,
+    fontSize: 10,
     color: Colors.icon,
-    marginTop: 3,
+    marginTop: 2,
   },
-
-  navLabelActive: {
+  navTextActive: {
     fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
     color: Colors.primary,
   },
-
-  /* =====================================================
-     CART BADGE
-  ===================================================== */
-
   cartIconWrapper: {
     position: "relative",
   },
-
   cartBadge: {
     position: "absolute",
-    top: -7,
+    top: -6,
     right: -10,
     minWidth: 15,
     height: 15,
     paddingHorizontal: 3,
-    borderRadius: 8,
+    borderRadius: 7.5,
     backgroundColor: Colors.primary,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1.5,
     borderColor: Colors.white,
   },
-
   cartBadgeText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 6.5,
-    lineHeight: 9,
+    fontSize: 7,
     color: Colors.white,
   },
-
   bottomSpacing: {
-    height: 15,
+    height: 12,
   },
 });

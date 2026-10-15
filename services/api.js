@@ -2,7 +2,7 @@ import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 
 // REPLACE WITH YOUR ACTUAL LOCAL IPV4 ADDRESS
-const BASE_URL = 'http://192.168.254.116:8000/api/accounts/'; 
+const BASE_URL = 'http://192.168.254.204:8000/api/accounts/'; 
 
 export const api = axios.create({
   baseURL: BASE_URL,
