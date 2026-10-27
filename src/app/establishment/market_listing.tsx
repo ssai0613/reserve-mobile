@@ -1,43 +1,57 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { decode } from 'base64-arraybuffer';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as ImagePicker from 'expo-image-picker';
-import { router, Stack } from "expo-router";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { decode } from "base64-arraybuffer";
+import * as FileSystem from "expo-file-system/legacy";
+import * as ImagePicker from "expo-image-picker";
+import { Stack } from "expo-router";
+import * as SecureStore from "expo-secure-store";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
   Image,
   KeyboardAvoidingView,
-  Modal, PanResponder, Platform, Pressable, ScrollView,
+  Modal,
+  PanResponder,
+  Platform,
+  Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View
-} from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { api } from '../../../services/api';
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { api } from "../../../services/api";
+import { EstablishmentBottomNav, EstablishmentHeader } from "../components/EstablishmentNav";
+
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
+
+const getStorageItem = async (key: string): Promise<string | null> => {
+  if (Platform.OS === "web") {
+    return localStorage.getItem(key);
+  }
+  return await SecureStore.getItemAsync(key);
+};
 
 type ProduceListing = {
   id: number;
   name: string;
   establishment: string;
-  price: string;
-  originalPrice: string;
-  floorPrice: string;
+  price: number;
+  originalPrice: number;
+  floorPrice: number;
   distance: string;
   time: string;
   image: string;
   urgent: boolean;
   quantity: string;
-  weight_per_unit: string; 
+  weight_per_unit: string;
   unitFullText: string;
-  unitLabel: string; 
+  unitLabel: string;
   unitId: number;
   listingDate: string;
   status: string;
@@ -53,6 +67,8 @@ type ProduceListing = {
 const initialProduceListings: ProduceListing[] = [];
 
 export default function SMEProduceListing() {
+  const [merchantId, setMerchantId] = useState<string>("1");
+  const [establishmentName, setEstablishmentName] = useState<string>("Market Vendor Portal");
   const [foodListings, setFoodListings] = useState<ProduceListing[]>(initialProduceListings);
   const [listingModalVisible, setListingModalVisible] = useState(false);
   const [viewModalVisible, setViewModalVisible] = useState(false);
@@ -167,7 +183,9 @@ export default function SMEProduceListing() {
     })
   ).current;
 
-  const [dateFilterMode, setDateFilterMode] = useState<"All" | "Today" | "Last 7 Days" | "Last 30 Days" | "Custom">("All");
+  const [dateFilterMode, setDateFilterMode] = useState<
+    "All" | "Today" | "Last 7 Days" | "Last 30 Days" | "Custom"
+  >("All");
   const [showMainDatePicker, setShowMainDatePicker] = useState(false);
   const [customMainDate, setCustomMainDate] = useState(new Date());
 
@@ -183,12 +201,15 @@ export default function SMEProduceListing() {
     const prepDateStr = item.preparationDate;
     if (!prepDateStr || prepDateStr === "Not Set") return false;
 
-    const cleanStr = prepDateStr.replace(/,/g, '').trim();
-    const parts = cleanStr.split(' ');
-    
+    const cleanStr = prepDateStr.replace(/,/g, "").trim();
+    const parts = cleanStr.split(" ");
+
     if (parts.length < 3) return false;
 
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthNames = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     const monthIndex = monthNames.indexOf(parts[0]);
     const dayNum = parseInt(parts[1], 10);
     const yearNum = parseInt(parts[2], 10);
@@ -207,9 +228,13 @@ export default function SMEProduceListing() {
         monthIndex === now.getMonth() &&
         dayNum === now.getDate()
       );
-    } else if (dateFilterMode === "Last 7 Days" || dateFilterMode === "Last 30 Days") {
+    } else if (
+      dateFilterMode === "Last 7 Days" ||
+      dateFilterMode === "Last 30 Days"
+    ) {
       const itemDateObj = new Date(yearNum, monthIndex, dayNum);
-      const diffDays = (now.getTime() - itemDateObj.getTime()) / (1000 * 60 * 60 * 24);
+      const diffDays =
+        (now.getTime() - itemDateObj.getTime()) / (1000 * 60 * 60 * 24);
       const limit = dateFilterMode === "Last 7 Days" ? 7 : 30;
       return diffDays >= 0 && diffDays <= limit;
     } else if (dateFilterMode === "Custom") {
@@ -224,7 +249,7 @@ export default function SMEProduceListing() {
 
   const handleSortSelection = (mode: "A-Z" | "Date Posted") => {
     if (sortMode === mode) {
-      setSortDirection(prev => (prev === "asc" ? "desc" : "asc"));
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
     } else {
       setSortMode(mode);
       setSortDirection("asc");
@@ -239,17 +264,23 @@ export default function SMEProduceListing() {
     message: "",
     confirmText: "Okay",
     cancelText: "",
-    onConfirm: () => {}
+    onConfirm: () => {},
   });
 
-  const showAlert = (title: string, message: string, confirmText = "Okay", cancelText = "", onConfirm?: () => void) => {
-    setAlertConfig({ 
-      visible: true, 
-      title, 
-      message, 
-      confirmText, 
-      cancelText, 
-      onConfirm: onConfirm || hideAlert 
+  const showAlert = (
+    title: string,
+    message: string,
+    confirmText = "Okay",
+    cancelText = "",
+    onConfirm?: () => void
+  ) => {
+    setAlertConfig({
+      visible: true,
+      title,
+      message,
+      confirmText,
+      cancelText,
+      onConfirm: onConfirm || hideAlert,
     });
   };
 
@@ -259,25 +290,36 @@ export default function SMEProduceListing() {
 
   const [foodName, setFoodName] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
-  
+
   const now = new Date();
-  const defaultFormattedDate = (now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + ', ' + 
-    now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })).replace(/\u202f/g, ' ');
+  const defaultFormattedDate = (
+    now.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }) +
+    ", " +
+    now.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+  ).replace(/\u202f/g, " ");
 
   const [preparationDate, setPreparationDate] = useState(defaultFormattedDate);
-  const [category, setCategory] = useState("Leafy Greens"); 
+  const [category, setCategory] = useState("Leafy Greens");
   const [description, setDescription] = useState("");
 
   const [quantity, setQuantity] = useState("");
-  const [unit, setUnit] = useState(""); 
+  const [unit, setUnit] = useState("");
   const [unitDropdownOpen, setUnitDropdownOpen] = useState(false);
   const [weightPerUnit, setWeightPerUnit] = useState("0");
-  
+
   const [originalPrice, setOriginalPrice] = useState("");
   const [discountedPrice, setDiscountedPrice] = useState("");
   const [floorPrice, setFloorPrice] = useState("");
 
-  const [storageCondition, setStorageCondition] = useState("Ambient (25°C)"); 
+  const [storageCondition, setStorageCondition] = useState("Ambient (25°C)");
   const [expiryDate, setExpiryDate] = useState("");
   const [expiryTime, setExpiryTime] = useState("");
   const [listingStatus, setListingStatus] = useState(true);
@@ -287,16 +329,19 @@ export default function SMEProduceListing() {
   const [actualDate, setActualDate] = useState(now);
 
   const formatDateTimeToString = (date: Date) => {
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const months = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
     const m = months[date.getMonth()];
     const d = date.getDate();
     const y = date.getFullYear();
-    
+
     let hrs = date.getHours();
-    const mins = date.getMinutes().toString().padStart(2, '0');
-    const ampm = hrs >= 12 ? 'PM' : 'AM';
+    const mins = date.getMinutes().toString().padStart(2, "0");
+    const ampm = hrs >= 12 ? "PM" : "AM";
     hrs = hrs % 12;
-    hrs = hrs ? hrs : 12; 
+    hrs = hrs ? hrs : 12;
 
     return `${m} ${d}, ${y}, ${hrs}:${mins} ${ampm}`;
   };
@@ -323,71 +368,91 @@ export default function SMEProduceListing() {
     if (Platform.OS === "android") {
       setShowPicker(false);
     }
-    
+
     setPreparationDate(formatDateTimeToString(actualDate));
   };
 
   const parseExpiryTimestamp = (dateStr: string, timeStr?: string) => {
     try {
       let full = timeStr ? `${dateStr} ${timeStr}` : dateStr;
-      full = full.replace(/,/g, '').replace(/\s+/g, ' ').trim(); 
-      
-      const parts = full.split(' '); 
-      const monthIndex = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(parts[0]);
+      full = full.replace(/,/g, "").replace(/\s+/g, " ").trim();
+
+      const parts = full.split(" ");
+      const monthIndex = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+      ].indexOf(parts[0]);
       const day = parseInt(parts[1], 10);
       const year = parseInt(parts[2], 10);
-      
+
       let hours = 0;
       let minutes = 0;
-      
+
       if (parts[3]) {
-        const timeParts = parts[3].split(':');
+        const timeParts = parts[3].split(":");
         hours = parseInt(timeParts[0], 10);
         minutes = parseInt(timeParts[1], 10);
-        
+
         const fullUpper = full.toUpperCase();
-        if (fullUpper.includes('PM') && hours < 12) hours += 12;
-        if (fullUpper.includes('AM') && hours === 12) hours = 0;
+        if (fullUpper.includes("PM") && hours < 12) hours += 12;
+        if (fullUpper.includes("AM") && hours === 12) hours = 0;
       }
 
       return new Date(year, monthIndex, day, hours, minutes).getTime();
     } catch (error) {
-      return Number.MAX_SAFE_INTEGER; 
+      return Number.MAX_SAFE_INTEGER;
     }
   };
 
   useEffect(() => {
-    fetchListings();
-    const interval = setInterval(() => {
-      fetchListings();
-    }, 3000);
-    return () => clearInterval(interval);
+    let interval: any;
+    const setup = async () => {
+      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedName =
+        (await getStorageItem("entity_name")) || "Market Vendor Portal";
+      setMerchantId(storedId);
+      setEstablishmentName(storedName);
+
+      await fetchListings(storedId, storedName);
+      interval = setInterval(() => {
+        fetchListings(storedId, storedName);
+      }, 4000);
+    };
+    setup();
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
     setSelectedCategory("All");
   }, [activeTab]);
 
-  const fetchListings = async () => {
+  const fetchListings = async (
+    mId = merchantId,
+    fallbackName = establishmentName
+  ) => {
     try {
       let donatedProductIds: number[] = [];
       try {
-        const donationRes = await api.get('donations/available/');
-        donatedProductIds = donationRes.data.map((item: any) => item.product_id);
-      } catch (err) {
-        console.warn("Could not fetch donations for filtering", err);
-      }
+        const donationRes = await api.get("donations/available/");
+        donatedProductIds = donationRes.data.map(
+          (item: any) => item.product_id
+        );
+      } catch (err) {}
 
-      const response = await api.get('listings/establishment/');
-      const rawListings = response.data.listings || response.data;
-      
+      const response = await api.get(`listings/establishment/?merchant=${mId}`);
+      const rawListings = response.data.listings || response.data || [];
+
       const unDonatedListings = rawListings.filter((item: any) => {
         const listingId = item.prod_id || item.id;
         return !donatedProductIds.includes(listingId);
       });
 
       const realData = unDonatedListings.map((item: any) => {
-        const rawCond = String(item.storage_condition || item.storageCondition || "").toLowerCase();
+        const rawCond = String(
+          item.storage_condition || item.storageCondition || ""
+        ).toLowerCase();
         let normalizedStorage = "Ambient (25°C)";
         if (rawCond.includes("chilled") || rawCond.includes("4")) {
           normalizedStorage = "Chilled (4°C)";
@@ -396,28 +461,34 @@ export default function SMEProduceListing() {
         const dbUnitId = item.unit || item.unit_id || 2;
 
         return {
-          id: item.prod_id || item.id || Date.now(), 
+          id: item.prod_id || item.id || Date.now(),
           name: item.prod_name,
           unitId: dbUnitId,
           unitFullText: getUnitFullText(dbUnitId),
-          unitLabel: getUnitLabel(dbUnitId), 
+          unitLabel: getUnitLabel(dbUnitId),
           weight_per_unit: item.weight_per_unit || "0",
-          establishment: item.merchant_name || "Market Vendor Portal",
+          establishment: item.merchant_name || fallbackName,
           price: Number(item.price || 0),
           originalPrice: Number(item.original_price || 0),
           floorPrice: Number(item.floor_price || 0),
-          distance: "0.5 km", 
-          time: item.status === "Draft" ? "Not published" : "Active", 
-          image: item.image_path || "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=700&q=80",
+          distance: "0.5 km",
+          time: item.status === "Draft" ? "Not published" : "Active",
+          image:
+            item.image_path ||
+            "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=700&q=80",
           urgent: false,
-          quantity: item.quantity || "0", 
+          quantity: String(item.quantity ?? "0"),
           listingDate: new Date().toLocaleDateString(),
           status: item.status || "Active",
-          category: item.category_name || item.category || "Leafy Greens", 
+          category: item.category_name || item.category || "Leafy Greens",
           description: item.prod_desc || "No description provided.",
-          preparationDate: item.safely_anchor_time || item.preparation_date || item.prep_date || "Not Set",
+          preparationDate:
+            item.safely_anchor_time ||
+            item.preparation_date ||
+            item.prep_date ||
+            "Not Set",
           storageCondition: normalizedStorage,
-          expiryDate: item.expiry_date || "Not Set", 
+          expiryDate: item.expiry_date || "Not Set",
           expiryTime: item.expiry_time || "Not Set",
           rescueVoucher: true,
         };
@@ -429,7 +500,7 @@ export default function SMEProduceListing() {
         return timeA - timeB;
       });
 
-      setFoodListings(realData); 
+      setFoodListings(realData);
     } catch (error) {
       console.error("Failed to pull from DB:", error);
     }
@@ -454,24 +525,27 @@ export default function SMEProduceListing() {
 
     let baseDate = new Date();
     try {
-      const cleanStr = preparationDate.replace(/,/g, '').trim();
-      const parts = cleanStr.split(' ');
-      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const cleanStr = preparationDate.replace(/,/g, "").trim();
+      const parts = cleanStr.split(" ");
+      const monthNames = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+      ];
       const monthIndex = monthNames.indexOf(parts[0]);
       const dayNum = parseInt(parts[1], 10);
       const yearNum = parseInt(parts[2], 10);
 
       if (!isNaN(monthIndex) && !isNaN(dayNum) && !isNaN(yearNum)) {
         baseDate = new Date(yearNum, monthIndex, dayNum);
-        
+
         if (parts[3] && parts[4]) {
-          const timeParts = parts[3].split(':');
+          const timeParts = parts[3].split(":");
           let hours = parseInt(timeParts[0], 10);
           const minutes = parseInt(timeParts[1], 10);
           const ampm = parts[4].toUpperCase();
 
-          if (ampm === 'PM' && hours < 12) hours += 12;
-          if (ampm === 'AM' && hours === 12) hours = 0;
+          if (ampm === "PM" && hours < 12) hours += 12;
+          if (ampm === "AM" && hours === 12) hours = 0;
 
           baseDate.setHours(hours, minutes, 0);
         }
@@ -481,9 +555,29 @@ export default function SMEProduceListing() {
     }
 
     baseDate.setDate(baseDate.getDate() + shelfLifeDays);
-    setExpiryDate(baseDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }));
-    setExpiryTime(baseDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }));
-  }, [preparationDate, storageCondition, category, listingModalVisible, editingListing]);
+    setExpiryDate(
+      baseDate.toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      })
+    );
+    setExpiryTime(
+      baseDate
+        .toLocaleTimeString("en-US", {
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        })
+        .replace(/\u202f/g, " ")
+    );
+  }, [
+    preparationDate,
+    storageCondition,
+    category,
+    listingModalVisible,
+    editingListing,
+  ]);
 
   const searchVal = searchText.toLowerCase().trim();
   const allActive = foodListings.filter((i) => i.status === "Active");
@@ -499,23 +593,26 @@ export default function SMEProduceListing() {
 
   const currentList = getActiveList();
 
-  const displayedList = currentList.filter((item) => {
-    const matchesSearch = 
-      item.name.toLowerCase().includes(searchVal) ||
-      item.category.toLowerCase().includes(searchVal);
-    const matchesCategory = selectedCategory === "All" || item.category === selectedCategory;
-    const matchesDateFilter = filterByDateRange(item);
-    return matchesSearch && matchesCategory && matchesDateFilter;
-  }).sort((a, b) => {
-    if (sortMode === "A-Z") {
-      const comp = a.name.localeCompare(b.name);
-      return sortDirection === "asc" ? comp : -comp;
-    } else {
-      const timeA = Number(a.id) || 0;
-      const timeB = Number(b.id) || 0;
-      return sortDirection === "asc" ? timeA - timeB : timeB - timeA;
-    }
-  });
+  const displayedList = currentList
+    .filter((item) => {
+      const matchesSearch =
+        item.name.toLowerCase().includes(searchVal) ||
+        item.category.toLowerCase().includes(searchVal);
+      const matchesCategory =
+        selectedCategory === "All" || item.category === selectedCategory;
+      const matchesDateFilter = filterByDateRange(item);
+      return matchesSearch && matchesCategory && matchesDateFilter;
+    })
+    .sort((a, b) => {
+      if (sortMode === "A-Z") {
+        const comp = a.name.localeCompare(b.name);
+        return sortDirection === "asc" ? comp : -comp;
+      } else {
+        const timeA = Number(a.id) || 0;
+        const timeB = Number(b.id) || 0;
+        return sortDirection === "asc" ? timeA - timeB : timeB - timeA;
+      }
+    });
 
   const resetForm = () => {
     setFoodName("");
@@ -540,12 +637,15 @@ export default function SMEProduceListing() {
   const openAddListing = () => {
     setEditingListing(null);
     resetForm();
-    setListingModalVisible(true); 
+    setListingModalVisible(true);
   };
 
   const openEditListing = (item: ProduceListing) => {
     if (item.status === "Flagged") {
-      showAlert("Restricted", "Flagged items cannot be edited because they are past or near their expiry threshold.");
+      showAlert(
+        "Restricted",
+        "Flagged items cannot be edited because they are past or near their expiry threshold."
+      );
       return;
     }
     setEditingListing(item);
@@ -553,10 +653,13 @@ export default function SMEProduceListing() {
     setImageUri(item.image || null);
     setUnit(item.unitFullText || "Kilogram (kg)");
     setWeightPerUnit(item.weight_per_unit || "0");
-    
-    const dbPrepTime = item.preparationDate && item.preparationDate !== "Not Set" ? item.preparationDate : defaultFormattedDate;
+
+    const dbPrepTime =
+      item.preparationDate && item.preparationDate !== "Not Set"
+        ? item.preparationDate
+        : defaultFormattedDate;
     setPreparationDate(dbPrepTime);
-    
+
     const parsedDate = new Date(dbPrepTime);
     if (!isNaN(parsedDate.getTime())) {
       setActualDate(parsedDate);
@@ -569,41 +672,61 @@ export default function SMEProduceListing() {
 
     setDescription(item.description || "");
     setQuantity(item.quantity ? String(item.quantity) : "");
-    
-    setOriginalPrice(item.originalPrice ? String(item.originalPrice) : '');
-    setDiscountedPrice(item.price ? String(item.price) : '');
-    setFloorPrice(item.floorPrice ? String(item.floorPrice) : '');
+
+    setOriginalPrice(item.originalPrice ? String(item.originalPrice) : "");
+    setDiscountedPrice(item.price ? String(item.price) : "");
+    setFloorPrice(item.floorPrice ? String(item.floorPrice) : "");
 
     setStorageCondition(item.storageCondition);
     setExpiryDate(item.expiryDate || "");
     setExpiryTime(item.expiryTime || "");
     setListingStatus(item.status === "Active");
     setFormErrors({});
-    
+
     setListingModalVisible(true);
   };
-  
+
   const openViewListing = (item: ProduceListing) => {
     setSelectedListing(item);
     setViewModalVisible(true);
   };
 
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      showAlert("Permission Needed", "Camera permission is required to snap photos.");
-      return;
-    }
+    try {
+      if (Platform.OS === "web") {
+        const result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          allowsEditing: true,
+          aspect: [4, 3],
+          quality: 0.7,
+        });
+        if (!result.canceled && result.assets.length > 0) {
+          setImageUri(result.assets[0].uri);
+        }
+        return;
+      }
 
-    const result = await ImagePicker.launchCameraAsync({
-      cameraType: ImagePicker.CameraType.back,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.7,
-    });
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        showAlert(
+          "Permission Needed",
+          "Camera permission is required to snap photos."
+        );
+        return;
+      }
 
-    if (!result.canceled) {
-      setImageUri(result.assets[0].uri);
+      const result = await ImagePicker.launchCameraAsync({
+        cameraType: ImagePicker.CameraType.back,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: 0.7,
+      });
+
+      if (!result.canceled) {
+        setImageUri(result.assets[0].uri);
+      }
+    } catch (err) {
+      console.log("Image picker error:", err);
     }
   };
 
@@ -613,7 +736,7 @@ export default function SMEProduceListing() {
       case 2: return "kg";
       case 3: return "pc";
       case 4: return "pk";
-      default: return "kg"; 
+      default: return "kg";
     }
   };
 
@@ -623,7 +746,7 @@ export default function SMEProduceListing() {
       case 2: return "Kilogram (kg)";
       case 3: return "Piece (pc)";
       case 4: return "Pack (pk)";
-      default: return "Kilogram (kg)"; 
+      default: return "Kilogram (kg)";
     }
   };
 
@@ -633,7 +756,7 @@ export default function SMEProduceListing() {
       case "Kilogram (kg)": return 2;
       case "Piece (pc)": return 3;
       case "Pack (pk)": return 4;
-      default: return 2; 
+      default: return 2;
     }
   };
 
@@ -643,7 +766,7 @@ export default function SMEProduceListing() {
       case "Vegetables": return 6;
       case "Fruits": return 7;
       case "Root Crops": return 8;
-      default: return 3; 
+      default: return 5;
     }
   };
 
@@ -651,13 +774,24 @@ export default function SMEProduceListing() {
     let errors: { [key: string]: string } = {};
     if (!foodName.trim()) errors.foodName = "It requires produce name";
     if (!unit) errors.unit = "It requires selling unit";
-    if (!quantity || Number(quantity) <= 0) errors.quantity = "It requires valid quantity";
-    
-    if ((unit === "Gram (g)" || unit === "Kilogram (kg)") && (!weightPerUnit || Number(weightPerUnit) <= 0)) {
+    if (!quantity || Number(quantity) <= 0)
+      errors.quantity = "It requires valid quantity";
+
+    if (
+      (unit === "Gram (g)" || unit === "Kilogram (kg)") &&
+      (!weightPerUnit || Number(weightPerUnit) <= 0)
+    ) {
       errors.weightPerUnit = "It requires weight per unit";
     }
 
-    if (!originalPrice || Number(originalPrice) <= 0 || !discountedPrice || Number(discountedPrice) <= 0 || !floorPrice || Number(floorPrice) <= 0) {
+    if (
+      !originalPrice ||
+      Number(originalPrice) <= 0 ||
+      !discountedPrice ||
+      Number(discountedPrice) <= 0 ||
+      !floorPrice ||
+      Number(floorPrice) <= 0
+    ) {
       errors.pricing = "Dynamic pricing tiers are required";
     }
 
@@ -670,37 +804,51 @@ export default function SMEProduceListing() {
 
     try {
       const finalStatus = statusArg || (listingStatus ? "Active" : "Draft");
-      let finalImageUrl = "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=700&q=80";
+      let finalImageUrl =
+        imageUri && imageUri.startsWith("http")
+          ? imageUri
+          : "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=700&q=80";
 
-      if (imageUri && !imageUri.includes("unsplash")) {
-        const supabaseUrl = "https://pxyigbutwupyslndoplm.supabase.co"; 
-        const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4eWlnYnV0d3VweXNsbmRvcGxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczOTEzNjcsImV4cCI6MjEwMjk2NzM2N30.r8UjIGq7SiVNPJ87zs_TnHBbRbaVfSk59gmY3jSrdrY"; 
-  
-        let fileUri = imageUri;
-        if (Platform.OS === 'android' && !fileUri.startsWith('file://') && !fileUri.startsWith('content://')) {
-          fileUri = `file://${fileUri}`;
-        }
+      if (imageUri && !imageUri.includes("unsplash") && !imageUri.startsWith("http")) {
+        const supabaseUrl = "https://pxyigbutwupyslndoplm.supabase.co";
+        const supabaseKey =
+          "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4eWlnYnV0d3VweXNsbmRvcGxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczOTEzNjcsImV4cCI6MjEwMjk2NzM2N30.r8UjIGq7SiVNPJ87zs_TnHBbRbaVfSk59gmY3jSrdrY";
 
-        const rawExt = fileUri.split('.').pop()?.toLowerCase() || 'jpg';
-        const ext = rawExt === 'jpeg' ? 'jpg' : rawExt; 
-        const fileName = `${Date.now()}_produce_photo.${ext}`; 
-        const contentType = ext === 'png' ? 'image/png' : 'image/jpeg';
+        const fileName = `${Date.now()}_produce_photo.jpg`;
 
         try {
-          const base64Data = await FileSystem.readAsStringAsync(fileUri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
+          let uploadBody: any;
+          if (Platform.OS === "web") {
+            const res = await fetch(imageUri);
+            uploadBody = await res.blob();
+          } else {
+            let fileUri = imageUri;
+            if (
+              Platform.OS === "android" &&
+              !fileUri.startsWith("file://") &&
+              !fileUri.startsWith("content://")
+            ) {
+              fileUri = `file://${fileUri}`;
+            }
+            const base64Data = await FileSystem.readAsStringAsync(fileUri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            uploadBody = decode(base64Data);
+          }
 
-          const uploadRes = await fetch(`${supabaseUrl}/storage/v1/object/food-images/${fileName}`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${supabaseKey}`,
-              'apikey': supabaseKey,
-              'Content-Type': contentType,
-              'x-upsert': 'true',
-            },
-            body: decode(base64Data),
-          });
+          const uploadRes = await fetch(
+            `${supabaseUrl}/storage/v1/object/food-images/${fileName}`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${supabaseKey}`,
+                apikey: supabaseKey,
+                "Content-Type": "image/jpeg",
+                "x-upsert": "true",
+              },
+              body: uploadBody,
+            }
+          );
 
           if (uploadRes.ok) {
             finalImageUrl = `${supabaseUrl}/storage/v1/object/public/food-images/${fileName}`;
@@ -714,40 +862,51 @@ export default function SMEProduceListing() {
         prod_name: foodName,
         prod_desc: description,
         quantity: quantity || "0",
-        unit: getUnitId(unit),                 
-        weight_per_unit: (unit === "Piece (pc)" || unit === "Pack (pk)") ? "0" : (weightPerUnit || "1"),
+        unit: getUnitId(unit),
+        weight_per_unit:
+          unit === "Piece (pc)" || unit === "Pack (pk)"
+            ? "0"
+            : weightPerUnit || "1",
         price: discountedPrice,
         discounted_price: discountedPrice,
         original_price: originalPrice,
         orig_price: originalPrice,
         floor_price: floorPrice,
-        category: getCategoryId(category), 
+        category: getCategoryId(category),
         pricing_mode: "dynamic",
-        merchant: 1, 
-        threshold: 1, 
+        merchant: Number(merchantId) || 1,
+        threshold: 1,
         status: finalStatus,
-        preparation_date: preparationDate.replace(/\u202f/g, ' '),
+        preparation_date: preparationDate.replace(/\u202f/g, " "),
         storage_condition: storageCondition,
         expiry_date: expiryDate,
         expiry_time: expiryTime,
-        image_path: finalImageUrl
+        image_path: finalImageUrl,
       };
 
       if (editingListing) {
         await api.put(`listings/update/${editingListing.id}/`, payload);
       } else {
-        await api.post('listings/create/', payload);
+        await api.post("listings/create/", payload);
       }
 
-      await fetchListings();
+      await fetchListings(merchantId, establishmentName);
       setListingModalVisible(false);
       const wasEditing = !!editingListing;
       setEditingListing(null);
       resetForm();
 
-      showAlert("Success", wasEditing ? "Produce listing updated successfully!" : "Produce listing posted successfully!");
+      showAlert(
+        "Success",
+        wasEditing
+          ? "Produce listing updated successfully!"
+          : "Produce listing posted successfully!"
+      );
     } catch (error: any) {
-      const errDetail = error.response && error.response.data ? JSON.stringify(error.response.data) : error.message;
+      const errDetail =
+        error.response && error.response.data
+          ? JSON.stringify(error.response.data)
+          : error.message;
       showAlert("Save Failed", errDetail || "Could not save produce listing.");
     }
   };
@@ -771,107 +930,201 @@ export default function SMEProduceListing() {
     try {
       await api.delete(`listings/delete/${id}/`);
       setFoodListings((current) => current.filter((item) => item.id !== id));
-      setAlertConfig({ visible: true, title: "Removed", message: "Listing successfully removed.", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
+      setAlertConfig({
+        visible: true,
+        title: "Removed",
+        message: "Listing successfully removed.",
+        confirmText: "Okay",
+        cancelText: "",
+        onConfirm: hideAlert,
+      });
     } catch (error) {
-      setAlertConfig({ visible: true, title: "Delete Failed", message: "Could not delete listing.", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
+      setAlertConfig({
+        visible: true,
+        title: "Delete Failed",
+        message: "Could not delete listing.",
+        confirmText: "Okay",
+        cancelText: "",
+        onConfirm: hideAlert,
+      });
     }
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.logo}>RESERVE</Text>
-          <Text style={styles.headerSubtitle}>Market Vendor Portal</Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerIconButton} activeOpacity={0.7} onPress={() => router.replace("/establishment/notifications")}>
-            <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
-            <View style={styles.notificationDot} />
-          </TouchableOpacity>
-          <TouchableOpacity activeOpacity={0.7} onPress={() => router.replace("/establishment/profile")}>
-            <View style={styles.profileCircle}>
-              <Ionicons name="person" size={16} color={Colors.white} />
-            </View>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <EstablishmentHeader />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
         <View style={styles.pageHeader}>
           <Text style={styles.pageTitle}>Produce Listings</Text>
         </View>
 
-        <TouchableOpacity style={styles.createButton} activeOpacity={0.85} onPress={openAddListing}>
+        <TouchableOpacity
+          style={styles.createButton}
+          activeOpacity={0.85}
+          onPress={openAddListing}
+        >
           <View style={styles.createIcon}>
             <Ionicons name="add" size={23} color={Colors.white} />
           </View>
           <View style={styles.createTextContainer}>
             <Text style={styles.createTitle}>Add produce listing</Text>
-            <Text style={styles.createSubtitle}>Post surplus fruits & vegetables</Text>
+            <Text style={styles.createSubtitle}>
+              Post surplus fruits & vegetables
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={21} color={Colors.white} />
         </TouchableOpacity>
 
         {/* SORT & FILTER ROW */}
-        <View style={{ flexDirection: "row", gap: 8, marginBottom: 14, zIndex: 30, position: "relative" }}>
+        <View
+          style={{
+            flexDirection: "row",
+            gap: 8,
+            marginBottom: 14,
+            zIndex: 30,
+            position: "relative",
+          }}
+        >
           <View style={{ flex: 1, position: "relative" }}>
-            <TouchableOpacity 
-              style={styles.filterDropdownBtn} 
+            <TouchableOpacity
+              style={styles.filterDropdownBtn}
               activeOpacity={0.7}
-              onPress={() => { setSortDropdownOpen(!sortDropdownOpen); setDateDropdownOpen(false); }}
+              onPress={() => {
+                setSortDropdownOpen(!sortDropdownOpen);
+                setDateDropdownOpen(false);
+              }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1 }}>
-                <Ionicons name="swap-vertical-outline" size={15} color={Colors.primary} />
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 5,
+                  flex: 1,
+                }}
+              >
+                <Ionicons
+                  name="swap-vertical-outline"
+                  size={15}
+                  color={Colors.primary}
+                />
                 <Text style={styles.filterDropdownText} numberOfLines={1}>
                   Sort: {sortMode} {sortDirection === "asc" ? "↑" : "↓"}
                 </Text>
               </View>
-              <Ionicons name={sortDropdownOpen ? "chevron-up" : "chevron-down"} size={15} color={Colors.icon} />
+              <Ionicons
+                name={sortDropdownOpen ? "chevron-up" : "chevron-down"}
+                size={15}
+                color={Colors.icon}
+              />
             </TouchableOpacity>
 
             {sortDropdownOpen && (
               <View style={styles.floatingDropdownContainer}>
                 <TouchableOpacity
-                  style={[styles.inlineDropdownItem, sortMode === "A-Z" && styles.inlineDropdownItemActive]}
+                  style={[
+                    styles.inlineDropdownItem,
+                    sortMode === "A-Z" && styles.inlineDropdownItemActive,
+                  ]}
                   onPress={() => handleSortSelection("A-Z")}
                 >
-                  <Text style={[styles.inlineDropdownText, sortMode === "A-Z" && styles.inlineDropdownTextActive]}>A–Z</Text>
-                  {sortMode === "A-Z" && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
+                  <Text
+                    style={[
+                      styles.inlineDropdownText,
+                      sortMode === "A-Z" && styles.inlineDropdownTextActive,
+                    ]}
+                  >
+                    A–Z
+                  </Text>
+                  {sortMode === "A-Z" && (
+                    <Ionicons
+                      name="checkmark"
+                      size={16}
+                      color={Colors.primary}
+                    />
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.inlineDropdownItem, sortMode === "Date Posted" && styles.inlineDropdownItemActive]}
+                  style={[
+                    styles.inlineDropdownItem,
+                    sortMode === "Date Posted" &&
+                      styles.inlineDropdownItemActive,
+                  ]}
                   onPress={() => handleSortSelection("Date Posted")}
                 >
-                  <Text style={[styles.inlineDropdownText, sortMode === "Date Posted" && styles.inlineDropdownTextActive]}>Date Posted</Text>
-                  {sortMode === "Date Posted" && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
+                  <Text
+                    style={[
+                      styles.inlineDropdownText,
+                      sortMode === "Date Posted" &&
+                        styles.inlineDropdownTextActive,
+                    ]}
+                  >
+                    Date Posted
+                  </Text>
+                  {sortMode === "Date Posted" && (
+                    <Ionicons
+                      name="checkmark"
+                      size={16}
+                      color={Colors.primary}
+                    />
+                  )}
                 </TouchableOpacity>
               </View>
             )}
           </View>
 
           <View style={{ flex: 1, position: "relative" }}>
-            <TouchableOpacity 
-              style={styles.filterDropdownBtn} 
+            <TouchableOpacity
+              style={styles.filterDropdownBtn}
               activeOpacity={0.7}
-              onPress={() => { setDateDropdownOpen(!dateDropdownOpen); setSortDropdownOpen(false); }}
+              onPress={() => {
+                setDateDropdownOpen(!dateDropdownOpen);
+                setSortDropdownOpen(false);
+              }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1 }}>
-                <Ionicons name="filter-outline" size={15} color={Colors.primary} />
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 5,
+                  flex: 1,
+                }}
+              >
+                <Ionicons
+                  name="filter-outline"
+                  size={15}
+                  color={Colors.primary}
+                />
                 <Text style={styles.filterDropdownText} numberOfLines={1}>
-                  Filter: {dateFilterMode === "Custom" ? customMainDate.toLocaleDateString() : dateFilterMode}
+                  Filter:{" "}
+                  {dateFilterMode === "Custom"
+                    ? customMainDate.toLocaleDateString()
+                    : dateFilterMode}
                 </Text>
               </View>
-              <Ionicons name={dateDropdownOpen ? "chevron-up" : "chevron-down"} size={15} color={Colors.icon} />
+              <Ionicons
+                name={dateDropdownOpen ? "chevron-up" : "chevron-down"}
+                size={15}
+                color={Colors.icon}
+              />
             </TouchableOpacity>
 
             {dateDropdownOpen && (
               <View style={styles.floatingDropdownContainer}>
-                {(["All", "Today", "Last 7 Days", "Last 30 Days", "Custom"] as const).map((mode) => (
+                {(
+                  ["All", "Today", "Last 7 Days", "Last 30 Days", "Custom"] as const
+                ).map((mode) => (
                   <TouchableOpacity
                     key={mode}
-                    style={[styles.inlineDropdownItem, dateFilterMode === mode && styles.inlineDropdownItemActive]}
+                    style={[
+                      styles.inlineDropdownItem,
+                      dateFilterMode === mode &&
+                        styles.inlineDropdownItemActive,
+                    ]}
                     onPress={() => {
                       setDateDropdownOpen(false);
                       if (mode === "Custom") {
@@ -881,8 +1134,22 @@ export default function SMEProduceListing() {
                       }
                     }}
                   >
-                    <Text style={[styles.inlineDropdownText, dateFilterMode === mode && styles.inlineDropdownTextActive]}>{mode}</Text>
-                    {dateFilterMode === mode && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
+                    <Text
+                      style={[
+                        styles.inlineDropdownText,
+                        dateFilterMode === mode &&
+                          styles.inlineDropdownTextActive,
+                      ]}
+                    >
+                      {mode}
+                    </Text>
+                    {dateFilterMode === mode && (
+                      <Ionicons
+                        name="checkmark"
+                        size={16}
+                        color={Colors.primary}
+                      />
+                    )}
                   </TouchableOpacity>
                 ))}
               </View>
@@ -907,10 +1174,30 @@ export default function SMEProduceListing() {
 
         {/* TABS */}
         <View style={styles.tabsContainer}>
-          <TabButton title="All" isActive={activeTab === "All"} count={foodListings.length} onPress={() => setActiveTab("All")} />
-          <TabButton title="Active" isActive={activeTab === "Active"} count={allActive.length} onPress={() => setActiveTab("Active")} />
-          <TabButton title="Drafts" isActive={activeTab === "Draft"} count={allDrafts.length} onPress={() => setActiveTab("Draft")} />
-          <TabButton title="Flagged" isActive={activeTab === "Flagged"} count={allFlagged.length} onPress={() => setActiveTab("Flagged")} />
+          <TabButton
+            title="All"
+            isActive={activeTab === "All"}
+            count={foodListings.length}
+            onPress={() => setActiveTab("All")}
+          />
+          <TabButton
+            title="Active"
+            isActive={activeTab === "Active"}
+            count={allActive.length}
+            onPress={() => setActiveTab("Active")}
+          />
+          <TabButton
+            title="Drafts"
+            isActive={activeTab === "Draft"}
+            count={allDrafts.length}
+            onPress={() => setActiveTab("Draft")}
+          />
+          <TabButton
+            title="Flagged"
+            isActive={activeTab === "Flagged"}
+            count={allFlagged.length}
+            onPress={() => setActiveTab("Flagged")}
+          />
         </View>
 
         {/* SEARCH BAR */}
@@ -940,16 +1227,22 @@ export default function SMEProduceListing() {
                 onView={() => openViewListing(item)}
                 onEdit={() => openEditListing(item)}
                 onRemove={() => confirmRemoveListing(item.id, item.name)}
-                onStatusChange={fetchListings}
+                onStatusChange={() => fetchListings(merchantId, establishmentName)}
               />
             ))
           ) : (
             <View style={styles.emptyCard}>
               <View style={styles.emptyIcon}>
-                <Ionicons name="leaf-outline" size={25} color={Colors.primary} />
+                <Ionicons
+                  name="leaf-outline"
+                  size={25}
+                  color={Colors.primary}
+                />
               </View>
               <Text style={styles.emptyTitle}>No produce listings found</Text>
-              <Text style={styles.emptyDescription}>Try another search or add new fruits/vegetables.</Text>
+              <Text style={styles.emptyDescription}>
+                Try another search or add new fruits/vegetables.
+              </Text>
             </View>
           )}
         </View>
@@ -957,29 +1250,39 @@ export default function SMEProduceListing() {
       </ScrollView>
 
       {/* BOTTOM NAVIGATION */}
-      <View style={styles.bottomNav}>
-        <BottomNavItem icon="grid-outline" label="Home" onPress={() => router.replace("/establishment/dashboard")} />
-        <BottomNavItem icon="restaurant" label="Listings" active onPress={() => router.replace("/establishment/listing")} />
-        <BottomNavItem icon="basket-outline" label="Orders" onPress={() => router.replace("/establishment/orders")} />
-        <BottomNavItem icon="cash-outline" label="Earnings" onPress={() => router.replace("/establishment/earnings")} />
-        <BottomNavItem icon="heart-outline" label="Donation" onPress={() => router.replace("/establishment/donation")} />
-        <BottomNavItem icon="person-outline" label="Impact" onPress={() => router.replace("/establishment/impact")} />
-      </View>
+      <EstablishmentBottomNav activeTab="Listings" />
 
       {/* ALERT MODAL */}
-      <Modal visible={alertConfig.visible} transparent animationType="fade" onRequestClose={hideAlert}>
+      <Modal
+        visible={alertConfig.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={hideAlert}
+      >
         <View style={styles.alertOverlay}>
           <View style={styles.alertCard}>
             <Text style={styles.alertTitle}>{alertConfig.title}</Text>
             <Text style={styles.alertMessage}>{alertConfig.message}</Text>
             <View style={styles.alertButtonRow}>
               {alertConfig.cancelText ? (
-                <TouchableOpacity style={styles.alertCancelButton} activeOpacity={0.7} onPress={hideAlert}>
-                  <Text style={styles.alertCancelButtonText}>{alertConfig.cancelText}</Text>
+                <TouchableOpacity
+                  style={styles.alertCancelButton}
+                  activeOpacity={0.7}
+                  onPress={hideAlert}
+                >
+                  <Text style={styles.alertCancelButtonText}>
+                    {alertConfig.cancelText}
+                  </Text>
                 </TouchableOpacity>
               ) : null}
-              <TouchableOpacity style={styles.alertConfirmButton} activeOpacity={0.8} onPress={alertConfig.onConfirm}>
-                <Text style={styles.alertConfirmButtonText}>{alertConfig.confirmText}</Text>
+              <TouchableOpacity
+                style={styles.alertConfirmButton}
+                activeOpacity={0.8}
+                onPress={alertConfig.onConfirm}
+              >
+                <Text style={styles.alertConfirmButtonText}>
+                  {alertConfig.confirmText}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -987,71 +1290,129 @@ export default function SMEProduceListing() {
       </Modal>
 
       {/* ADD / EDIT PRODUCE MODAL */}
-      <Modal visible={listingModalVisible} transparent animationType="none" onRequestClose={closeListingModal}>
+      <Modal
+        visible={listingModalVisible}
+        transparent
+        animationType="none"
+        onRequestClose={closeListingModal}
+      >
         <View style={styles.modalOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeListingModal} />
 
-          <Animated.View style={[styles.listingModal, { transform: [{ translateY: listingTranslateY }] }]}>
-            <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flexShrink: 1 }}>
-              
+          <Animated.View
+            style={[
+              styles.listingModal,
+              { transform: [{ translateY: listingTranslateY }] },
+            ]}
+          >
+            <KeyboardAvoidingView
+              behavior={Platform.OS === "ios" ? "padding" : "height"}
+              style={{ flexShrink: 1 }}
+            >
               <View {...listingPanResponder.panHandlers} style={styles.sheetHeader}>
                 <View style={styles.dragHandle} />
                 <View style={styles.sheetHeaderText}>
-                  <Text style={styles.modalTitle}>{editingListing ? "Edit produce listing" : "Add produce listing"}</Text>
-                  <Text style={styles.modalSubtitle}>Configure categories, weights, and dynamic discounting.</Text>
+                  <Text style={styles.modalTitle}>
+                    {editingListing
+                      ? "Edit produce listing"
+                      : "Add produce listing"}
+                  </Text>
+                  <Text style={styles.modalSubtitle}>
+                    Configure categories, weights, and dynamic discounting.
+                  </Text>
                 </View>
               </View>
 
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScroll} nestedScrollEnabled={true}>
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.modalScroll}
+                nestedScrollEnabled={true}
+              >
                 <ModalSection title="Produce details">
-                  
                   <InputLabel text="Produce Name" />
                   <TextInput
                     value={foodName}
-                    onChangeText={(val) => { setFoodName(val); setFormErrors(prev => ({ ...prev, foodName: "" })); }}
+                    onChangeText={(val) => {
+                      setFoodName(val);
+                      setFormErrors((prev) => ({ ...prev, foodName: "" }));
+                    }}
                     placeholder="e.g. Fresh Tomatoes or Pechay Tagalog"
                     placeholderTextColor={Colors.placeholder}
-                    style={[styles.input, formErrors.foodName && styles.inputError]}
+                    style={[
+                      styles.input,
+                      formErrors.foodName && styles.inputError,
+                    ]}
                   />
                   <ErrorText message={formErrors.foodName} />
 
                   <InputLabel text="Produce Picture" />
-                  <TouchableOpacity style={styles.cameraButton} activeOpacity={0.8} onPress={takePhoto}>
+                  <TouchableOpacity
+                    style={styles.cameraButton}
+                    activeOpacity={0.8}
+                    onPress={takePhoto}
+                  >
                     {imageUri && !imageUri.includes("unsplash") ? (
-                      <Image source={{ uri: imageUri }} style={styles.cameraPreview} />
+                      <Image
+                        source={{ uri: imageUri }}
+                        style={styles.cameraPreview}
+                      />
                     ) : (
                       <View style={styles.cameraPlaceholder}>
                         <Ionicons name="camera" size={24} color={Colors.icon} />
-                        <Text style={styles.cameraText}>Tap to take a photo</Text>
+                        <Text style={styles.cameraText}>Tap to select or take a photo</Text>
                       </View>
                     )}
                   </TouchableOpacity>
 
-                  {/* PRIMARY CATEGORIES */}
                   <InputLabel text="Primary Category" />
-                  <TouchableOpacity 
-                    style={styles.selectInput} 
+                  <TouchableOpacity
+                    style={styles.selectInput}
                     activeOpacity={0.7}
                     onPress={() => setCategoryDropdownOpen(!categoryDropdownOpen)}
                   >
                     <Text style={styles.inputText}>{category}</Text>
-                    <Ionicons name={categoryDropdownOpen ? "chevron-up" : "chevron-down"} size={18} color={Colors.icon} />
+                    <Ionicons
+                      name={categoryDropdownOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={Colors.icon}
+                    />
                   </TouchableOpacity>
 
                   {categoryDropdownOpen && (
                     <View style={styles.inlineDropdownContainer}>
-                      {["Leafy Greens", "Vegetables", "Fruits", "Root Crops"].map((cat) => (
+                      {[
+                        "Leafy Greens",
+                        "Vegetables",
+                        "Fruits",
+                        "Root Crops",
+                      ].map((cat) => (
                         <TouchableOpacity
                           key={cat}
-                          style={[styles.inlineDropdownItem, category === cat && styles.inlineDropdownItemActive]}
+                          style={[
+                            styles.inlineDropdownItem,
+                            category === cat && styles.inlineDropdownItemActive,
+                          ]}
                           activeOpacity={0.7}
                           onPress={() => {
                             setCategory(cat);
                             setCategoryDropdownOpen(false);
                           }}
                         >
-                          <Text style={[styles.inlineDropdownText, category === cat && styles.inlineDropdownTextActive]}>{cat}</Text>
-                          {category === cat && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
+                          <Text
+                            style={[
+                              styles.inlineDropdownText,
+                              category === cat && styles.inlineDropdownTextActive,
+                            ]}
+                          >
+                            {cat}
+                          </Text>
+                          {category === cat && (
+                            <Ionicons
+                              name="checkmark"
+                              size={16}
+                              color={Colors.primary}
+                            />
+                          )}
                         </TouchableOpacity>
                       ))}
                     </View>
@@ -1069,65 +1430,121 @@ export default function SMEProduceListing() {
                   />
 
                   <InputLabel text="Selling Unit" />
-                  <TouchableOpacity 
-                    style={[styles.selectInput, formErrors.unit && styles.inputError]} 
+                  <TouchableOpacity
+                    style={[
+                      styles.selectInput,
+                      formErrors.unit && styles.inputError,
+                    ]}
                     activeOpacity={0.7}
                     onPress={() => setUnitDropdownOpen(!unitDropdownOpen)}
                   >
-                    <Text style={[styles.inputText, !unit && { color: Colors.placeholder }]}>
+                    <Text
+                      style={[
+                        styles.inputText,
+                        !unit && { color: Colors.placeholder },
+                      ]}
+                    >
                       {unit || "Select unit (g, kg, piece, pack)..."}
                     </Text>
-                    <Ionicons name={unitDropdownOpen ? "chevron-up" : "chevron-down"} size={18} color={Colors.icon} />
+                    <Ionicons
+                      name={unitDropdownOpen ? "chevron-up" : "chevron-down"}
+                      size={18}
+                      color={Colors.icon}
+                    />
                   </TouchableOpacity>
                   <ErrorText message={formErrors.unit} />
 
                   {unitDropdownOpen && (
                     <View style={styles.inlineDropdownContainer}>
-                      {["Gram (g)", "Kilogram (kg)", "Piece (pc)", "Pack (pk)"].map((u) => (
+                      {[
+                        "Gram (g)",
+                        "Kilogram (kg)",
+                        "Piece (pc)",
+                        "Pack (pk)",
+                      ].map((u) => (
                         <TouchableOpacity
                           key={u}
-                          style={[styles.inlineDropdownItem, unit === u && styles.inlineDropdownItemActive]}
+                          style={[
+                            styles.inlineDropdownItem,
+                            unit === u && styles.inlineDropdownItemActive,
+                          ]}
                           activeOpacity={0.7}
                           onPress={() => {
                             setUnit(u);
                             setUnitDropdownOpen(false);
-                            setFormErrors(prev => ({ ...prev, unit: "" }));
+                            setFormErrors((prev) => ({ ...prev, unit: "" }));
                             if (u === "Kilogram (kg)") setWeightPerUnit("1.0");
                             if (u === "Gram (g)") setWeightPerUnit("100");
-                            if (u === "Piece (pc)" || u === "Pack (pk)") setWeightPerUnit("0");
+                            if (u === "Piece (pc)" || u === "Pack (pk)")
+                              setWeightPerUnit("0");
                           }}
                         >
-                          <Text style={[styles.inlineDropdownText, unit === u && styles.inlineDropdownTextActive]}>{u}</Text>
-                          {unit === u && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
+                          <Text
+                            style={[
+                              styles.inlineDropdownText,
+                              unit === u && styles.inlineDropdownTextActive,
+                            ]}
+                          >
+                            {u}
+                          </Text>
+                          {unit === u && (
+                            <Ionicons
+                              name="checkmark"
+                              size={16}
+                              color={Colors.primary}
+                            />
+                          )}
                         </TouchableOpacity>
                       ))}
                     </View>
                   )}
 
-                  {/* CONDITIONAL WEIGHT PER UNIT FOR g & kg */}
-                  {(unit === "Gram (g)" || unit === "Kilogram (kg)") ? (
+                  {unit === "Gram (g)" || unit === "Kilogram (kg)" ? (
                     <View style={styles.twoColumn}>
                       <View style={{ flex: 1 }}>
                         <InputLabel text="Quantity Available" />
-                        <TextInput 
-                          value={quantity} 
-                          onChangeText={(val) => { setQuantity(val); setFormErrors(prev => ({ ...prev, quantity: "" })); }} 
-                          keyboardType="numeric" 
-                          placeholder="e.g. 10" 
-                          placeholderTextColor={Colors.placeholder} 
-                          style={[styles.input, formErrors.quantity && styles.inputError]} 
+                        <TextInput
+                          value={quantity}
+                          onChangeText={(val) => {
+                            setQuantity(val);
+                            setFormErrors((prev) => ({ ...prev, quantity: "" }));
+                          }}
+                          keyboardType="numeric"
+                          placeholder="e.g. 10"
+                          placeholderTextColor={Colors.placeholder}
+                          style={[
+                            styles.input,
+                            formErrors.quantity && styles.inputError,
+                          ]}
                         />
                         <ErrorText message={formErrors.quantity} />
                       </View>
                       <View style={{ flex: 1 }}>
-                        <InputLabel text={unit === "Gram (g)" ? "Weight per unit (g)" : "Weight per unit (kg)"} />
-                        <TextInput 
-                          value={weightPerUnit} 
-                          onChangeText={(val) => { setWeightPerUnit(val); setFormErrors(prev => ({ ...prev, weightPerUnit: "" })); }} 
-                          keyboardType="numeric" 
-                          placeholder={unit === "Gram (g)" ? "e.g. 500" : "e.g. 0.5"} 
-                          placeholderTextColor={Colors.placeholder} 
-                          style={[styles.input, formErrors.weightPerUnit && styles.inputError]} 
+                        <InputLabel
+                          text={
+                            unit === "Gram (g)"
+                              ? "Weight per unit (g)"
+                              : "Weight per unit (kg)"
+                          }
+                        />
+                        <TextInput
+                          value={weightPerUnit}
+                          onChangeText={(val) => {
+                            setWeightPerUnit(val);
+                            setFormErrors((prev) => ({
+                              ...prev,
+                              weightPerUnit: "",
+                            }));
+                          }}
+                          keyboardType="numeric"
+                          placeholder={
+                            unit === "Gram (g)" ? "e.g. 500" : "e.g. 0.5"
+                          }
+                          placeholderTextColor={Colors.placeholder}
+                          style={[
+                            styles.input,
+                            formErrors.weightPerUnit && styles.inputError,
+                          ]}
                         />
                         <ErrorText message={formErrors.weightPerUnit} />
                       </View>
@@ -1135,29 +1552,40 @@ export default function SMEProduceListing() {
                   ) : (
                     <View>
                       <InputLabel text="Quantity Available" />
-                      <TextInput 
-                        value={quantity} 
-                        onChangeText={(val) => { setQuantity(val); setFormErrors(prev => ({ ...prev, quantity: "" })); }} 
-                        keyboardType="numeric" 
-                        placeholder="e.g. 15" 
-                        placeholderTextColor={Colors.placeholder} 
-                        style={[styles.input, formErrors.quantity && styles.inputError]} 
+                      <TextInput
+                        value={quantity}
+                        onChangeText={(val) => {
+                          setQuantity(val);
+                          setFormErrors((prev) => ({ ...prev, quantity: "" }));
+                        }}
+                        keyboardType="numeric"
+                        placeholder="e.g. 15"
+                        placeholderTextColor={Colors.placeholder}
+                        style={[
+                          styles.input,
+                          formErrors.quantity && styles.inputError,
+                        ]}
                       />
                       <ErrorText message={formErrors.quantity} />
                     </View>
                   )}
 
-                  {/* DYNAMIC PRICING STRUCTURE ONLY */}
                   <InputLabel text="Dynamic Pricing Structure (Required)" />
                   <View style={styles.twoColumn}>
                     <View style={{ flex: 1 }}>
                       <InputLabel text="Original Price (₱)" />
                       <TextInput
                         value={originalPrice}
-                        onChangeText={(val) => { setOriginalPrice(val); setFormErrors(prev => ({ ...prev, pricing: "" })); }}
+                        onChangeText={(val) => {
+                          setOriginalPrice(val);
+                          setFormErrors((prev) => ({ ...prev, pricing: "" }));
+                        }}
                         placeholder="e.g. 150.00"
                         keyboardType="numeric"
-                        style={[styles.input, formErrors.pricing && styles.inputError]}
+                        style={[
+                          styles.input,
+                          formErrors.pricing && styles.inputError,
+                        ]}
                         placeholderTextColor={Colors.placeholder}
                       />
                     </View>
@@ -1165,10 +1593,16 @@ export default function SMEProduceListing() {
                       <InputLabel text="Discounted Price (₱)" />
                       <TextInput
                         value={discountedPrice}
-                        onChangeText={(val) => { setDiscountedPrice(val); setFormErrors(prev => ({ ...prev, pricing: "" })); }}
+                        onChangeText={(val) => {
+                          setDiscountedPrice(val);
+                          setFormErrors((prev) => ({ ...prev, pricing: "" }));
+                        }}
                         placeholder="e.g. 110.00"
                         keyboardType="numeric"
-                        style={[styles.input, formErrors.pricing && styles.inputError]}
+                        style={[
+                          styles.input,
+                          formErrors.pricing && styles.inputError,
+                        ]}
                         placeholderTextColor={Colors.placeholder}
                       />
                     </View>
@@ -1177,16 +1611,23 @@ export default function SMEProduceListing() {
                   <InputLabel text="Floor Price / Minimum (₱)" />
                   <TextInput
                     value={floorPrice}
-                    onChangeText={(val) => { setFloorPrice(val); setFormErrors(prev => ({ ...prev, pricing: "" })); }}
+                    onChangeText={(val) => {
+                      setFloorPrice(val);
+                      setFormErrors((prev) => ({ ...prev, pricing: "" }));
+                    }}
                     placeholder="e.g. 50.00"
                     keyboardType="numeric"
-                    style={[styles.input, formErrors.pricing && styles.inputError]}
+                    style={[
+                      styles.input,
+                      formErrors.pricing && styles.inputError,
+                    ]}
                     placeholderTextColor={Colors.placeholder}
                   />
                   <ErrorText message={formErrors.pricing} />
 
                   <Text style={styles.expiryDescription}>
-                    Prices will automatically markdown hourly from the discounted price down to the floor price.
+                    Prices will automatically markdown hourly from the
+                    discounted price down to the floor price.
                   </Text>
                 </ModalSection>
 
@@ -1201,9 +1642,20 @@ export default function SMEProduceListing() {
                         setShowPicker(true);
                       }}
                     >
-                      <Ionicons name="calendar-outline" size={16} color={Colors.primary} style={{ marginRight: 6 }} />
+                      <Ionicons
+                        name="calendar-outline"
+                        size={16}
+                        color={Colors.primary}
+                        style={{ marginRight: 6 }}
+                      />
                       <Text style={styles.inputText} numberOfLines={1}>
-                        {preparationDate.includes(',') ? preparationDate.split(',').slice(0, 2).join(',').trim() : preparationDate}
+                        {preparationDate.includes(",")
+                          ? preparationDate
+                              .split(",")
+                              .slice(0, 2)
+                              .join(",")
+                              .trim()
+                          : preparationDate}
                       </Text>
                     </TouchableOpacity>
 
@@ -1215,9 +1667,16 @@ export default function SMEProduceListing() {
                         setShowPicker(true);
                       }}
                     >
-                      <Ionicons name="time-outline" size={16} color={Colors.primary} style={{ marginRight: 6 }} />
+                      <Ionicons
+                        name="time-outline"
+                        size={16}
+                        color={Colors.primary}
+                        style={{ marginRight: 6 }}
+                      />
                       <Text style={styles.inputText} numberOfLines={1}>
-                        {preparationDate.includes(',') ? preparationDate.split(',').slice(2).join(',').trim() : "10:00 AM"}
+                        {preparationDate.includes(",")
+                          ? preparationDate.split(",").slice(2).join(",").trim()
+                          : "10:00 AM"}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -1234,19 +1693,37 @@ export default function SMEProduceListing() {
 
                   <InputLabel text="Storage Condition (Ambient & Chilled Only)" />
                   <View style={styles.storageOptions}>
-                    <StorageOption title="Ambient" subtitle="25°C Room Temp" active={storageCondition === "Ambient (25°C)"} onPress={() => setStorageCondition("Ambient (25°C)")} />
-                    <StorageOption title="Chilled" subtitle="4°C Refrigerator" active={storageCondition === "Chilled (4°C)"} onPress={() => setStorageCondition("Chilled (4°C)")} />
+                    <StorageOption
+                      title="Ambient"
+                      subtitle="25°C Room Temp"
+                      active={storageCondition === "Ambient (25°C)"}
+                      onPress={() => setStorageCondition("Ambient (25°C)")}
+                    />
+                    <StorageOption
+                      title="Chilled"
+                      subtitle="4°C Refrigerator"
+                      active={storageCondition === "Chilled (4°C)"}
+                      onPress={() => setStorageCondition("Chilled (4°C)")}
+                    />
                   </View>
                 </ModalSection>
 
                 <ModalSection title="Expiry (TTT Model Result & Manual Override)">
                   <View style={styles.expiryInfo}>
                     <View style={styles.expiryInfoIcon}>
-                      <Ionicons name="sparkles-outline" size={20} color={Colors.primary} />
+                      <Ionicons
+                        name="sparkles-outline"
+                        size={20}
+                        color={Colors.primary}
+                      />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.expiryInfoTitle}>Calculated Expiry Date:</Text>
-                      <Text style={styles.expiryInfoValue}>{expiryDate}, {expiryTime}</Text>
+                      <Text style={styles.expiryInfoTitle}>
+                        Calculated Expiry Date:
+                      </Text>
+                      <Text style={styles.expiryInfoValue}>
+                        {expiryDate}, {expiryTime}
+                      </Text>
                       <Text style={styles.expiryInfoDescription}>
                         Based on {category} under {storageCondition} storage.
                       </Text>
@@ -1257,21 +1734,21 @@ export default function SMEProduceListing() {
                   <View style={styles.twoColumn}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.smallLabel}>Expiry Date</Text>
-                      <TextInput 
-                        value={expiryDate} 
-                        onChangeText={setExpiryDate} 
+                      <TextInput
+                        value={expiryDate}
+                        onChangeText={setExpiryDate}
                         placeholder="e.g. Oct 17, 2026"
-                        style={styles.input} 
+                        style={styles.input}
                         placeholderTextColor={Colors.placeholder}
                       />
                     </View>
                     <View style={{ width: 115 }}>
                       <Text style={styles.smallLabel}>Expiry Time</Text>
-                      <TextInput 
-                        value={expiryTime} 
-                        onChangeText={setExpiryTime} 
+                      <TextInput
+                        value={expiryTime}
+                        onChangeText={setExpiryTime}
                         placeholder="e.g. 11:59 PM"
-                        style={styles.input} 
+                        style={styles.input}
                         placeholderTextColor={Colors.placeholder}
                       />
                     </View>
@@ -1279,11 +1756,21 @@ export default function SMEProduceListing() {
                 </ModalSection>
 
                 <View style={styles.modalButtons}>
-                  <TouchableOpacity style={styles.cancelButton} activeOpacity={0.8} onPress={() => saveListing("Draft")}>
+                  <TouchableOpacity
+                    style={styles.cancelButton}
+                    activeOpacity={0.8}
+                    onPress={() => saveListing("Draft")}
+                  >
                     <Text style={styles.cancelButtonText}>Save draft</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.publishButton} activeOpacity={0.85} onPress={() => saveListing("Active")}>
-                    <Text style={styles.publishButtonText}>{editingListing ? "Save changes" : "Publish listing"}</Text>
+                  <TouchableOpacity
+                    style={styles.publishButton}
+                    activeOpacity={0.85}
+                    onPress={() => saveListing("Active")}
+                  >
+                    <Text style={styles.publishButtonText}>
+                      {editingListing ? "Save changes" : "Publish listing"}
+                    </Text>
                   </TouchableOpacity>
                 </View>
                 <View style={{ height: 20 }} />
@@ -1294,30 +1781,53 @@ export default function SMEProduceListing() {
       </Modal>
 
       {/* VIEW LISTING MODAL */}
-      <Modal visible={viewModalVisible} transparent animationType="none" onRequestClose={closeViewModal}>
+      <Modal
+        visible={viewModalVisible}
+        transparent
+        animationType="none"
+        onRequestClose={closeViewModal}
+      >
         <View style={styles.modalOverlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={closeViewModal} />
 
-          <Animated.View style={[styles.viewModal, { transform: [{ translateY: viewTranslateY }] }]}>
+          <Animated.View
+            style={[
+              styles.viewModal,
+              { transform: [{ translateY: viewTranslateY }] },
+            ]}
+          >
             <View {...viewPanResponder.panHandlers} style={styles.sheetHeader}>
               <View style={styles.dragHandle} />
               <View style={styles.sheetHeaderText}>
                 <Text style={styles.modalTitle}>Produce details</Text>
-                <Text style={styles.modalSubtitle}>Market vendor surplus information</Text>
+                <Text style={styles.modalSubtitle}>
+                  Market vendor surplus information
+                </Text>
               </View>
             </View>
             {selectedListing && (
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.viewModalContent}>
-                <Image source={{ uri: selectedListing.image }} style={styles.viewImage} resizeMode="cover" />
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.viewModalContent}
+              >
+                <Image
+                  source={{ uri: selectedListing.image }}
+                  style={styles.viewImage}
+                  resizeMode="cover"
+                />
                 <View style={styles.viewTitleRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.viewFoodName}>{selectedListing.name}</Text>
-                    <Text style={styles.viewEstablishment}>{selectedListing.establishment}</Text>
+                    <Text style={styles.viewFoodName}>
+                      {selectedListing.name}
+                    </Text>
+                    <Text style={styles.viewEstablishment}>
+                      {selectedListing.establishment}
+                    </Text>
                   </View>
                   <StatusPill status={selectedListing.status} />
                 </View>
 
-                <LivePricingCard 
+                <LivePricingCard
                   prepDate={selectedListing.preparationDate}
                   expDate={selectedListing.expiryDate}
                   expTime={selectedListing.expiryTime}
@@ -1328,37 +1838,65 @@ export default function SMEProduceListing() {
                 <View style={styles.viewPriceBox}>
                   <View>
                     <Text style={styles.viewLabel}>Discounted Price</Text>
-                    <Text style={styles.viewPrice}>{selectedListing.price}</Text>
+                    <Text style={styles.viewPrice}>
+                      ₱{Number(selectedListing.price || 0).toFixed(2)}
+                    </Text>
                   </View>
                   <View>
                     <Text style={styles.viewLabel}>Quantity</Text>
-                    <Text style={styles.viewValue}>{selectedListing.quantity} {selectedListing.unitLabel}</Text>
+                    <Text style={styles.viewValue}>
+                      {selectedListing.quantity} {selectedListing.unitLabel}
+                    </Text>
                   </View>
                   <View>
                     <Text style={styles.viewLabel}>Category</Text>
-                    <Text style={styles.viewValue}>{selectedListing.category}</Text>
+                    <Text style={styles.viewValue}>
+                      {selectedListing.category}
+                    </Text>
                   </View>
                 </View>
 
                 <View style={styles.viewSection}>
                   <Text style={styles.viewSectionTitle}>Description</Text>
-                  <Text style={styles.viewDescription}>{selectedListing.description || "No description provided."}</Text>
+                  <Text style={styles.viewDescription}>
+                    {selectedListing.description || "No description provided."}
+                  </Text>
                 </View>
 
                 <View style={styles.viewSection}>
                   <Text style={styles.viewSectionTitle}>Storage & harvest</Text>
-                  <DetailRow icon="calendar-outline" label="Harvested / Posted" value={selectedListing.preparationDate} />
-                  <DetailRow icon="thermometer-outline" label="Storage condition" value={selectedListing.storageCondition} />
+                  <DetailRow
+                    icon="calendar-outline"
+                    label="Harvested / Posted"
+                    value={selectedListing.preparationDate}
+                  />
+                  <DetailRow
+                    icon="thermometer-outline"
+                    label="Storage condition"
+                    value={selectedListing.storageCondition}
+                  />
                 </View>
 
                 <View style={styles.viewSection}>
                   <Text style={styles.viewSectionTitle}>Expiry</Text>
-                  <DetailRow icon="calendar-outline" label="Expiry date" value={selectedListing.expiryDate} />
-                  <DetailRow icon="time-outline" label="Expiry time" value={selectedListing.expiryTime} />
+                  <DetailRow
+                    icon="calendar-outline"
+                    label="Expiry date"
+                    value={selectedListing.expiryDate}
+                  />
+                  <DetailRow
+                    icon="time-outline"
+                    label="Expiry time"
+                    value={selectedListing.expiryTime}
+                  />
                 </View>
 
                 <View style={styles.viewActions}>
-                  <TouchableOpacity style={styles.viewCloseButton} activeOpacity={0.8} onPress={closeViewModal}>
+                  <TouchableOpacity
+                    style={styles.viewCloseButton}
+                    activeOpacity={0.8}
+                    onPress={closeViewModal}
+                  >
                     <Text style={styles.viewCloseButtonText}>Close</Text>
                   </TouchableOpacity>
 
@@ -1368,10 +1906,16 @@ export default function SMEProduceListing() {
                       activeOpacity={0.85}
                       onPress={() => {
                         closeViewModal();
-                        setTimeout(() => { openEditListing(selectedListing); }, 300);
+                        setTimeout(() => {
+                          openEditListing(selectedListing);
+                        }, 300);
                       }}
                     >
-                      <Ionicons name="create-outline" size={17} color={Colors.white} />
+                      <Ionicons
+                        name="create-outline"
+                        size={17}
+                        color={Colors.white}
+                      />
                       <Text style={styles.viewEditButtonText}>Edit listing</Text>
                     </TouchableOpacity>
                   )}
@@ -1389,13 +1933,36 @@ export default function SMEProduceListing() {
 /* =====================================================
    SUB-COMPONENTS
 ===================================================== */
-function TabButton({ title, isActive, count, onPress }: { title: string; isActive: boolean; count?: number; onPress: () => void }) {
+function TabButton({
+  title,
+  isActive,
+  count,
+  onPress,
+}: {
+  title: string;
+  isActive: boolean;
+  count?: number;
+  onPress: () => void;
+}) {
   return (
-    <TouchableOpacity style={[styles.tabBtn, isActive && styles.tabBtnActive]} onPress={onPress} activeOpacity={0.8}>
-      <Text style={[styles.tabBtnText, isActive && styles.tabBtnTextActive]}>{title}</Text>
+    <TouchableOpacity
+      style={[styles.tabBtn, isActive && styles.tabBtnActive]}
+      onPress={onPress}
+      activeOpacity={0.8}
+    >
+      <Text style={[styles.tabBtnText, isActive && styles.tabBtnTextActive]}>
+        {title}
+      </Text>
       {count !== undefined && count > 0 && (
         <View style={[styles.tabBadge, isActive && styles.tabBadgeActive]}>
-          <Text style={[styles.tabBadgeText, isActive && styles.tabBadgeTextActive]}>{count}</Text>
+          <Text
+            style={[
+              styles.tabBadgeText,
+              isActive && styles.tabBadgeTextActive,
+            ]}
+          >
+            {count}
+          </Text>
         </View>
       )}
     </TouchableOpacity>
@@ -1407,8 +1974,15 @@ function StatusPill({ status }: { status: string }) {
   let fg = "#1F6B52";
   let label = "Active";
 
-  if (status === "Draft") { bg = "#F4EEDF"; fg = "#A94A3A"; label = "Draft"; } 
-  else if (status === "Flagged") { bg = "#FBE4E1"; fg = "#B3261E"; label = "Flagged"; }
+  if (status === "Draft") {
+    bg = "#F4EEDF";
+    fg = "#A94A3A";
+    label = "Draft";
+  } else if (status === "Flagged") {
+    bg = "#FBE4E1";
+    fg = "#B3261E";
+    label = "Flagged";
+  }
 
   return (
     <View style={[styles.statusPill, { backgroundColor: bg }]}>
@@ -1418,35 +1992,53 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-function ListingCard({ item, onView, onEdit, onRemove, onStatusChange }: { item: ProduceListing; onView: () => void; onEdit: () => void; onRemove: () => void; onStatusChange?: () => void; }) {
+function ListingCard({
+  item,
+  onView,
+  onEdit,
+  onRemove,
+  onStatusChange,
+}: {
+  item: ProduceListing;
+  onView: () => void;
+  onEdit: () => void;
+  onRemove: () => void;
+  onStatusChange?: () => void;
+}) {
   const [timeLeft, setTimeLeft] = useState("Calculating...");
   const [livePrice, setLivePrice] = useState(Number(item.price) || 0);
   const [isExpired, setIsExpired] = useState(false);
+  const hasFlaggedRef = useRef(item.status === "Flagged");
 
   const parseSafeDate = (dateStr: string, timeStr?: string) => {
     try {
       let full = timeStr ? `${dateStr} ${timeStr}` : dateStr;
-      full = full.replace(/,/g, '').replace(/\s+/g, ' ').trim(); 
-      const parts = full.split(' '); 
-      const monthIndex = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(parts[0]);
+      full = full.replace(/,/g, "").replace(/\s+/g, " ").trim();
+      const parts = full.split(" ");
+      const monthIndex = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+      ].indexOf(parts[0]);
       const day = parseInt(parts[1], 10);
       const year = parseInt(parts[2], 10);
-      let hours = 0, minutes = 0;
+      let hours = 0,
+        minutes = 0;
       if (parts[3]) {
-        const timeParts = parts[3].split(':');
+        const timeParts = parts[3].split(":");
         hours = parseInt(timeParts[0], 10);
         minutes = parseInt(timeParts[1], 10);
         const fullUpper = full.toUpperCase();
-        if (fullUpper.includes('PM') && hours < 12) hours += 12;
-        if (fullUpper.includes('AM') && hours === 12) hours = 0;
+        if (fullUpper.includes("PM") && hours < 12) hours += 12;
+        if (fullUpper.includes("AM") && hours === 12) hours = 0;
       }
       return new Date(year, monthIndex, day, hours, minutes).getTime();
     } catch (error) {
-      return new Date().getTime(); 
+      return new Date().getTime();
     }
   };
 
   useEffect(() => {
+    hasFlaggedRef.current = item.status === "Flagged";
     const startTime = parseSafeDate(item.preparationDate);
     const endTime = parseSafeDate(item.expiryDate, item.expiryTime);
     const startP = Number(item.originalPrice) || 0;
@@ -1454,40 +2046,46 @@ function ListingCard({ item, onView, onEdit, onRemove, onStatusChange }: { item:
 
     const totalHours = (endTime - startTime) / (1000 * 60 * 60);
     const totalDrop = startP - floorP;
-    const hourlyDropAmount = totalHours > 0 ? (totalDrop / totalHours) : 0;
+    const hourlyDropAmount = totalHours > 0 ? totalDrop / totalHours : 0;
 
     const timer = setInterval(() => {
       const now = new Date().getTime();
       const distance = endTime - now;
       const secondsRemaining = distance / 1000;
 
-      if (secondsRemaining <= 1830 && item.status === "Active") {
+      if (
+        secondsRemaining <= 1830 &&
+        item.status === "Active" &&
+        !hasFlaggedRef.current
+      ) {
+        hasFlaggedRef.current = true;
         item.status = "Flagged";
-        api.put(`listings/update/${item.id}/`, { status: "Flagged" }).then(() => onStatusChange?.()).catch(console.log);
+        api
+          .put(`listings/update/${item.id}/`, { status: "Flagged" })
+          .then(() => onStatusChange?.())
+          .catch(console.log);
       }
 
       if (distance <= 0) {
         setTimeLeft("Time's up");
         setLivePrice(floorP);
         setIsExpired(true);
-        if (item.status === "Active") {
-          item.status = "Flagged";
-          api.put(`listings/update/${item.id}/`, { status: "Flagged" }).then(() => onStatusChange?.()).catch(console.log);
-        }
         clearInterval(timer);
         return;
       }
 
       const d = Math.floor(distance / (1000 * 60 * 60 * 24));
-      const h = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const h = Math.floor(
+        (distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+      );
       const m = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
       const s = Math.floor((distance % (1000 * 60)) / 1000);
-      
+
       setTimeLeft(d > 0 ? `${d}d ${h}h ${m}m ${s}s` : `${h}h ${m}m ${s}s`);
 
       const hoursPassed = Math.floor((now - startTime) / (1000 * 60 * 60));
       if (hoursPassed > 0) {
-        let currentPrice = startP - (hourlyDropAmount * hoursPassed);
+        let currentPrice = startP - hourlyDropAmount * hoursPassed;
         if (currentPrice < floorP) currentPrice = floorP;
         setLivePrice(currentPrice);
       } else {
@@ -1501,21 +2099,46 @@ function ListingCard({ item, onView, onEdit, onRemove, onStatusChange }: { item:
   return (
     <View style={styles.uiCard}>
       <View style={styles.uiCardTop}>
-        <Image source={{ uri: item.image }} style={styles.uiImage} resizeMode="cover" />
+        <Image
+          source={{ uri: item.image }}
+          style={styles.uiImage}
+          resizeMode="cover"
+        />
         <View style={styles.uiCardDetails}>
           <View style={styles.uiCardHeaderRow}>
-            <Text style={styles.uiCardTitle} numberOfLines={1}>{item.name}</Text>
+            <Text style={styles.uiCardTitle} numberOfLines={1}>
+              {item.name}
+            </Text>
             <StatusPill status={item.status} />
           </View>
           <Text style={styles.uiCardSubtitle} numberOfLines={1}>
-            {item.category} · <Text style={styles.strikethroughPrice}>₱{Number(item.originalPrice || 0).toFixed(2)}</Text> <Text style={styles.currentLivePrice}>₱{livePrice.toFixed(2)}</Text>
+            {item.category} ·{" "}
+            <Text style={styles.strikethroughPrice}>
+              ₱{Number(item.originalPrice || 0).toFixed(2)}
+            </Text>{" "}
+            <Text style={styles.currentLivePrice}>₱{livePrice.toFixed(2)}</Text>
           </Text>
           <View style={styles.uiCardBottomRow}>
-            <Text style={styles.uiCardQty}>{item.quantity} {item.unitLabel} available</Text>
+            <Text style={styles.uiCardQty}>
+              {item.quantity} {item.unitLabel} available
+            </Text>
             {item.status === "Active" && (
-              <View style={[styles.expiryTag, isExpired && styles.expiryTagExpired]}>
-                <Ionicons name="time-outline" size={12} color={isExpired ? "#B3261E" : Colors.primary1} />
-                <Text style={[styles.expiryText, isExpired && styles.expiryTextExpired]}>{timeLeft}</Text>
+              <View
+                style={[styles.expiryTag, isExpired && styles.expiryTagExpired]}
+              >
+                <Ionicons
+                  name="time-outline"
+                  size={12}
+                  color={isExpired ? "#B3261E" : Colors.primary1}
+                />
+                <Text
+                  style={[
+                    styles.expiryText,
+                    isExpired && styles.expiryTextExpired,
+                  ]}
+                >
+                  {timeLeft}
+                </Text>
               </View>
             )}
           </View>
@@ -1529,12 +2152,24 @@ function ListingCard({ item, onView, onEdit, onRemove, onStatusChange }: { item:
         {item.status !== "Flagged" && (
           <>
             <TouchableOpacity style={styles.uiActionBtn} onPress={onEdit}>
-              <Ionicons name="create-outline" size={16} color={Colors.primary} />
-              <Text style={[styles.uiActionBtnText, { color: Colors.primary }]}>Edit</Text>
+              <Ionicons
+                name="create-outline"
+                size={16}
+                color={Colors.primary}
+              />
+              <Text style={[styles.uiActionBtnText, { color: Colors.primary }]}>
+                Edit
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.uiActionBtn} onPress={onRemove}>
-              <Ionicons name="close-circle-outline" size={16} color="#B3261E" />
-              <Text style={[styles.uiActionBtnText, { color: "#B3261E" }]}>Remove</Text>
+              <Ionicons
+                name="close-circle-outline"
+                size={16}
+                color="#B3261E"
+              />
+              <Text style={[styles.uiActionBtnText, { color: "#B3261E" }]}>
+                Remove
+              </Text>
             </TouchableOpacity>
           </>
         )}
@@ -1543,7 +2178,15 @@ function ListingCard({ item, onView, onEdit, onRemove, onStatusChange }: { item:
   );
 }
 
-function DetailRow({ icon, label, value }: { icon: any; label: string; value: string; }) {
+function DetailRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: any;
+  label: string;
+  value: string;
+}) {
   return (
     <View style={styles.detailRow}>
       <View style={styles.detailIcon}>
@@ -1557,16 +2200,42 @@ function DetailRow({ icon, label, value }: { icon: any; label: string; value: st
   );
 }
 
-function BottomNavItem({ icon, label, active, onPress }: { icon: any; label: string; active?: boolean; onPress: () => void; }) {
+function BottomNavItem({
+  icon,
+  label,
+  active,
+  onPress,
+}: {
+  icon: any;
+  label: string;
+  active?: boolean;
+  onPress: () => void;
+}) {
   return (
-    <TouchableOpacity style={[styles.navItem, active && styles.navItemActive]} activeOpacity={active ? 1 : 0.7} onPress={active ? undefined : onPress}>
-      <Ionicons name={icon} size={24} color={active ? Colors.primary : Colors.icon} />
-      <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
+    <TouchableOpacity
+      style={[styles.navItem, active && styles.navItemActive]}
+      activeOpacity={active ? 1 : 0.7}
+      onPress={active ? undefined : onPress}
+    >
+      <Ionicons
+        name={icon}
+        size={24}
+        color={active ? Colors.primary : Colors.icon}
+      />
+      <Text style={[styles.navText, active && styles.navTextActive]}>
+        {label}
+      </Text>
     </TouchableOpacity>
   );
 }
 
-function ModalSection({ title, children }: { title: string; children: React.ReactNode; }) {
+function ModalSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <View style={styles.modalSection}>
       <Text style={styles.modalSectionTitle}>{title}</Text>
@@ -1575,7 +2244,7 @@ function ModalSection({ title, children }: { title: string; children: React.Reac
   );
 }
 
-function InputLabel({ text }: { text: string; }) {
+function InputLabel({ text }: { text: string }) {
   return <Text style={styles.inputLabel}>{text}</Text>;
 }
 
@@ -1584,21 +2253,49 @@ function ErrorText({ message }: { message?: string }) {
   return <Text style={styles.errorText}>{message}</Text>;
 }
 
-function StorageOption({ title, subtitle, active, onPress }: { title: string; subtitle: string; active: boolean; onPress: () => void; }) {
+function StorageOption({
+  title,
+  subtitle,
+  active,
+  onPress,
+}: {
+  title: string;
+  subtitle: string;
+  active: boolean;
+  onPress: () => void;
+}) {
   return (
-    <TouchableOpacity style={[styles.storageOption, active && styles.storageOptionActive]} activeOpacity={0.75} onPress={onPress}>
+    <TouchableOpacity
+      style={[styles.storageOption, active && styles.storageOptionActive]}
+      activeOpacity={0.75}
+      onPress={onPress}
+    >
       <View style={[styles.radio, active && styles.radioActive]}>
         {active && <View style={styles.radioInner} />}
       </View>
       <View>
-        <Text style={[styles.storageTitle, active && styles.storageTitleActive]}>{title}</Text>
+        <Text style={[styles.storageTitle, active && styles.storageTitleActive]}>
+          {title}
+        </Text>
         <Text style={styles.storageSubtitle}>{subtitle}</Text>
       </View>
     </TouchableOpacity>
   );
 }
 
-function LivePricingCard({ prepDate, expDate, expTime, initialPrice, minPrice }: { prepDate: string; expDate: string; expTime: string; initialPrice: string; minPrice: string; }) {
+function LivePricingCard({
+  prepDate,
+  expDate,
+  expTime,
+  initialPrice,
+  minPrice,
+}: {
+  prepDate: string;
+  expDate: string;
+  expTime: string;
+  initialPrice: string;
+  minPrice: string;
+}) {
   const [timeLeft, setTimeLeft] = useState("Calculating...");
   const [livePrice, setLivePrice] = useState(Number(initialPrice) || 0);
   const [isExpired, setIsExpired] = useState(false);
@@ -1606,23 +2303,27 @@ function LivePricingCard({ prepDate, expDate, expTime, initialPrice, minPrice }:
   const parseSafeDate = (dateStr: string, timeStr?: string) => {
     try {
       let full = timeStr ? `${dateStr} ${timeStr}` : dateStr;
-      full = full.replace(/,/g, '').replace(/\s+/g, ' ').trim(); 
-      const parts = full.split(' '); 
-      const monthIndex = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(parts[0]);
+      full = full.replace(/,/g, "").replace(/\s+/g, " ").trim();
+      const parts = full.split(" ");
+      const monthIndex = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+      ].indexOf(parts[0]);
       const day = parseInt(parts[1], 10);
       const year = parseInt(parts[2], 10);
-      let hours = 0, minutes = 0;
+      let hours = 0,
+        minutes = 0;
       if (parts[3]) {
-        const timeParts = parts[3].split(':');
+        const timeParts = parts[3].split(":");
         hours = parseInt(timeParts[0], 10);
         minutes = parseInt(timeParts[1], 10);
         const fullUpper = full.toUpperCase();
-        if (fullUpper.includes('PM') && hours < 12) hours += 12;
-        if (fullUpper.includes('AM') && hours === 12) hours = 0;
+        if (fullUpper.includes("PM") && hours < 12) hours += 12;
+        if (fullUpper.includes("AM") && hours === 12) hours = 0;
       }
       return new Date(year, monthIndex, day, hours, minutes).getTime();
     } catch (error) {
-      return new Date().getTime(); 
+      return new Date().getTime();
     }
   };
 
@@ -1634,7 +2335,7 @@ function LivePricingCard({ prepDate, expDate, expTime, initialPrice, minPrice }:
 
     const totalHours = (endTime - startTime) / (1000 * 60 * 60);
     const totalDrop = startP - floorP;
-    const hourlyDropAmount = totalHours > 0 ? (totalDrop / totalHours) : 0;
+    const hourlyDropAmount = totalHours > 0 ? totalDrop / totalHours : 0;
 
     const timer = setInterval(() => {
       const now = new Date().getTime();
@@ -1649,14 +2350,16 @@ function LivePricingCard({ prepDate, expDate, expTime, initialPrice, minPrice }:
       }
 
       const d = Math.floor(distance / (1000 * 60 * 60 * 24));
-      const h = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const h = Math.floor(
+        (distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60)
+      );
       const m = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
       const s = Math.floor((distance % (1000 * 60)) / 1000);
       setTimeLeft(d > 0 ? `${d}d ${h}h ${m}m ${s}s` : `${h}h ${m}m ${s}s`);
 
       const hoursPassed = Math.floor((now - startTime) / (1000 * 60 * 60));
       if (hoursPassed > 0) {
-        let currentPrice = startP - (hourlyDropAmount * hoursPassed);
+        let currentPrice = startP - hourlyDropAmount * hoursPassed;
         if (currentPrice < floorP) currentPrice = floorP;
         setLivePrice(currentPrice);
       } else {
@@ -1670,7 +2373,11 @@ function LivePricingCard({ prepDate, expDate, expTime, initialPrice, minPrice }:
   return (
     <View style={styles.liveContainer}>
       <View style={styles.timeRow}>
-        <Ionicons name="time-outline" size={16} color={isExpired ? "#A94A3A" : Colors.primary1} />
+        <Ionicons
+          name="time-outline"
+          size={16}
+          color={isExpired ? "#A94A3A" : Colors.primary1}
+        />
         <Text style={[styles.timeText, isExpired && styles.timeExpired]}>
           {isExpired ? "Time's up" : `Expires in: ${timeLeft}`}
         </Text>
@@ -1765,6 +2472,7 @@ const styles = StyleSheet.create({
   inputText: { fontFamily: "PoppinsRegular", fontSize: 13, color: Colors.primary2 },
   descriptionInput: { minHeight: 82, borderRadius: 7, backgroundColor: Colors.input, paddingHorizontal: 11, paddingTop: 10, fontFamily: "PoppinsRegular", fontSize: 13, color: Colors.primary2, borderWidth: 1, borderColor: Colors.border },
   twoColumn: { flexDirection: "row", gap: 9 },
+  inlineDropdownContainer: { backgroundColor: Colors.white, borderRadius: 7, borderWidth: 1, borderColor: Colors.border, marginTop: 4, marginBottom: 10, zIndex: 999, elevation: 5 },
   storageOptions: { flexDirection: "row", gap: 7 },
   storageOption: { flex: 1, minHeight: 55, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.white, paddingHorizontal: 9, flexDirection: "row", alignItems: "center" },
   storageOptionActive: { backgroundColor: "#E7EEE9", borderColor: Colors.primary },
@@ -1807,68 +2515,77 @@ const styles = StyleSheet.create({
   viewCloseButtonText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary1 },
   viewEditButton: { flex: 1, height: 48, borderRadius: 8, backgroundColor: Colors.button, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
   viewEditButtonText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.white },
-  cameraButton: { width: '100%', height: 160, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.input, overflow: 'hidden', marginBottom: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  cameraPreview: { width: '100%', height: '100%', resizeMode: 'cover' },
-  cameraPlaceholder: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
+  cameraButton: { width: "100%", height: 160, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.input, overflow: "hidden", marginBottom: 8, flexDirection: "row", alignItems: "center", justifyContent: "center" },
+  cameraPreview: { width: "100%", height: "100%", resizeMode: "cover" },
+  cameraPlaceholder: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10 },
   cameraText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.icon },
   liveContainer: { backgroundColor: "#E9EFE9", borderRadius: 9, padding: 12, marginBottom: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center", borderWidth: 1, borderColor: Colors.primary },
   timeRow: { flexDirection: "row", alignItems: "center" },
-  timeText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary1, marginLeft: 6, minWidth: 175, fontVariant: ['tabular-nums'] },
+  timeText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary1, marginLeft: 6, minWidth: 175, fontVariant: ["tabular-nums"] },
   timeExpired: { color: "#A94A3A", fontFamily: "PoppinsBold" },
   priceRow: { alignItems: "flex-end" },
   priceLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
   livePrice: { fontFamily: "PoppinsBold", fontSize: 20, color: Colors.primary },
-  floatingDropdownContainer: { 
-    position: "absolute", 
-    top: 44, 
-    left: 0, 
-    right: 0, 
-    backgroundColor: Colors.white, 
-    borderRadius: 10, 
-    borderWidth: 1, 
-    borderColor: Colors.border, 
-    zIndex: 9999, 
-    elevation: 10, 
-    shadowColor: "#000", 
-    shadowOpacity: 0.1, 
-    shadowRadius: 5, 
-    shadowOffset: { width: 0, height: 4 }, 
+  alertOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.65)", justifyContent: "center", alignItems: "center", padding: 24 },
+  alertCard: { width: "100%", maxWidth: 320, backgroundColor: Colors.white, borderRadius: 16, padding: 24, elevation: 10, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
+  alertTitle: { fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2, marginBottom: 8, textAlign: "left", width: "100%" },
+  alertMessage: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginBottom: 24, lineHeight: 18, textAlign: "left", width: "100%" },
+  alertButtonRow: { flexDirection: "row", gap: 12, width: "100%" },
+  alertCancelButton: { flex: 1, height: 44, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
+  alertCancelButtonText: { fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.primary1 },
+  alertConfirmButton: { flex: 1, height: 44, borderRadius: 8, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center" },
+  alertConfirmButtonText: { fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.white },
+  floatingDropdownContainer: {
+    position: "absolute",
+    top: 44,
+    left: 0,
+    right: 0,
+    backgroundColor: Colors.white,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    zIndex: 9999,
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 4 },
   },
-  filterDropdownBtn: { 
-    minHeight: 45, 
-    borderRadius: 10, 
-    backgroundColor: Colors.white, 
-    paddingHorizontal: 12, 
-    flexDirection: "row", 
-    alignItems: "center", 
-    justifyContent: "space-between", 
-    borderWidth: 1, 
-    borderColor: Colors.border, 
+  filterDropdownBtn: {
+    minHeight: 45,
+    borderRadius: 10,
+    backgroundColor: Colors.white,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  filterDropdownText: { 
-    fontFamily: "PoppinsMedium", 
-    fontSize: 12, 
-    color: Colors.primary2, 
+  filterDropdownText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 12,
+    color: Colors.primary2,
   },
-  inlineDropdownItem: { 
-    flexDirection: "row", 
-    alignItems: "center", 
-    justifyContent: "space-between", 
-    paddingVertical: 12, 
-    paddingHorizontal: 14, 
-    borderBottomWidth: 1, 
-    borderBottomColor: Colors.border, 
+  inlineDropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
   },
-  inlineDropdownItemActive: { 
-    backgroundColor: "#E8EFEA", 
+  inlineDropdownItemActive: {
+    backgroundColor: "#E8EFEA",
   },
-  inlineDropdownText: { 
-    fontFamily: "PoppinsRegular", 
-    fontSize: 12, 
-    color: Colors.primary2, 
+  inlineDropdownText: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 12,
+    color: Colors.primary2,
   },
-  inlineDropdownTextActive: { 
-    fontFamily: "PoppinsSemiBold", 
-    color: Colors.primary, 
+  inlineDropdownTextActive: {
+    fontFamily: "PoppinsSemiBold",
+    color: Colors.primary,
   },
 } as any);

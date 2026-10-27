@@ -20,6 +20,8 @@ import {
 import { Colors } from "@/constants/color";
 import { EmptyState, ErrorBanner } from "@/constants/FoodBankUI";
 
+import { api } from "../../../services/api";
+
 type HistoryItem = {
   food_name: string;
   qty: number;
@@ -48,68 +50,6 @@ type Partner = {
 type PartnersResponse = {
   partners: Partner[];
   summary: { count: number; items_received: number };
-};
-
-// Mock data so the frontend works right away without a backend endpoint
-const MOCK_PARTNERS_DATA: PartnersResponse = {
-  summary: { count: 3, items_received: 145 },
-  partners: [
-    {
-      merchant_id: 1,
-      name: "Green Basket Bakery",
-      type: "Bakery & Pastries",
-      is_verified: true,
-      address: "A. S. Fortuna St, Mandaue City",
-      contact_phone: "+63 912 345 6789",
-      contact_name: "Maria Santos",
-      contact_email: "contact@greenbasket.com",
-      donations_count: 12,
-      received_qty: 85,
-      requests_fulfilled: 4,
-      active_offers: 2,
-      last_activity: "2026-05-10T08:30:00Z",
-      history: [
-        { food_name: "Assorted Bread Loaves", qty: 25, unit: "pcs", status: "Completed", date: "2026-05-10" },
-        { food_name: "Chocolate Pastries", qty: 15, unit: "boxes", status: "Completed", date: "2026-05-02" },
-      ],
-    },
-    {
-      merchant_id: 2,
-      name: "Cebu Fresh Grocers",
-      type: "Fruits & Vegetables",
-      is_verified: true,
-      address: "IT Park, Cebu City",
-      contact_phone: "+63 923 456 7890",
-      contact_name: "John Tan",
-      contact_email: "support@cebufresh.com",
-      donations_count: 8,
-      received_qty: 40,
-      requests_fulfilled: 2,
-      active_offers: 1,
-      last_activity: "2026-05-08T11:15:00Z",
-      history: [
-        { food_name: "Ripe Bananas & Apples", qty: 20, unit: "kg", status: "Completed", date: "2026-05-08" },
-      ],
-    },
-    {
-      merchant_id: 3,
-      name: "Sunny Side Diner",
-      type: "Cooked Meals",
-      is_verified: false,
-      address: "Colon St, Cebu City",
-      contact_phone: "+63 934 567 8901",
-      contact_name: "Elena Reyes",
-      contact_email: "",
-      donations_count: 5,
-      received_qty: 20,
-      requests_fulfilled: 1,
-      active_offers: 0,
-      last_activity: "2026-04-28T14:00:00Z",
-      history: [
-        { food_name: "Packed Rice Meals", qty: 20, unit: "boxes", status: "Completed", date: "2026-04-28" },
-      ],
-    },
-  ],
 };
 
 const HISTORY_LABEL: Record<string, string> = {
@@ -165,9 +105,8 @@ export default function FoodBankPartnersScreen() {
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      // Frontend mock fallback directly without requiring backend route active yet
-      await new Promise((r) => setTimeout(r, 400));
-      setData(MOCK_PARTNERS_DATA);
+      const res = await api.get("/donations/partners/");
+      setData(res.data);
       setLoadError("");
     } catch (e: any) {
       setLoadError(e.message || "Failed to load partners.");

@@ -1,7 +1,7 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { router, Stack } from "expo-router";
+import { Stack } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -21,6 +21,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
+import { EstablishmentBottomNav, EstablishmentHeader, getAppStorage } from "../components/EstablishmentNav";
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
 
@@ -329,31 +330,54 @@ export default function DonationHub() {
 
   const fetchDonationData = async () => {
     try {
+      const storedId = (await getAppStorage("profile_id")) || "1";
+      const storedEmail = (await getAppStorage("user_email")) || "";
+
       const activeRes = await api.get("donations/available/");
-      const listingsRes = await api.get("listings/");
+      const listingsRes = await api.get(
+        `listings/establishment/?merchant=${storedId}&email=${encodeURIComponent(storedEmail)}`
+      );
+      const rawMerchantListings = listingsRes.data.listings || listingsRes.data || [];
 
       const listingsMap: Record<string, any> = {};
-      listingsRes.data.forEach((l: any) => {
+      rawMerchantListings.forEach((l: any) => {
         const id = l.prod_id || l.id;
         listingsMap[id] = l;
       });
 
-      const formattedActive = activeRes.data.map((item: any) => {
+      const myMerchantId = Number(storedId) || 1;
+      const myDonations = Array.isArray(activeRes.data)
+        ? activeRes.data.filter(
+            (d: any) =>
+              !d.merchant ||
+              Number(d.merchant) === myMerchantId ||
+              listingsMap[d.product_id] !== undefined
+          )
+        : [];
+
+      const formattedActive = myDonations.map((item: any) => {
         const origListing = listingsMap[item.product_id] || {};
-        
         const expDate = item.expiry_date || origListing.expiry_date || "";
         const expTime = item.expiry_time || origListing.expiry_time || "";
         let realExpiry = item.expires_at || origListing.expires_at || null;
-        
+
         if (!realExpiry && expDate) {
           realExpiry = `${expDate} ${expTime}`.trim();
         }
 
         const rawCreated = item.created_at || origListing.created_at || item.date || new Date();
         const parsedDate = new Date(rawCreated);
-        const formattedDateStr = !isNaN(parsedDate.getTime()) 
-          ? parsedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-          : new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const formattedDateStr = !isNaN(parsedDate.getTime())
+          ? parsedDate.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })
+          : new Date().toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            });
 
         return {
           id: `POST00${item.donation_id}`,
@@ -361,54 +385,66 @@ export default function DonationHub() {
           name: item.food_name || item.item_name || origListing.prod_name || "Surplus Bundle",
           quantity: String(item.qty_donated || 0),
           category: item.food_type || item.category || origListing.category_name || "Surplus",
-          status: item.status === "Active" ? "Available" : (item.status || "Available"),
-          datePosted: formattedDateStr, // Fixed real date instead of hardcoded "Today"
-          claimedBy: item.food_bank_name || item.claimed_by || "Partner Food Bank", 
-          image: item.image_path || origListing.image_path || "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
-          expires_at: realExpiry, 
+          status: item.status === "Active" ? "Available" : item.status || "Available",
+          datePosted: formattedDateStr,
+          claimedBy: item.food_bank_name || item.claimed_by || "Partner Food Bank",
+          image:
+            item.image_path ||
+            origListing.image_path ||
+            "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
+          expires_at: realExpiry,
         };
       });
       setPostedDonations(formattedActive);
 
-      const donatedProductIds = activeRes.data.map((item: any) => item.listing); 
-      
-      const formattedListings = listingsRes.data
-        .filter((l: any) => !donatedProductIds.includes(l.commerce_id || l.listing_id || l.id)) 
+      const donatedCommerceIds = Array.isArray(activeRes.data)
+        ? activeRes.data.map((item: any) => item.listing)
+        : [];
+
+      const formattedListings = rawMerchantListings
+        .filter(
+          (l: any) =>
+            (l.status || "Active") === "Active" &&
+            Number(l.quantity ?? l.qty_available ?? 0) > 0 &&
+            !donatedCommerceIds.includes(l.commerce_id || l.listing_id || l.id)
+        )
         .map((l: any, index: number) => ({
           id: l.commerce_id || l.listing_id || l.id || l.prod_id || index.toString(),
-          commerce_id: l.commerce_id || l.listing_id || l.id, 
+          commerce_id: l.commerce_id || l.listing_id || l.id,
           name: l.prod_name,
           quantity: String(l.quantity || "0"),
-          category: l.category_name || l.category || "Bakery",
-          price: `₱${l.price || '0.00'}`,
-          image: l.image_path || "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
+          category: l.category_name || l.category || "Surplus",
+          price: `₱${Number(l.price || 0).toFixed(2)}`,
+          image:
+            l.image_path ||
+            "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
         }));
       setMerchantListings(formattedListings);
 
       const wishlistRes = await api.get("donations/requests/");
-      const formattedRequests = wishlistRes.data.map((req: any) => {
-      const rawCreatedAt = req.created_at || "";
-
-        return {
-          id: `REQ00${req.donation_req_id}`,
-          donation_req_id: req.donation_req_id,
-          requester: req.merchant_name || "Partner Food Bank",
-          type: req.food_type || "Custom Request",
-          quantity: String(req.qty_needed),
-          urgency: "Standard",
-          date: rawCreatedAt
-          ? new Date(rawCreatedAt).toLocaleDateString("en-US", {
-            month: "short",
-            day: "numeric",
-            year: "numeric",
-          })
-        : "Not Set",
-          createdAt: rawCreatedAt,
-          status: req.status || "Active",
-        };
-      });
+      const formattedRequests = (Array.isArray(wishlistRes.data) ? wishlistRes.data : []).map(
+        (req: any) => {
+          const rawCreatedAt = req.created_at || "";
+          return {
+            id: `REQ00${req.donation_req_id}`,
+            donation_req_id: req.donation_req_id,
+            requester: req.merchant_name || "Partner Food Bank",
+            type: req.food_type || "Custom Request",
+            quantity: String(req.qty_needed),
+            urgency: "Standard",
+            date: rawCreatedAt
+              ? new Date(rawCreatedAt).toLocaleDateString("en-US", {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })
+              : "Not Set",
+            createdAt: rawCreatedAt,
+            status: req.status || "Active",
+          };
+        }
+      );
       setRequests(formattedRequests);
-
     } catch (error) {
       console.error("Failed to load live database data:", error);
     }
@@ -541,11 +577,12 @@ export default function DonationHub() {
         "Not now",
         async () => {
           try {
-            await api.post("donations/available/", {
-              listing: (listing as any).commerce_id || listing.id, 
-              qty_donated: Number(listing.quantity),
-              merchant: 1, 
-              status: "Active"
+            const storedId = Platform.OS === "web" ? localStorage.getItem("profile_id") : null;
+              await api.post("donations/available/", {
+                listing: (listing as any).commerce_id || listing.id, 
+                qty_donated: Number(listing.quantity),
+                merchant: Number(storedId) || 1, 
+                status: "Active"
             });
             fetchDonationData();
             setAlertConfig({ visible: true, title: "Donation Posted", message: "Item successfully posted for donation!", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
@@ -610,23 +647,7 @@ export default function DonationHub() {
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
       
       {/* HEADER */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.logo}>RESERVE</Text>
-          <Text style={styles.headerSubtitle}>Establishment Portal</Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerIconButton} activeOpacity={0.7} onPress={() => router.replace("/establishment/notifications")}>
-            <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
-            <View style={styles.notificationDot} />
-          </TouchableOpacity>
-          <TouchableOpacity activeOpacity={0.7} onPress={() => router.replace("/establishment/profile")}>
-            <View style={styles.profileCircle}>
-              <Ionicons name="person" size={16} color={Colors.white} />
-            </View>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <EstablishmentHeader />
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.pageHeader}>
@@ -833,14 +854,7 @@ export default function DonationHub() {
       </ScrollView>
 
       {/* BOTTOM NAVIGATION */}
-      <View style={styles.bottomNav}>
-        <BottomNavItem icon="grid-outline" label="Home" onPress={() => router.replace("/establishment/dashboard")} />
-        <BottomNavItem icon="restaurant-outline" label="Listings" onPress={() => router.replace("/establishment/listing")} />
-        <BottomNavItem icon="basket-outline" label="Orders" onPress={() => router.replace("/establishment/orders")} />
-        <BottomNavItem icon="cash-outline" label="Earnings" onPress={() => router.replace("/establishment/earnings")} />
-        <BottomNavItem icon="heart" label="Donation" active onPress={() => router.replace("/establishment/donation")} />
-        <BottomNavItem icon="person-outline" label="Impact" onPress={() => router.replace("/establishment/impact")} />
-      </View>
+      <EstablishmentBottomNav activeTab="Donation" />
 
       {/* =================================================
           CUSTOM CONFIRMATION / ALERT MODAL

@@ -58,14 +58,15 @@ export default function LoginScreen() {
         access,
         refresh,
         role,
+        email: returnedEmail,
         profile_id,
         entity_name,
+        merch_type,
         account_status,
         status_reason,
         expiry_date,
       } = response.data;
 
-      // 1. Check if Account is Suspended
       if (account_status === "Suspended") {
         alert(
           `ACCOUNT SUSPENDED\n\nReason: ${status_reason || "Policy Violation"}\n\nPlease check your email for the official appeal link to reactivate your account.`
@@ -73,17 +74,17 @@ export default function LoginScreen() {
         return;
       }
 
-      // 2. Store session tokens & metadata
       await saveStorageItem("access", access);
       await saveStorageItem("refresh", refresh);
       await saveStorageItem("user_role", role);
-      await saveStorageItem("profile_id", String(profile_id || ""));
+      await saveStorageItem("user_email", returnedEmail || email);
+      await saveStorageItem("profile_id", String(profile_id || "1"));
       await saveStorageItem("entity_name", entity_name || "");
+      await saveStorageItem("merch_type", merch_type || "Bakeshop");
       await saveStorageItem("account_status", account_status || "Active");
       await saveStorageItem("status_reason", status_reason || "");
       await saveStorageItem("expiry_date", expiry_date || "");
 
-      // 3. Check if Document Resubmission or Annual Permit Renewal is Required
       if (
         (role === "Merchant" || role === "FoodBank") &&
         (account_status === "Resubmit Required" || account_status === "Renewal Required")
@@ -102,7 +103,6 @@ export default function LoginScreen() {
         return;
       }
 
-      // 4. Check if Still Pending Initial Review
       if ((role === "Merchant" || role === "FoodBank") && account_status === "Pending") {
         alert(
           "Your application is currently under review by the ReServe Admin team. You will receive an email once verified!"
@@ -110,11 +110,14 @@ export default function LoginScreen() {
         return;
       }
 
-      // 5. Normal Active Navigation
       if (role === "Consumer") {
         router.replace("/consumer/homepage");
       } else if (role === "Merchant") {
-        router.replace("/establishment/dashboard");
+        if ((merch_type || "").toLowerCase().includes("market")) {
+          router.replace("/establishment/market_listing" as any);
+        } else {
+          router.replace("/establishment/dashboard");
+        }
       } else {
         router.replace("/foodbank/dashboard");
       }

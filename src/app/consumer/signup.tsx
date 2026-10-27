@@ -1,165 +1,170 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { Link, router } from "expo-router";
+import { router } from "expo-router";
 import { useState } from "react";
 import {
-  SafeAreaView,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
-  useWindowDimensions
+  useWindowDimensions,
 } from "react-native";
 import { api } from "../../../services/api";
+import {
+  CebuAddressMapPicker,
+  RegistrationOtpModal,
+} from "../components/CebuRegistrationHelpers";
 
 export default function ConsumerSignup() {
   const { width, height } = useWindowDimensions();
 
-  const isSmallPhone = width < 360;
-  const isShortPhone = height < 700;
+  const isSmallPhone = height < 700;
+  const isNarrowPhone = width < 360;
+  const horizontalPadding = isNarrowPhone ? 12 : 15;
 
-  const horizontalPadding = isSmallPhone ? 12 : 16;
   const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [isAgreed, setIsAgreed] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [barangay, setBarangay] = useState("");
+  const [streetDetail, setStreetDetail] = useState("");
+  const [address, setAddress] = useState("");
+  const [latitude, setLatitude] = useState(10.3157);
+  const [longitude, setLongitude] = useState(123.8854);
 
-  const handleSignup = async () => {
-    // Basic validation
-    if (!email || !password || !fullName) {
-      alert("Please fill in all required fields.");
-      return;
-    }
-    if (password !== confirmPassword) {
-      alert("Passwords do not match!");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isAgreed, setIsAgreed] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // OTP Modal States
+  const [otpModalVisible, setOtpModalVisible] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [devOtpHint, setDevOtpHint] = useState("");
+  const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+
+  const handleRequestOtp = async () => {
+    if (!fullName || !phoneNumber || !barangay || !streetDetail || !email || !password) {
+      alert("Please fill in all required fields and select your Cebu City Barangay.");
       return;
     }
     if (!isAgreed) {
-      alert("You must agree to the Terms of Service and Privacy Policy.");
+      alert("You must agree to the Terms of Service.");
       return;
     }
 
     setIsLoading(true);
     try {
-      // Send the request to your Django registration endpoint
-      const response = await api.post("register/", {
-        user_email: email,
-        user_pass: password,
-        user_role: "Consumer",
-        full_name: fullName, 
-        phone_number: phone
-      });
-
-      alert("Account created successfully! Please log in.");
-      // Send the user to the login screen we just wired up
-      router.replace("/consumer");
-      
-    } catch (error) {
-      const err = error as any;
-      // Example of cleaner error parsing (adjust based on your Django response format)
-      const errorData = err.response?.data;
-      const errorMessage = typeof errorData === 'object' && errorData !== null 
-        ? Object.values(errorData).flat().join('\n') 
-        : "Registration failed.";
-        
-      alert(errorMessage);
+      const res = await api.post("accounts/send-otp/", { email });
+      setDevOtpHint(res.data?.dev_otp_preview || "");
+      setOtpCode("");
+      setOtpModalVisible(true);
+    } catch (error: any) {
+      alert(error.response?.data?.error || "Could not send verification OTP.");
     } finally {
       setIsLoading(false);
     }
   };
 
+  const handleVerifyAndRegister = async () => {
+    if (otpCode.trim().length < 6) {
+      alert("Please enter the 6-digit OTP code.");
+      return;
+    }
+
+    setIsVerifyingOtp(true);
+    try {
+      await api.post("accounts/verify-otp/", { email, otp: otpCode.trim() });
+
+      const formData = new FormData();
+      formData.append("user_email", email.trim());
+      formData.append("user_pass", password);
+      formData.append("user_role", "Consumer");
+      formData.append("full_name", fullName);
+      formData.append("phone_number", phoneNumber);
+      formData.append("address", address);
+      formData.append("latitude", String(latitude));
+      formData.append("longitude", String(longitude));
+
+      await api.post("accounts/register/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      setOtpModalVisible(false);
+      alert("Email verified & Consumer account created! Please log in.");
+      router.replace("/consumer");
+    } catch (error: any) {
+      const errorData = error.response?.data;
+      const errorMessage =
+        errorData?.error ||
+        (typeof errorData === "object" && errorData !== null
+          ? Object.values(errorData).flat().join("\n")
+          : "Verification or registration failed.");
+      alert(errorMessage);
+    } finally {
+      setIsVerifyingOtp(false);
+    }
+  };
+
   return (
-    <SafeAreaView style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
+    >
       <ScrollView
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
         contentContainerStyle={[
           styles.scrollContent,
           {
             paddingHorizontal: horizontalPadding,
-            paddingTop: isShortPhone ? 12 : 18,
-            paddingBottom: isShortPhone ? 18 : 28,
+            paddingTop: isSmallPhone ? 14 : 20,
+            paddingBottom: isSmallPhone ? 20 : 30,
           },
         ]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {/* =====================================================
-            HEADER
-        ===================================================== */}
-
         <View style={styles.header}>
           <TouchableOpacity
+            style={styles.backButton}
             activeOpacity={0.7}
             onPress={() => router.replace("/consumer/account-type")}
-            style={styles.backButton}
           >
-            <Ionicons
-              name="arrow-back"
-              size={22}
-              color={Colors.primary2}
-            />
-
-            <Text style={styles.backText}>Back</Text>
+            <Ionicons name="arrow-back" size={22} color={Colors.primary2} />
           </TouchableOpacity>
+          <Text style={styles.headerTitle}>Create Account</Text>
         </View>
-
-        {/* =====================================================
-            BRAND
-        ===================================================== */}
 
         <View style={styles.brandContainer}>
-          <Text
-            style={[
-              styles.logo,
-              {
-                fontSize: isSmallPhone ? 30 : 34,
-              },
-            ]}
-          >
+          <Text style={[styles.logo, { fontSize: isNarrowPhone ? 30 : 34 }]}>
             RESERVE
           </Text>
-
-          <View style={styles.logoLine} />
-
-          <Text style={styles.brandSubtitle}>
-            Food rescue made simple
-          </Text>
+          <Text style={styles.brandSubtitle}>Food rescue made simple</Text>
         </View>
 
-        {/* =====================================================
-            MAIN CARD
-        ===================================================== */}
+        <View style={styles.card}>
+          <View style={styles.titleContainer}>
+            <Text
+              style={[styles.mainTitle, { fontSize: isNarrowPhone ? 17 : 19 }]}
+            >
+              CONSUMER ACCOUNT
+            </Text>
+            <Text style={styles.mainSubtitle}>
+              Sign up to rescue discounted surplus food within 10km of your Cebu
+              City location.
+            </Text>
+          </View>
 
-        <View
-          style={[
-            styles.card,
-            {
-              paddingHorizontal: isSmallPhone ? 17 : 20,
-              paddingTop: isShortPhone ? 18 : 22,
-              paddingBottom: isShortPhone ? 18 : 22,
-            },
-          ]}
-        >
-          {/* TITLE */}
-
-          <Text style={styles.title}>Create your account</Text>
-
-          <Text style={styles.subtitle}>
-            Join RESERVE and discover affordable surplus food
-            available near you.
-          </Text>
-
-          {/* =================================================
-              FULL NAME
-          ================================================= */}
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionNumber}>
+              <Text style={styles.sectionNumberText}>1</Text>
+            </View>
+            <Text style={styles.sectionTitle}>Personal & Location Details</Text>
+          </View>
 
           <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Full Name</Text>
-
+            <Text style={styles.label}>Full Name *</Text>
             <View style={styles.inputContainer}>
               <Ionicons
                 name="person-outline"
@@ -167,54 +172,18 @@ export default function ConsumerSignup() {
                 color={Colors.primary}
                 style={styles.inputIcon}
               />
-
               <TextInput
                 style={styles.input}
-                placeholder="e.g. Sky Cogtas"
+                placeholder="e.g. Cyrus Vince Lingo"
                 placeholderTextColor={Colors.placeholder}
-                autoCapitalize="words"
-                autoCorrect={false}
                 value={fullName}
                 onChangeText={setFullName}
               />
             </View>
           </View>
 
-          {/* =================================================
-              EMAIL
-          ================================================= */}
-
           <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Email Address</Text>
-
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="mail-outline"
-                size={19}
-                color={Colors.primary}
-                style={styles.inputIcon}
-              />
-
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. user@email.com"
-                placeholderTextColor={Colors.placeholder}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                value={email}
-                onChangeText={setEmail}
-              />
-            </View>
-          </View>
-
-          {/* =================================================
-              PHONE
-          ================================================= */}
-
-          <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Phone Number</Text>
-
+            <Text style={styles.label}>Phone Number *</Text>
             <View style={styles.inputContainer}>
               <Ionicons
                 name="call-outline"
@@ -222,25 +191,69 @@ export default function ConsumerSignup() {
                 color={Colors.primary}
                 style={styles.inputIcon}
               />
-
               <TextInput
                 style={styles.input}
-                placeholder="+639##-###-####"
+                placeholder="e.g. +63 912 345 6789"
                 placeholderTextColor={Colors.placeholder}
                 keyboardType="phone-pad"
-                value={phone}
-                onChangeText={setPhone}
+                value={phoneNumber}
+                onChangeText={setPhoneNumber}
               />
             </View>
           </View>
 
-          {/* =================================================
-              PASSWORD
-          ================================================= */}
+          {/* CEBU CITY CASCADING DROPDOWNS + MAP PINNING */}
+          <CebuAddressMapPicker
+            selectedBarangay={barangay}
+            onSelectBarangay={(brgy, fullAddr) => {
+              setBarangay(brgy);
+              setAddress(fullAddr);
+            }}
+            streetDetail={streetDetail}
+            onChangeStreetDetail={(st, fullAddr) => {
+              setStreetDetail(st);
+              setAddress(fullAddr);
+            }}
+            latitude={latitude}
+            longitude={longitude}
+            onChangeCoords={(lat, lng) => {
+              setLatitude(lat);
+              setLongitude(lng);
+            }}
+          />
+
+          <View style={styles.sectionDivider} />
+
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionNumber}>
+              <Text style={styles.sectionNumberText}>2</Text>
+            </View>
+            <Text style={styles.sectionTitle}>Account Credentials</Text>
+          </View>
 
           <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Password</Text>
+            <Text style={styles.label}>Email Address (OTP Verified) *</Text>
+            <View style={styles.inputContainer}>
+              <Ionicons
+                name="mail-outline"
+                size={19}
+                color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. consumer@email.com"
+                placeholderTextColor={Colors.placeholder}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                value={email}
+                onChangeText={setEmail}
+              />
+            </View>
+          </View>
 
+          <View style={styles.fieldContainer}>
+            <Text style={styles.label}>Password *</Text>
             <View style={styles.inputContainer}>
               <Ionicons
                 name="lock-closed-outline"
@@ -248,382 +261,108 @@ export default function ConsumerSignup() {
                 color={Colors.primary}
                 style={styles.inputIcon}
               />
-
               <TextInput
                 style={styles.input}
-                placeholder="Create a password"
+                placeholder="Create a secure password"
                 placeholderTextColor={Colors.placeholder}
                 secureTextEntry
                 autoCapitalize="none"
-                autoCorrect={false}
                 value={password}
                 onChangeText={setPassword}
               />
             </View>
           </View>
 
-          {/* =================================================
-              CONFIRM PASSWORD
-          ================================================= */}
-
-          <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Confirm Password</Text>
-
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="lock-closed-outline"
-                size={19}
-                color={Colors.primary}
-                style={styles.inputIcon}
-              />
-
-              <TextInput
-                style={styles.input}
-                placeholder="Re-enter your password"
-                placeholderTextColor={Colors.placeholder}
-                secureTextEntry
-                autoCapitalize="none"
-                autoCorrect={false}
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-              />
-            </View>
-          </View>
-
-          {/* =================================================
-              TERMS
-          ================================================= */}
-
           <TouchableOpacity
             style={styles.termsContainer}
             activeOpacity={0.7}
             onPress={() => setIsAgreed(!isAgreed)}
           >
-            <View style={[styles.checkbox, !isAgreed && { backgroundColor: Colors.input }]}>
+            <View
+              style={[
+                styles.checkbox,
+                !isAgreed && { backgroundColor: Colors.input },
+              ]}
+            >
               {isAgreed && (
-                <Ionicons
-                  name="checkmark"
-                  size={11}
-                  color={Colors.white}
-                />
+                <Ionicons name="checkmark" size={12} color={Colors.white} />
               )}
             </View>
-
             <Text style={styles.termsText}>
-              I agree to the{" "}
-              <Text style={styles.termsLink}>
-                Terms of Service
-              </Text>{" "}
-              and{" "}
-              <Text style={styles.termsLink}>
-                Privacy Policy
-              </Text>
-              .
+              I have read and agree to the{" "}
+              <Text style={styles.termsLink}>Terms of Service</Text>.
             </Text>
           </TouchableOpacity>
 
-          {/* =================================================
-              CREATE ACCOUNT
-          ================================================= */}
-
           <TouchableOpacity
             style={styles.submitButton}
-            activeOpacity={0.8}
-            onPress={handleSignup}
+            activeOpacity={0.85}
+            onPress={handleRequestOtp}
             disabled={isLoading}
           >
             <Text style={styles.submitText}>
-              {isLoading ? "CREATING ACCOUNT..." : "CREATE ACCOUNT"}
+              {isLoading ? "SENDING OTP..." : "Verify Email & Create Account"}
             </Text>
             <Ionicons name="arrow-forward" size={18} color={Colors.white} />
           </TouchableOpacity>
 
-          {/* =================================================
-              LOGIN
-          ================================================= */}
-
           <View style={styles.loginContainer}>
-            <Text style={styles.loginText}>
-              Already have an account?
-            </Text>
-
-            <Link href="/consumer" asChild>
-              <TouchableOpacity activeOpacity={0.7}>
-                <Text style={styles.loginLink}>
-                  {" "}Log in
-                </Text>
-              </TouchableOpacity>
-            </Link>
+            <Text style={styles.loginText}>Already have an account?</Text>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => router.replace("/consumer")}
+            >
+              <Text style={styles.loginLink}> Log in</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
-    </SafeAreaView>
+
+      <RegistrationOtpModal
+        visible={otpModalVisible}
+        email={email}
+        otpCode={otpCode}
+        onChangeOtp={setOtpCode}
+        onVerify={handleVerifyAndRegister}
+        onResend={handleRequestOtp}
+        onClose={() => setOtpModalVisible(false)}
+        isVerifying={isVerifyingOtp}
+        devOtpHint={devOtpHint}
+      />
+    </KeyboardAvoidingView>
   );
 }
 
-/* ============================================================
-   STYLES
-============================================================ */
-
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-
-  scrollContent: {
-    flexGrow: 1,
-    alignItems: "center",
-  },
-
-  /* ==========================================================
-     HEADER
-  ========================================================== */
-
-  header: {
-    width: "100%",
-    maxWidth: 500,
-    marginBottom: 8,
-  },
-
-  backButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "flex-start",
-    paddingVertical: 5,
-    paddingRight: 10,
-  },
-
-  backText: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 13,
-    color: Colors.primary2,
-    marginLeft: 5,
-  },
-
-  /* ==========================================================
-     BRAND
-  ========================================================== */
-
-  brandContainer: {
-    alignItems: "center",
-    marginBottom: 18,
-  },
-
-  logo: {
-    fontFamily: "PoppinsBold",
-    color: Colors.primary2,
-    letterSpacing: 1.5,
-  },
-
-  logoLine: {
-    width: 30,
-    height: 3,
-    borderRadius: 2,
-    backgroundColor: Colors.button,
-    marginTop: 5,
-    marginBottom: 5,
-  },
-
-  brandSubtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
-    color: Colors.primary1,
-  },
-
-  /* ==========================================================
-     CARD
-  ========================================================== */
-
-  card: {
-    width: "100%",
-    maxWidth: 440,
-
-    backgroundColor: Colors.white,
-
-    borderRadius: 22,
-
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 5,
-    },
-    shadowOpacity: 0.08,
-    shadowRadius: 15,
-
-    elevation: 4,
-  },
-
-  /* ==========================================================
-     TITLE
-  ========================================================== */
-
-  title: {
-    fontFamily: "PoppinsBold",
-    fontSize: 21,
-    color: Colors.primary2,
-    marginBottom: 4,
-  },
-
-  subtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10.5,
-    lineHeight: 16,
-    color: Colors.primary1,
-    marginBottom: 20,
-  },
-
-  /* ==========================================================
-     INPUT FIELDS
-  ========================================================== */
-
-  fieldContainer: {
-    width: "100%",
-    marginBottom: 13,
-  },
-
-  label: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 11.5,
-    color: Colors.primary2,
-    marginBottom: 6,
-  },
-
-  inputContainer: {
-    width: "100%",
-    height: 46,
-
-    backgroundColor: Colors.input,
-
-    borderRadius: 11,
-
-    borderWidth: 1,
-    borderColor: Colors.border,
-
-    flexDirection: "row",
-    alignItems: "center",
-
-    paddingHorizontal: 12,
-  },
-
-  inputIcon: {
-    marginRight: 9,
-    flexShrink: 0,
-  },
-
-  input: {
-    flex: 1,
-    minWidth: 0,
-
-    height: "100%",
-
-    paddingVertical: 0,
-    paddingHorizontal: 0,
-
-    fontFamily: "PoppinsRegular",
-    fontSize: 11.5,
-    color: Colors.primary2,
-  },
-
-  /* ==========================================================
-     TERMS
-  ========================================================== */
-
-  termsContainer: {
-    width: "100%",
-
-    flexDirection: "row",
-    alignItems: "flex-start",
-
-    marginTop: 3,
-    marginBottom: 18,
-  },
-
-  checkbox: {
-    width: 16,
-    height: 16,
-
-    borderRadius: 4,
-
-    backgroundColor: Colors.primary,
-
-    alignItems: "center",
-    justifyContent: "center",
-
-    marginRight: 8,
-    marginTop: 1,
-  },
-
-  termsText: {
-    flex: 1,
-
-    fontFamily: "PoppinsRegular",
-    fontSize: 8.5,
-    lineHeight: 13,
-
-    color: Colors.primary1,
-  },
-
-  termsLink: {
-    fontFamily: "PoppinsSemiBold",
-    color: Colors.primary,
-  },
-
-  /* ==========================================================
-     BUTTON
-  ========================================================== */
-
-  submitButton: {
-    width: "100%",
-    height: 47,
-
-    backgroundColor: Colors.button,
-
-    borderRadius: 11,
-
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 3,
-    },
-    shadowOpacity: 0.12,
-    shadowRadius: 5,
-
-    elevation: 3,
-  },
-
-  submitText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 11.5,
-    color: Colors.white,
-    marginRight: 8,
-  },
-
-  /* ==========================================================
-     LOGIN
-  ========================================================== */
-
-  loginContainer: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-
-    marginTop: 17,
-  },
-
-  loginText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
-    color: Colors.primary1,
-  },
-
-  loginLink: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 9.5,
-    color: Colors.button,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
+  scrollContent: { flexGrow: 1, alignItems: "center" },
+  header: { width: "100%", flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  backButton: { flexDirection: "row", alignItems: "center", paddingVertical: 6, paddingRight: 12 },
+  headerTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2, marginLeft: 2 },
+  brandContainer: { alignItems: "center", marginBottom: 18 },
+  logo: { fontFamily: "PoppinsBold", color: Colors.primary2, letterSpacing: 1.5 },
+  brandSubtitle: { fontFamily: "PoppinsRegular", fontSize: 9, color: Colors.primary1, marginTop: 1 },
+  card: { width: "100%", maxWidth: 500, backgroundColor: Colors.white, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 21, elevation: 4 },
+  titleContainer: { marginBottom: 20 },
+  mainTitle: { fontFamily: "PoppinsBold", color: Colors.primary2, letterSpacing: 0.3 },
+  mainSubtitle: { fontFamily: "PoppinsRegular", fontSize: 9.5, lineHeight: 15, color: "#777777", marginTop: 4, maxWidth: 330 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", marginBottom: 13 },
+  sectionNumber: { width: 27, height: 27, borderRadius: 14, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center", marginRight: 9 },
+  sectionNumberText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.white },
+  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2 },
+  sectionDivider: { height: 1, backgroundColor: "#E8E8E8", marginVertical: 17 },
+  fieldContainer: { width: "100%", marginBottom: 12 },
+  label: { fontFamily: "PoppinsMedium", fontSize: 10, color: "#303030", marginBottom: 5 },
+  inputContainer: { width: "100%", height: 45, backgroundColor: Colors.input, borderRadius: 10, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, borderWidth: 1, borderColor: "#E5E5E5" },
+  inputIcon: { marginRight: 9 },
+  input: { flex: 1, height: "100%", fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary2, paddingVertical: 0 },
+  termsContainer: { flexDirection: "row", alignItems: "flex-start", marginTop: 6, marginBottom: 16 },
+  checkbox: { width: 17, height: 17, borderRadius: 4, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center", marginRight: 7, marginTop: 1 },
+  termsText: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 8.5, lineHeight: 13, color: "#666666" },
+  termsLink: { fontFamily: "PoppinsMedium", color: Colors.primary },
+  submitButton: { width: "100%", minHeight: 48, backgroundColor: Colors.button, borderRadius: 11, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, elevation: 2 },
+  submitText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.white },
+  loginContainer: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 16 },
+  loginText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary2 },
+  loginLink: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
 });

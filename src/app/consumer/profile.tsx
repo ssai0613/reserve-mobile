@@ -1,6 +1,10 @@
+import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
 import { router, Stack } from "expo-router";
+import * as SecureStore from "expo-secure-store";
+import { useEffect, useState } from "react";
 import {
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,10 +12,42 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { api } from "../../../services/api";
 
-import { Colors } from "@/constants/color";
+const getStorageItem = async (key: string): Promise<string | null> => {
+  if (Platform.OS === "web") return localStorage.getItem(key);
+  return await SecureStore.getItemAsync(key);
+};
 
 export default function Profile() {
+  const [fullName, setFullName] = useState("Consumer");
+  const [email, setEmail] = useState("Loading...");
+  const [city, setCity] = useState("Cebu City");
+
+  useEffect(() => {
+    loadConsumerProfile();
+  }, []);
+
+  const loadConsumerProfile = async () => {
+    try {
+      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedEmail = (await getStorageItem("user_email")) || "";
+      const storedName = (await getStorageItem("entity_name")) || "";
+      if (storedName) setFullName(storedName);
+      if (storedEmail) setEmail(storedEmail);
+
+      const res = await api.get(
+        `listings/consumer-portal/${storedId}/?email=${encodeURIComponent(storedEmail)}`
+      );
+      if (res.data?.profile) {
+        setFullName(res.data.profile.full_name);
+        setEmail(res.data.profile.email);
+        setCity(res.data.profile.address || "Cebu City");
+      }
+    } catch (e) {}
+  };
+
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
@@ -25,7 +61,7 @@ export default function Profile() {
 
         <View style={styles.locationPill}>
           <Ionicons name="location-outline" size={13} color={Colors.primary} />
-          <Text style={styles.locationText}>Lapu-Lapu City</Text>
+          <Text style={styles.locationText}>{city}</Text>
         </View>
       </View>
 
@@ -43,8 +79,8 @@ export default function Profile() {
           </View>
 
           <View style={styles.profileDetails}>
-            <Text style={styles.profileName}>Sky</Text>
-            <Text style={styles.profileEmail}>sky@email.com</Text>
+            <Text style={styles.profileName}>{fullName}</Text>
+            <Text style={styles.profileEmail}>{email}</Text>
 
             <View style={styles.consumerBadge}>
               <Text style={styles.consumerBadgeText}>Consumer</Text>
