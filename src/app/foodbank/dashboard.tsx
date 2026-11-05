@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, useFocusEffect } from "expo-router";
-import React, { useCallback, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   RefreshControl,
@@ -14,9 +14,9 @@ import {
 } from "react-native";
 
 import { Colors } from "@/constants/color";
-import { Countdown, ErrorBanner } from "@/constants/FoodBankUI";
 import { ActivityEvent } from "@/constants/foodbankApi";
-import {api} from "../../../services/api";
+import { Countdown, ErrorBanner } from "@/constants/FoodBankUI";
+import { api } from "../../../services/api";
 
 /* =====================================================
    TYPES & HELPERS
@@ -286,6 +286,11 @@ export default function FoodBankDashboard() {
                   <Text style={styles.urgentName} numberOfLines={1}>{offer.food_name}</Text>
                   <Text style={styles.urgentMerchant} numberOfLines={1}>{offer.merchant_name}</Text>
                   <Text style={styles.urgentQty}>{formatQty(offer.qty_donated, offer.unit_name)}</Text>
+                  {offer.expires_at && (
+                    <Text style={{ fontFamily: "PoppinsMedium", fontSize: 9.5, color: "#A94A3A", marginTop: 3 }} numberOfLines={1}>
+                      Exp: {new Date(offer.expires_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                    </Text>
+                  )}
                   <View style={{ marginTop: 8 }}>
                     <Countdown expiresAt={offer.expires_at} />
                   </View>

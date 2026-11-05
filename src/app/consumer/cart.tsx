@@ -18,6 +18,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
+import {
+  ReserveAlertModal,
+  ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
 
 const CART_STORAGE_KEY = "@reserve_cart";
 
@@ -28,13 +32,27 @@ const getStorageItem = async (key: string): Promise<string | null> => {
 
 export default function CartScreen() {
   const [cartItems, setCartItems] = useState<any[]>([]);
-  const [paymentMethod, setPaymentMethod] = useState<"GCash" | "PayMaya" | "Google Pay">("GCash");
+  const [selectedMerchantName, setSelectedMerchantName] = useState<string | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<"GCash" | "Maya">("GCash");
 
-  // Option A: GCash / Maya Payment Gateway Simulator Modal
+  // Xendit Live Checkout + Simulator Modal
   const [gatewayModalVisible, setGatewayModalVisible] = useState(false);
   const [walletPhone, setWalletPhone] = useState("09171234567");
   const [walletMpin, setWalletMpin] = useState("1234");
   const [isProcessing, setIsProcessing] = useState(false);
+
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => setModalAlert({ visible: true, title, message, type });
 
   useEffect(() => {
     loadCart();
@@ -44,7 +62,11 @@ export default function CartScreen() {
     try {
       const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
       if (storedCart) {
-        setCartItems(JSON.parse(storedCart));
+        const parsed = JSON.parse(storedCart);
+        setCartItems(parsed);
+        if (parsed.length > 0 && !selectedMerchantName) {
+          setSelectedMerchantName(parsed[0].establishment || "Partner Merchant");
+        }
       }
     } catch (e) {
       console.log("Cart load error:", e);
@@ -53,14 +75,28 @@ export default function CartScreen() {
 
   const updateCartStorage = async (updated: any[]) => {
     setCartItems(updated);
+    if (updated.length === 0) {
+      await AsyncStorage.removeItem(CART_STORAGE_KEY);
+      setSelectedMerchantName(null);
+      return;
+    }
     await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(updated));
+    if (
+      selectedMerchantName &&
+      !updated.some((i) => i.establishment === selectedMerchantName)
+    ) {
+      setSelectedMerchantName(updated[0]?.establishment || null);
+    }
   };
 
   const changeQty = (id: string, delta: number) => {
     const updated = cartItems.map((item) => {
       if (item.id === id) {
         const maxStock = Number(item.maxStock || item.quantity || 99);
-        const nextQty = Math.max(1, Math.min(maxStock, Number(item.quantity || 1) + delta));
+        const nextQty = Math.max(
+          1,
+          Math.min(maxStock, Number(item.quantity || 1) + delta)
+        );
         return { ...item, quantity: nextQty };
       }
       return item;
@@ -73,13 +109,28 @@ export default function CartScreen() {
     updateCartStorage(updated);
   };
 
-  const subtotal = cartItems.reduce(
+  // Group Cart Items by Food Merchant
+  const merchantGroups: { [merchantName: string]: any[] } = {};
+  cartItems.forEach((item) => {
+    const mName = item.establishment || "Partner Establishment";
+    if (!merchantGroups[mName]) merchantGroups[mName] = [];
+    merchantGroups[mName].push(item);
+  });
+  const merchantNames = Object.keys(merchantGroups);
+
+  const activeMerchantItems = selectedMerchantName
+    ? merchantGroups[selectedMerchantName] || []
+    : [];
+
+  const subtotal = activeMerchantItems.reduce(
     (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
     0
   );
-  const originalTotal = cartItems.reduce(
+  const originalTotal = activeMerchantItems.reduce(
     (sum, item) =>
-      sum + Number(item.originalPrice || item.price || 0) * Number(item.quantity || 1),
+      sum +
+      Number(item.originalPrice || item.price || 0) *
+        Number(item.quantity || 1),
     0
   );
   const downpaymentFee = Math.round(subtotal * 0.1 * 100) / 100;
@@ -87,19 +138,25 @@ export default function CartScreen() {
   const totalSavings = Math.max(0, originalTotal - subtotal);
 
   const handleOpenGateway = () => {
-    if (cartItems.length === 0) {
-      alert("Your Rescue Cart is empty. Please add food items first.");
+    if (!selectedMerchantName || activeMerchantItems.length === 0) {
+      showModal(
+        "Select a Merchant",
+        "Please tap on a Food Merchant card above to review and reserve its listings.",
+        "warning"
+      );
       return;
     }
     setGatewayModalVisible(true);
   };
 
-  const handlePayMongoLiveCheckout = async () => {
+  const handleXenditLiveCheckout = async () => {
     setIsProcessing(true);
     try {
       const pmRes = await api.post("listings/paymongo-checkout/", {
         amount: downpaymentFee,
-        description: `RESERVE 10% Deposit (${cartItems.map((i) => i.name).join(", ")})`,
+        description: `RESERVE 10% Deposit at ${selectedMerchantName} (${activeMerchantItems
+          .map((i) => i.name)
+          .join(", ")})`,
         payment_method: paymentMethod,
       });
 
@@ -110,12 +167,13 @@ export default function CartScreen() {
           Linking.openURL(pmRes.data.checkout_url);
         }
       }
-      // Record the reservation order in Supabase
       await handleConfirmOnlineDeposit();
     } catch (err: any) {
-      alert(
+      showModal(
+        "Xendit Gateway Error",
         err.response?.data?.error ||
-          "PayMongo Live Gateway requires PAYMONGO_SECRET_KEY in .env. You can use the Instant Simulator button below!"
+          "Check XENDIT_SECRET_KEY in .env or use the Instant Authorize button below.",
+        "error"
       );
       setIsProcessing(false);
     }
@@ -123,7 +181,11 @@ export default function CartScreen() {
 
   const handleConfirmOnlineDeposit = async () => {
     if (!walletPhone.trim() || walletMpin.trim().length < 4) {
-      alert("Please enter a valid mobile number and 4-digit MPIN.");
+      showModal(
+        "Details Required",
+        "Please enter a valid mobile number and 4-digit MPIN.",
+        "warning"
+      );
       return;
     }
 
@@ -136,26 +198,42 @@ export default function CartScreen() {
         action: "checkout",
         email: email,
         payment_method: paymentMethod,
-        items: cartItems,
+        items: activeMerchantItems,
       });
 
-      await AsyncStorage.removeItem(CART_STORAGE_KEY);
-      setCartItems([]);
+      // Clear all checked-out items for this merchant from storage & state
+      const checkedOutIds = new Set(
+        activeMerchantItems.map((i: any) => String(i.id))
+      );
+      const remainingCart = cartItems.filter(
+        (item) =>
+          !checkedOutIds.has(String(item.id)) &&
+          (item.establishment || "Partner Establishment") !== selectedMerchantName
+      );
+
+      if (remainingCart.length === 0) {
+        await AsyncStorage.removeItem(CART_STORAGE_KEY);
+        setCartItems([]);
+        setSelectedMerchantName(null);
+      } else {
+        await updateCartStorage(remainingCart);
+      }
       setGatewayModalVisible(false);
 
-      const latestClaim = res.data?.claims?.[0];
+      const confirmedVoucher =
+        res.data?.voucher_code || res.data?.claims?.[0]?.voucher_code || "";
       router.replace({
         pathname: "/consumer/claims" as any,
         params: {
           justConfirmed: "true",
-          voucher: latestClaim?.voucher_code || "",
+          voucher: confirmedVoucher,
         },
       });
     } catch (error: any) {
       const msg =
         error.response?.data?.error ||
         "Could not process reservation. Please check stock availability.";
-      alert(msg);
+      showModal("Reservation Error", msg, "error");
     } finally {
       setIsProcessing(false);
     }
@@ -174,7 +252,7 @@ export default function CartScreen() {
 
         <View style={styles.locationPill}>
           <Ionicons name="location-outline" size={13} color={Colors.primary} />
-          <Text style={styles.locationText}>Cebu / Lapu-Lapu</Text>
+          <Text style={styles.locationText}>Cebu City</Text>
         </View>
       </View>
 
@@ -183,80 +261,174 @@ export default function CartScreen() {
         contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.titleSection}>
-          <Text style={styles.pageTitle}>Rescue Cart</Text>
+          <Text style={styles.pageTitle}>My Rescue Cart</Text>
           <Text style={styles.pageSubtitle}>
-            Review your selected rescue items before paying the 10% reservation deposit.
+            Items are separated by Food Merchant for distinct pickups. Tap a merchant below to view its items, payment, and order summary.
           </Text>
         </View>
 
-        {/* DYNAMIC CART ITEMS */}
-        {cartItems.length > 0 ? (
-          cartItems.map((item) => (
-            <View key={item.id} style={styles.cartCard}>
-              <Image source={{ uri: item.image }} style={styles.productImage} />
+        {merchantNames.length > 0 ? (
+          merchantNames.map((mName) => {
+            const mItems = merchantGroups[mName];
+            const isSelected = selectedMerchantName === mName;
+            const mSubtotal = mItems.reduce(
+              (sum, it) => sum + Number(it.price || 0) * Number(it.quantity || 1),
+              0
+            );
 
-              <View style={styles.productInfo}>
-                <View style={styles.productTopRow}>
-                  <View style={styles.productNameContainer}>
-                    <Text style={styles.productName} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text style={styles.establishmentName} numberOfLines={1}>
-                      {item.establishment}
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity
-                    style={styles.deleteButton}
-                    onPress={() => removeItem(item.id)}
-                  >
-                    <Ionicons name="trash-outline" size={18} color="#B3261E" />
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.productDetail}>
-                  <Ionicons name="time-outline" size={12} color={Colors.icon} />
-                  <Text style={styles.productDetailText}>
-                    Pickup before {item.expiryDate} {item.expiryTime}
-                  </Text>
-                </View>
-
-                <View style={styles.productBottomRow}>
-                  <View>
-                    <Text style={styles.currentPrice}>
-                      ₱{Number(item.price || 0).toFixed(2)}
-                    </Text>
-                    {Number(item.originalPrice || 0) > Number(item.price || 0) && (
-                      <Text style={styles.oldPrice}>
-                        ₱{Number(item.originalPrice).toFixed(2)}
+            return (
+              <View
+                key={mName}
+                style={[
+                  styles.merchantGroupCard,
+                  isSelected && styles.merchantGroupCardActive,
+                ]}
+              >
+                {/* CLICKABLE MERCHANT HEADER */}
+                <TouchableOpacity
+                  style={styles.merchantHeaderBar}
+                  activeOpacity={0.85}
+                  onPress={() =>
+                    setSelectedMerchantName(isSelected ? null : mName)
+                  }
+                >
+                  <View style={styles.merchantHeaderLeft}>
+                    <View
+                      style={[
+                        styles.merchantRadio,
+                        isSelected && styles.merchantRadioActive,
+                      ]}
+                    >
+                      {isSelected && <View style={styles.merchantRadioDot} />}
+                    </View>
+                    <Ionicons
+                      name="storefront-outline"
+                      size={18}
+                      color={Colors.primary}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.merchantTitleText} numberOfLines={1}>
+                        {mName}
                       </Text>
-                    )}
+                      <Text style={styles.merchantSubText}>
+                        {mItems.length} listing{mItems.length > 1 ? "s" : ""} •
+                        Subtotal: ₱{mSubtotal.toFixed(2)}
+                      </Text>
+                    </View>
                   </View>
+                  <View style={styles.selectMerchantBadge}>
+                    <Text style={styles.selectMerchantBadgeText}>
+                      {isSelected ? "Selected ✓" : "Tap to Reserve"}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
 
-                  <View style={styles.quantityContainer}>
-                    <TouchableOpacity
-                      style={styles.quantityButton}
-                      onPress={() => changeQty(item.id, -1)}
-                    >
-                      <Ionicons name="remove" size={15} color={Colors.primary} />
-                    </TouchableOpacity>
-                    <Text style={styles.quantityText}>{item.quantity}</Text>
-                    <TouchableOpacity
-                      style={styles.quantityButton}
-                      onPress={() => changeQty(item.id, 1)}
-                    >
-                      <Ionicons name="add" size={15} color={Colors.primary} />
-                    </TouchableOpacity>
-                  </View>
+                {/* ALL LISTINGS ADDED UNDER THIS MERCHANT */}
+                <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
+                  {mItems.map((item) => (
+                    <View key={item.id} style={styles.cartCard}>
+                      <Image
+                        source={{ uri: item.image }}
+                        style={styles.productImage}
+                      />
+
+                      <View style={styles.productInfo}>
+                        <View style={styles.productTopRow}>
+                          <View style={styles.productNameContainer}>
+                            <Text style={styles.productName} numberOfLines={1}>
+                              {item.name}
+                            </Text>
+                            <Text
+                              style={styles.establishmentName}
+                              numberOfLines={1}
+                            >
+                              {item.establishment}
+                            </Text>
+                          </View>
+
+                          <TouchableOpacity
+                            style={styles.deleteButton}
+                            onPress={() => removeItem(item.id)}
+                          >
+                            <Ionicons
+                              name="trash-outline"
+                              size={18}
+                              color="#B3261E"
+                            />
+                          </TouchableOpacity>
+                        </View>
+
+                        <View style={styles.productDetail}>
+                          <Ionicons
+                            name="time-outline"
+                            size={12}
+                            color="#A94A3A"
+                          />
+                          <Text
+                            style={[
+                              styles.productDetailText,
+                              { color: "#A94A3A", fontFamily: "PoppinsMedium" },
+                            ]}
+                          >
+                            Exp: {item.expiryDate} • {item.expiryTime}
+                          </Text>
+                        </View>
+
+                        <View style={styles.productBottomRow}>
+                          <View>
+                            <Text style={styles.currentPrice}>
+                              ₱{Number(item.price || 0).toFixed(2)}
+                            </Text>
+                            {Number(item.originalPrice || 0) >
+                              Number(item.price || 0) && (
+                              <Text style={styles.oldPrice}>
+                                ₱{Number(item.originalPrice).toFixed(2)}
+                              </Text>
+                            )}
+                          </View>
+
+                          <View style={styles.quantityContainer}>
+                            <TouchableOpacity
+                              style={styles.quantityButton}
+                              onPress={() => changeQty(item.id, -1)}
+                            >
+                              <Ionicons
+                                name="remove"
+                                size={15}
+                                color={Colors.primary}
+                              />
+                            </TouchableOpacity>
+                            <Text style={styles.quantityText}>
+                              {item.quantity}
+                            </Text>
+                            <TouchableOpacity
+                              style={styles.quantityButton}
+                              onPress={() => changeQty(item.id, 1)}
+                            >
+                              <Ionicons
+                                name="add"
+                                size={15}
+                                color={Colors.primary}
+                              />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </View>
+                    </View>
+                  ))}
                 </View>
               </View>
-            </View>
-          ))
+            );
+          })
         ) : (
           <View
             style={[
               styles.cartCard,
-              { flexDirection: "column", alignItems: "center", paddingVertical: 28 },
+              {
+                flexDirection: "column",
+                alignItems: "center",
+                paddingVertical: 28,
+              },
             ]}
           >
             <Ionicons name="cart-outline" size={32} color={Colors.icon} />
@@ -278,155 +450,180 @@ export default function CartScreen() {
           <Text style={styles.addMoreText}>Add more items</Text>
         </TouchableOpacity>
 
-        {/* PICKUP NOTICE */}
-        {cartItems.length > 0 && (
-          <View style={styles.noticeCard}>
-            <View style={styles.noticeIconContainer}>
-              <Ionicons
-                name="information-circle-outline"
-                size={18}
-                color={Colors.primary}
-              />
-            </View>
-            <View style={styles.noticeContent}>
-              <Text style={styles.noticeTitle}>Anti No-Show Reservation Policy</Text>
-              <Text style={styles.noticeText}>
-                You only pay the{" "}
-                <Text style={styles.noticeBold}>
-                  10% Downpayment (₱{downpaymentFee.toFixed(2)})
-                </Text>{" "}
-                online now to lock your order at{" "}
-                <Text style={styles.noticeBold}>{cartItems[0].establishment}</Text>.
-                Pay the remaining{" "}
-                <Text style={styles.noticeBold}>
-                  90% (₱{remainingBalance.toFixed(2)})
-                </Text>{" "}
-                directly to the store upon pickup.
-              </Text>
-            </View>
-          </View>
-        )}
-
-        {/* PAYMENT METHOD */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Online Deposit Method (10%)</Text>
-          <Text style={styles.requiredText}>Required</Text>
-        </View>
-
-        <View style={styles.paymentCard}>
-          {(["GCash", "PayMaya", "Google Pay"] as const).map((method, idx) => {
-            const active = paymentMethod === method;
-            return (
-              <TouchableOpacity
-                key={method}
-                style={[
-                  styles.paymentOption,
-                  active && styles.paymentOptionActive,
-                  idx === 2 && styles.paymentOptionLast,
-                ]}
-                activeOpacity={0.88}
-                onPress={() => setPaymentMethod(method)}
-              >
-                <View style={styles.paymentLeft}>
-                  <View style={styles.paymentIconContainer}>
-                    <Ionicons
-                      name={
-                        method === "GCash"
-                          ? "wallet-outline"
-                          : method === "PayMaya"
-                          ? "card-outline"
-                          : "logo-google"
-                      }
-                      size={18}
-                      color={active ? Colors.primary : Colors.icon}
-                    />
-                  </View>
-                  <Text
-                    style={[
-                      styles.paymentText,
-                      active && styles.paymentTextActive,
-                    ]}
-                  >
-                    {method}
-                  </Text>
-                </View>
-                {active ? (
-                  <View style={styles.radioActive}>
-                    <View style={styles.radioDot} />
-                  </View>
-                ) : (
-                  <View style={styles.radio} />
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* ORDER SUMMARY */}
-        <Text style={styles.sectionTitle}>Order Summary</Text>
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Original Retail Value</Text>
-            <Text style={styles.originalTotal}>₱{originalTotal.toFixed(2)}</Text>
-          </View>
-
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Discounted Rescue Subtotal</Text>
-            <Text style={styles.summaryValue}>₱{subtotal.toFixed(2)}</Text>
-          </View>
-
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Total Rescue Savings</Text>
-            <Text style={styles.savingsText}>-₱{totalSavings.toFixed(2)}</Text>
-          </View>
-
-          <View style={styles.divider} />
-
-          <View style={styles.summaryRow}>
-            <View style={styles.summaryLabelRow}>
-              <Text style={styles.summaryLabel}>
-                Remaining Balance (Pay at Store Pickup)
-              </Text>
-              <View style={styles.feeBadge}>
-                <Text style={styles.feeBadgeText}>90%</Text>
+        {/* PAYMENT & ORDER SUMMARY FOR THE SELECTED MERCHANT */}
+        {selectedMerchantName && activeMerchantItems.length > 0 && (
+          <>
+            <View style={styles.noticeCard}>
+              <View style={styles.noticeIconContainer}>
+                <Ionicons
+                  name="information-circle-outline"
+                  size={18}
+                  color={Colors.primary}
+                />
+              </View>
+              <View style={styles.noticeContent}>
+                <Text style={styles.noticeTitle}>
+                  Reserving Pickup for: {selectedMerchantName}
+                </Text>
+                <Text style={styles.noticeText}>
+                  Pay the{" "}
+                  <Text style={styles.noticeBold}>
+                    10% Downpayment (₱{downpaymentFee.toFixed(2)})
+                  </Text>{" "}
+                  online now via Xendit to lock your order at{" "}
+                  <Text style={styles.noticeBold}>{selectedMerchantName}</Text>.
+                  Pay the remaining{" "}
+                  <Text style={styles.noticeBold}>
+                    90% (₱{remainingBalance.toFixed(2)})
+                  </Text>{" "}
+                  in cash upon pickup.
+                </Text>
               </View>
             </View>
-            <Text style={styles.summaryValue}>
-              ₱{remainingBalance.toFixed(2)}
-            </Text>
-          </View>
 
-          <View style={styles.grandTotalRow}>
-            <View>
-              <Text style={styles.grandTotalLabel}>10% Reservation Deposit</Text>
-              <Text style={styles.grandTotalSubtext}>
-                Payable online now via {paymentMethod}
+            {/* PAYMENT METHOD — STRICTLY GCASH & MAYA VIA XENDIT */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>
+                Xendit Online Payment Method (10%)
               </Text>
+              <Text style={styles.requiredText}>GCash / Maya Only</Text>
             </View>
-            <Text style={styles.grandTotal}>₱{downpaymentFee.toFixed(2)}</Text>
-          </View>
-        </View>
 
-        {/* CHECKOUT */}
-        <TouchableOpacity
-          style={styles.checkoutButton}
-          activeOpacity={0.88}
-          onPress={handleOpenGateway}
-        >
-          <Ionicons name="lock-closed-outline" size={16} color={Colors.white} />
-          <Text style={styles.checkoutText}>
-            Pay ₱{downpaymentFee.toFixed(2)} Deposit & Reserve
-          </Text>
-          <Ionicons name="arrow-forward" size={16} color={Colors.white} />
-        </TouchableOpacity>
+            <View style={styles.paymentCard}>
+              {(["GCash", "Maya"] as const).map((method, idx) => {
+                const active = paymentMethod === method;
+                return (
+                  <TouchableOpacity
+                    key={method}
+                    style={[
+                      styles.paymentOption,
+                      active && styles.paymentOptionActive,
+                      idx === 1 && styles.paymentOptionLast,
+                    ]}
+                    activeOpacity={0.88}
+                    onPress={() => setPaymentMethod(method)}
+                  >
+                    <View style={styles.paymentLeft}>
+                      <View style={styles.paymentIconContainer}>
+                        <Ionicons
+                          name={
+                            method === "GCash"
+                              ? "wallet-outline"
+                              : "card-outline"
+                          }
+                          size={18}
+                          color={active ? Colors.primary : Colors.icon}
+                        />
+                      </View>
+                      <View>
+                        <Text
+                          style={[
+                            styles.paymentText,
+                            active && styles.paymentTextActive,
+                          ]}
+                        >
+                          {method} (via Xendit Gateway)
+                        </Text>
+                      </View>
+                    </View>
+                    {active ? (
+                      <View style={styles.radioActive}>
+                        <View style={styles.radioDot} />
+                      </View>
+                    ) : (
+                      <View style={styles.radio} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
-        <Text style={styles.secureText}>
-          Secure checkout • Generates your official QR Rescue Voucher
-        </Text>
+            {/* ORDER SUMMARY FOR SELECTED MERCHANT */}
+            <Text style={styles.sectionTitle}>
+              Order Summary — {selectedMerchantName}
+            </Text>
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Original Retail Value</Text>
+                <Text style={styles.originalTotal}>
+                  ₱{originalTotal.toFixed(2)}
+                </Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>
+                  Discounted Rescue Subtotal ({activeMerchantItems.length} item
+                  {activeMerchantItems.length > 1 ? "s" : ""})
+                </Text>
+                <Text style={styles.summaryValue}>₱{subtotal.toFixed(2)}</Text>
+              </View>
+
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Total Rescue Savings</Text>
+                <Text style={styles.savingsText}>
+                  -₱{totalSavings.toFixed(2)}
+                </Text>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.summaryRow}>
+                <View style={styles.summaryLabelRow}>
+                  <Text style={styles.summaryLabel}>
+                    Remaining Balance (Pay at Store Pickup)
+                  </Text>
+                  <View style={styles.feeBadge}>
+                    <Text style={styles.feeBadgeText}>90%</Text>
+                  </View>
+                </View>
+                <Text style={styles.summaryValue}>
+                  ₱{remainingBalance.toFixed(2)}
+                </Text>
+              </View>
+
+              <View style={styles.grandTotalRow}>
+                <View>
+                  <Text style={styles.grandTotalLabel}>
+                    10% Reservation Deposit
+                  </Text>
+                  <Text style={styles.grandTotalSubtext}>
+                    Payable online now via Xendit ({paymentMethod})
+                  </Text>
+                </View>
+                <Text style={styles.grandTotal}>
+                  ₱{downpaymentFee.toFixed(2)}
+                </Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.checkoutButton}
+              activeOpacity={0.88}
+              onPress={handleOpenGateway}
+            >
+              <Ionicons
+                name="lock-closed-outline"
+                size={16}
+                color={Colors.white}
+              />
+              <Text style={styles.checkoutText}>
+                Pay ₱{downpaymentFee.toFixed(2)} Deposit for{" "}
+                {selectedMerchantName}
+              </Text>
+              <Ionicons name="arrow-forward" size={16} color={Colors.white} />
+            </TouchableOpacity>
+
+            <Text style={styles.secureText}>
+              Powered by Xendit ({paymentMethod}) • Generates your official QR
+              Rescue Voucher
+            </Text>
+          </>
+        )}
+
         <View style={styles.bottomSpace} />
       </ScrollView>
 
-      {/* DUAL PAYMENT MODAL: LIVE PAYMONGO GATEWAY + INSTANT SIMULATOR */}
+      {/* XENDIT CHECKOUT MODAL (GCASH / MAYA) */}
       <Modal
         visible={gatewayModalVisible}
         transparent
@@ -436,10 +633,16 @@ export default function CartScreen() {
         <View style={styles.gatewayOverlay}>
           <View style={styles.gatewayCard}>
             <View style={styles.gatewayHeader}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Ionicons name="shield-checkmark" size={20} color={Colors.white} />
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+              >
+                <Ionicons
+                  name="shield-checkmark"
+                  size={20}
+                  color={Colors.white}
+                />
                 <Text style={styles.gatewayHeaderTitle}>
-                  {paymentMethod} Express Checkout
+                  Xendit {paymentMethod} Checkout
                 </Text>
               </View>
               <TouchableOpacity onPress={() => setGatewayModalVisible(false)}>
@@ -450,14 +653,13 @@ export default function CartScreen() {
             <View style={{ padding: 18 }}>
               <View style={styles.gatewayAmountBox}>
                 <Text style={styles.gatewayAmountLabel}>
-                  10% RESERVATION DEPOSIT DUE NOW
+                  10% RESERVATION DEPOSIT DUE NOW ({selectedMerchantName})
                 </Text>
                 <Text style={styles.gatewayAmountValue}>
                   ₱{downpaymentFee.toFixed(2)}
                 </Text>
                 <Text style={styles.gatewayMerchantNote}>
-                  Merchant: ReServe Escrow • Balance at Pickup: ₱
-                  {remainingBalance.toFixed(2)}
+                  90% Balance at Pickup: ₱{remainingBalance.toFixed(2)}
                 </Text>
               </View>
 
@@ -486,18 +688,21 @@ export default function CartScreen() {
               <TouchableOpacity
                 style={styles.gatewayPayBtn}
                 activeOpacity={0.85}
-                onPress={handlePayMongoLiveCheckout}
+                onPress={handleXenditLiveCheckout}
                 disabled={isProcessing}
               >
                 <Text style={styles.gatewayPayBtnText}>
                   {isProcessing
-                    ? "OPENING PAYMONGO GATEWAY..."
-                    : `Pay ₱${downpaymentFee.toFixed(2)} via Live PayMongo (${paymentMethod})`}
+                    ? "OPENING XENDIT GATEWAY..."
+                    : `Pay ₱${downpaymentFee.toFixed(2)} via Live Xendit (${paymentMethod})`}
                 </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.gatewayPayBtn, { backgroundColor: Colors.primary2, marginTop: 8 }]}
+                style={[
+                  styles.gatewayPayBtn,
+                  { backgroundColor: Colors.primary2, marginTop: 8 },
+                ]}
                 activeOpacity={0.85}
                 onPress={handleConfirmOnlineDeposit}
                 disabled={isProcessing}
@@ -512,6 +717,14 @@ export default function CartScreen() {
           </View>
         </View>
       </Modal>
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
+      />
 
       {/* BOTTOM NAVIGATION */}
       <View style={styles.bottomNav}>
@@ -565,9 +778,20 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 },
   titleSection: { marginBottom: 16 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
-  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 2 },
-  cartCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 12, flexDirection: "row", marginBottom: 12 },
-  productImage: { width: 90, height: 100, borderRadius: 10, backgroundColor: Colors.input },
+  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2, lineHeight: 17 },
+  merchantGroupCard: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.border, marginBottom: 16, overflow: "hidden" },
+  merchantGroupCardActive: { borderColor: Colors.primary, backgroundColor: "#F9FCFA" },
+  merchantHeaderBar: { backgroundColor: "#E8EFEA", paddingHorizontal: 14, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  merchantHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1 },
+  merchantRadio: { width: 18, height: 18, borderRadius: 9, borderWidth: 1.5, borderColor: Colors.primary1, alignItems: "center", justifyContent: "center", backgroundColor: Colors.white },
+  merchantRadioActive: { borderColor: Colors.primary },
+  merchantRadioDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: Colors.primary },
+  merchantTitleText: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2 },
+  merchantSubText: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1 },
+  selectMerchantBadge: { backgroundColor: Colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  selectMerchantBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.white },
+  cartCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 12, flexDirection: "row", marginBottom: 10 },
+  productImage: { width: 84, height: 90, borderRadius: 10, backgroundColor: Colors.input },
   productInfo: { flex: 1, marginLeft: 12, justifyContent: "space-between" },
   productTopRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
   productNameContainer: { flex: 1, paddingRight: 6 },
@@ -587,12 +811,12 @@ const styles = StyleSheet.create({
   noticeCard: { backgroundColor: "#E8EFEA", borderWidth: 1, borderColor: Colors.border, borderRadius: 12, padding: 12, flexDirection: "row", gap: 10, marginBottom: 20 },
   noticeIconContainer: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
   noticeContent: { flex: 1 },
-  noticeTitle: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, marginBottom: 2 },
+  noticeTitle: { fontFamily: "PoppinsSemiBold", fontSize: 11.5, color: Colors.primary2, marginBottom: 2 },
   noticeText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 16 },
   noticeBold: { fontFamily: "PoppinsSemiBold", color: Colors.primary2 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
   sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2, marginBottom: 6 },
-  requiredText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
+  requiredText: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
   paymentCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, overflow: "hidden", marginBottom: 16 },
   paymentOption: { height: 54, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: Colors.border },
   paymentOptionLast: { borderBottomWidth: 0 },
@@ -632,11 +856,11 @@ const styles = StyleSheet.create({
   gatewayHeader: { backgroundColor: Colors.primary, paddingHorizontal: 18, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   gatewayHeaderTitle: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.white },
   gatewayAmountBox: { backgroundColor: "#F3F6F4", borderRadius: 12, padding: 14, alignItems: "center", marginBottom: 14, borderWidth: 1, borderColor: Colors.border },
-  gatewayAmountLabel: { fontFamily: "PoppinsSemiBold", fontSize: 9.5, color: Colors.primary1 },
+  gatewayAmountLabel: { fontFamily: "PoppinsSemiBold", fontSize: 9.5, color: Colors.primary1, textAlign: "center" },
   gatewayAmountValue: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary, marginVertical: 2 },
   gatewayMerchantNote: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon },
   gatewayInputLabel: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, marginBottom: 4, marginTop: 6 },
   gatewayInput: { height: 44, borderWidth: 1, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 12, fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.primary2, backgroundColor: Colors.input },
   gatewayPayBtn: { height: 46, backgroundColor: Colors.button, borderRadius: 11, alignItems: "center", justifyContent: "center", marginTop: 18 },
-  gatewayPayBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.white },
+  gatewayPayBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.white },
 });

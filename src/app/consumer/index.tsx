@@ -14,8 +14,13 @@ import {
 } from "react-native";
 
 import { Colors } from "@/constants/color";
-import axios from "axios";
 import * as SecureStore from "expo-secure-store";
+import { api } from "../../../services/api";
+import {
+  ForgotPasswordEmailModal,
+  ReserveAlertModal,
+  ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
 
 // Cross-platform storage helper (prevents SecureStore crash on Web)
 const saveStorageItem = async (key: string, value: string) => {
@@ -34,6 +39,22 @@ export default function LoginScreen() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [forgotModalVisible, setForgotModalVisible] = useState(false);
+
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => {
+    setModalAlert({ visible: true, title, message, type });
+  };
 
   const isVeryShortPhone = height < 620;
   const isShortPhone = height < 700;
@@ -42,15 +63,19 @@ export default function LoginScreen() {
   const horizontalPadding = isNarrowPhone ? 16 : width < 400 ? 20 : 28;
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      alert("Please enter both email and password.");
+    if (!email.trim() || !password) {
+      showModal(
+        "Credentials Required",
+        "Please enter both your email address and password.",
+        "warning"
+      );
       return;
     }
 
     setIsLoading(true);
     try {
-      const response = await axios.post("http://127.0.0.1:8000/api/accounts/login/", {
-        user_email: email,
+      const response = await api.post("accounts/login/", {
+        user_email: email.trim(),
         user_pass: password,
       });
 
@@ -68,8 +93,10 @@ export default function LoginScreen() {
       } = response.data;
 
       if (account_status === "Suspended") {
-        alert(
-          `ACCOUNT SUSPENDED\n\nReason: ${status_reason || "Policy Violation"}\n\nPlease check your email for the official appeal link to reactivate your account.`
+        showModal(
+          "Account Suspended",
+          `Reason: ${status_reason || "Policy Violation"}\n\nPlease check your email for the official appeal link to reactivate your account.`,
+          "error"
         );
         return;
       }
@@ -77,7 +104,7 @@ export default function LoginScreen() {
       await saveStorageItem("access", access);
       await saveStorageItem("refresh", refresh);
       await saveStorageItem("user_role", role);
-      await saveStorageItem("user_email", returnedEmail || email);
+      await saveStorageItem("user_email", returnedEmail || email.trim());
       await saveStorageItem("profile_id", String(profile_id || "1"));
       await saveStorageItem("entity_name", entity_name || "");
       await saveStorageItem("merch_type", merch_type || "Bakeshop");
@@ -87,7 +114,8 @@ export default function LoginScreen() {
 
       if (
         (role === "Merchant" || role === "FoodBank") &&
-        (account_status === "Resubmit Required" || account_status === "Renewal Required")
+        (account_status === "Resubmit Required" ||
+          account_status === "Renewal Required")
       ) {
         router.replace({
           pathname: "/establishment/resubmit-permit" as any,
@@ -103,9 +131,14 @@ export default function LoginScreen() {
         return;
       }
 
-      if ((role === "Merchant" || role === "FoodBank") && account_status === "Pending") {
-        alert(
-          "Your application is currently under review by the ReServe Admin team. You will receive an email once verified!"
+      if (
+        (role === "Merchant" || role === "FoodBank") &&
+        account_status === "Pending"
+      ) {
+        showModal(
+          "Application Under Review",
+          "Your application is currently under review by the ReServe Admin team. You will receive an email once verified!",
+          "info"
         );
         return;
       }
@@ -123,11 +156,19 @@ export default function LoginScreen() {
       }
     } catch (error) {
       const err = error as any;
-      const errorMessage =
-        err.response?.data?.error ||
-        err.response?.data?.non_field_errors?.[0] ||
-        "Failed to log in. Check your credentials.";
-      alert(errorMessage);
+      if (!err.response) {
+        showModal(
+          "Network Connection Error",
+          `Cannot reach ${api.defaults.baseURL} from your device. Make sure Django is running with "python manage.py runserver 0.0.0.0:8000" and both devices are on the same Wi-Fi.`,
+          "error"
+        );
+      } else {
+        const errorMessage =
+          err.response?.data?.error ||
+          err.response?.data?.non_field_errors?.[0] ||
+          "Failed to log in. Please check your credentials.";
+        showModal("Login Failed", errorMessage, "error");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -273,7 +314,7 @@ export default function LoginScreen() {
             </View>
           </View>
 
-          {/* PASSWORD (FIXED LABEL & INPUT BINDING) */}
+          {/* PASSWORD */}
           <View
             style={[
               styles.fieldContainer,
@@ -283,12 +324,25 @@ export default function LoginScreen() {
             ]}
           >
             <View style={styles.passwordLabelRow}>
-              <Text style={[styles.label, { fontSize: isVeryShortPhone ? 11 : 12, marginBottom: 0 }]}>
+              <Text
+                style={[
+                  styles.label,
+                  { fontSize: isVeryShortPhone ? 11 : 12, marginBottom: 0 },
+                ]}
+              >
                 Password
               </Text>
 
-              <TouchableOpacity activeOpacity={0.7}>
-                <Text style={[styles.forgotText, { fontSize: isVeryShortPhone ? 9 : 10, marginBottom: 0 }]}>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => setForgotModalVisible(true)}
+              >
+                <Text
+                  style={[
+                    styles.forgotText,
+                    { fontSize: isVeryShortPhone ? 9 : 10, marginBottom: 0 },
+                  ]}
+                >
                   Forgot Password?
                 </Text>
               </TouchableOpacity>
@@ -342,10 +396,19 @@ export default function LoginScreen() {
             onPress={handleLogin}
             disabled={isLoading}
           >
-            <Text style={[styles.loginButtonText, { fontSize: isVeryShortPhone ? 12 : 13 }]}>
+            <Text
+              style={[
+                styles.loginButtonText,
+                { fontSize: isVeryShortPhone ? 12 : 13 },
+              ]}
+            >
               {isLoading ? "LOGGING IN..." : "LOG IN"}
             </Text>
-            <Ionicons name="arrow-forward" size={isVeryShortPhone ? 16 : 18} color={Colors.white} />
+            <Ionicons
+              name="arrow-forward"
+              size={isVeryShortPhone ? 16 : 18}
+              color={Colors.white}
+            />
           </TouchableOpacity>
 
           {/* DIVIDER */}
@@ -379,7 +442,10 @@ export default function LoginScreen() {
             >
               <Image
                 source={require("../../assets/google.png")}
-                style={{ width: isVeryShortPhone ? 19 : 22, height: isVeryShortPhone ? 19 : 22 }}
+                style={{
+                  width: isVeryShortPhone ? 19 : 22,
+                  height: isVeryShortPhone ? 19 : 22,
+                }}
                 resizeMode="contain"
               />
             </TouchableOpacity>
@@ -397,7 +463,10 @@ export default function LoginScreen() {
             >
               <Image
                 source={require("../../assets/facebook.png")}
-                style={{ width: isVeryShortPhone ? 22 : 25, height: isVeryShortPhone ? 22 : 25 }}
+                style={{
+                  width: isVeryShortPhone ? 22 : 25,
+                  height: isVeryShortPhone ? 22 : 25,
+                }}
                 resizeMode="contain"
               />
             </TouchableOpacity>
@@ -415,7 +484,10 @@ export default function LoginScreen() {
             >
               <Image
                 source={require("../../assets/github.png")}
-                style={{ width: isVeryShortPhone ? 21 : 24, height: isVeryShortPhone ? 21 : 24 }}
+                style={{
+                  width: isVeryShortPhone ? 21 : 24,
+                  height: isVeryShortPhone ? 21 : 24,
+                }}
                 resizeMode="contain"
               />
             </TouchableOpacity>
@@ -438,8 +510,11 @@ export default function LoginScreen() {
               activeOpacity={0.7}
               onPress={() => router.push("/consumer/account-type")}
             >
-              <Text style={[styles.signupLink, { fontSize: isVeryShortPhone ? 9 : 10 }]}>
-                {" "}Sign up
+              <Text
+                style={[styles.signupLink, { fontSize: isVeryShortPhone ? 9 : 10 }]}
+              >
+                {" "}
+                Sign up
               </Text>
             </TouchableOpacity>
           </View>
@@ -449,6 +524,22 @@ export default function LoginScreen() {
           <Text style={styles.bottomText}>Save food. Support communities.</Text>
         )}
       </View>
+
+      {/* FORGOT PASSWORD EMAIL LINK MODAL */}
+      <ForgotPasswordEmailModal
+        visible={forgotModalVisible}
+        initialEmail={email}
+        onClose={() => setForgotModalVisible(false)}
+      />
+
+      {/* THEMED ALERT MODAL */}
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
+      />
     </KeyboardAvoidingView>
   );
 }

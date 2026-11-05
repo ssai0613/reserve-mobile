@@ -3,10 +3,10 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, Stack } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  Alert,
   Image,
+  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -17,12 +17,35 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
 import { api } from "../../../services/api";
+import {
+  ReserveAlertModal,
+  ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
+
+type ReviewItem = {
+  id: number;
+  consumer: string;
+  score: number;
+  comment: string;
+  date: string;
+};
 
 type FoodItem = {
   id: string;
   name: string;
+  description: string;
+  merchantId: number;
   establishment: string;
+  merchantAddress: string;
+  merchantLat: number;
+  merchantLng: number;
+  merchantAvgRating: number;
+  merchantReviewCount: number;
+  avgRating: number;
+  reviewCount: number;
+  reviews: ReviewItem[];
   price: number;
   originalPrice: number;
   floorPrice: number;
@@ -41,7 +64,13 @@ type FoodItem = {
 
 type Establishment = {
   id: string;
+  merchantId: number;
   name: string;
+  address: string;
+  lat: number;
+  lng: number;
+  avgRating: number;
+  reviewCount: number;
   category: string;
   distance: string;
   image: string;
@@ -181,6 +210,131 @@ const LiveCountdown = ({
   );
 };
 
+export function ShopLocationMapModal({
+  visible,
+  shopName,
+  address,
+  lat,
+  lng,
+  onClose,
+}: {
+  visible: boolean;
+  shopName: string;
+  address: string;
+  lat: number;
+  lng: number;
+  onClose: () => void;
+}) {
+  const safeLat = Number(lat) || 10.3157;
+  const safeLng = Number(lng) || 123.8854;
+
+  const mapHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+      <style>html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; -webkit-touch-callout: none; }</style>
+    </head>
+    <body>
+      <div id="map"></div>
+      <script>
+        var map = L.map('map', { zoomControl: true, tap: false }).setView([${safeLat}, ${safeLng}], 16);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '© OpenStreetMap'
+        }).addTo(map);
+        var marker = L.marker([${safeLat}, ${safeLng}]).addTo(map);
+        marker.bindPopup("<b>${shopName.replace(/"/g, "")}</b><br>${address.replace(/"/g, "")}").openPopup();
+      </script>
+    </body>
+    </html>
+  `;
+
+  const openExternalMaps = () => {
+    const googleUrl = `https://www.google.com/maps/search/?api=1&query=${safeLat},${safeLng}`;
+    const iosUrl = `maps:0,0?q=${encodeURIComponent(shopName)}@${safeLat},${safeLng}`;
+    if (Platform.OS === "web") {
+      window.open(googleUrl, "_blank");
+    } else if (Platform.OS === "ios") {
+      Linking.openURL(iosUrl).catch(() => Linking.openURL(googleUrl));
+    } else {
+      Linking.openURL(googleUrl);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalOverlayCenter}>
+        <View style={styles.mapModalCard}>
+          <View style={styles.modalHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.modalTitle} numberOfLines={1}>
+                {shopName}
+              </Text>
+              <Text
+                style={{ fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 }}
+                numberOfLines={1}
+              >
+                {address} ({safeLat.toFixed(4)}° N, {safeLng.toFixed(4)}° E)
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.modalCloseButton} onPress={onClose}>
+              <Ionicons name="close" size={18} color={Colors.primary2} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={{ height: 280, width: "100%", backgroundColor: "#E8EFEA" }}>
+            {Platform.OS === "web" ? (
+              React.createElement("iframe", {
+                srcDoc: mapHtml,
+                style: { width: "100%", height: "100%", border: "none" },
+                title: "Shop Map",
+              })
+            ) : (
+              <WebView
+                originWhitelist={["*"]}
+                source={{ html: mapHtml }}
+                style={{ flex: 1 }}
+                scrollEnabled={false}
+                bounces={false}
+                javaScriptEnabled={true}
+                domStorageEnabled={true}
+              />
+            )}
+          </View>
+
+          <View style={{ padding: 14, flexDirection: "row", gap: 10 }}>
+            <TouchableOpacity
+              style={[styles.addToCartButton, { flex: 1, marginTop: 0, backgroundColor: Colors.primary }]}
+              onPress={openExternalMaps}
+            >
+              <Ionicons name="navigate-outline" size={16} color={Colors.white} />
+              <Text style={styles.addToCartText}>Open in Maps App</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.addToCartButton,
+                {
+                  flex: 0.45,
+                  marginTop: 0,
+                  backgroundColor: Colors.input,
+                  borderWidth: 1,
+                  borderColor: Colors.border,
+                },
+              ]}
+              onPress={onClose}
+            >
+              <Text style={[styles.addToCartText, { color: Colors.primary2 }]}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function Homepage() {
   const [consumerName, setConsumerName] = useState("Consumer");
   const [consumerCity, setConsumerCity] = useState("Cebu City");
@@ -193,6 +347,32 @@ export default function Homepage() {
   const [dynamicEstablishments, setDynamicEstablishments] = useState<Establishment[]>([]);
   const [loading, setLoading] = useState(true);
   const [modalLivePrice, setModalLivePrice] = useState(0);
+
+  // Top Header Notifications & Announcements Modal
+  const [feedNotifs, setFeedNotifs] = useState<any[]>([]);
+  const [headerModalType, setHeaderModalType] = useState<"notifications" | "announcements" | null>(null);
+
+  // Selected Merchant Storefront Profile Modal + Map Modal
+  const [selectedMerchant, setSelectedMerchant] = useState<Establishment | null>(null);
+  const [mapModalTarget, setMapModalTarget] = useState<{
+    name: string;
+    address: string;
+    lat: number;
+    lng: number;
+  } | null>(null);
+
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => setModalAlert({ visible: true, title, message, type });
 
   useEffect(() => {
     loadConsumerIdentity();
@@ -215,6 +395,12 @@ export default function Homepage() {
       }
       if (res.data?.profile?.address) {
         setConsumerCity(res.data.profile.address);
+      }
+      if (Array.isArray(res.data?.notifications)) {
+        const sorted = [...res.data.notifications].sort(
+          (a, b) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0)
+        );
+        setFeedNotifs(sorted);
       }
     } catch (e) {}
   };
@@ -239,11 +425,9 @@ export default function Homepage() {
       const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
       if (storedCart) {
         const cart = JSON.parse(storedCart);
-        const totalItems = cart.reduce(
-          (total: number, item: any) => total + (item.quantity || 0),
-          0
-        );
-        setCartCount(totalItems);
+        setCartCount(Array.isArray(cart) ? cart.length : 0);
+      } else {
+        setCartCount(0);
       }
     } catch (error) {
       console.log("Error loading cart:", error);
@@ -268,14 +452,24 @@ export default function Homepage() {
           const discountVal =
             orig > current && orig > 0
               ? Math.round(((orig - current) / orig) * 100)
-              : 15;
+              : 0;
           const expDateStr = item.expiry_date || "Oct 25, 2026";
           const expTimeStr = item.expiry_time || "11:59 PM";
 
           return {
             id: String(item.prod_id || item.id || `fallback-${index}`),
             name: item.prod_name || "Surplus Item",
+            description: item.prod_desc || "Fresh surplus food item available for rescue.",
+            merchantId: Number(item.merchant_id || item.merchant || 1),
             establishment: item.merchant_name || "Partner Merchant",
+            merchantAddress: item.merchant_address || "Cebu City, Philippines",
+            merchantLat: Number(item.merchant_lat || 10.3157),
+            merchantLng: Number(item.merchant_lng || 123.8854),
+            merchantAvgRating: Number(item.merchant_avg_rating || 0),
+            merchantReviewCount: Number(item.merchant_review_count || 0),
+            avgRating: Number(item.avg_rating || 0),
+            reviewCount: Number(item.review_count || 0),
+            reviews: Array.isArray(item.reviews) ? item.reviews : [],
             price: current,
             originalPrice: orig > 0 ? orig : current,
             floorPrice: floor,
@@ -304,13 +498,18 @@ export default function Homepage() {
       );
       setLiveListings(formatted);
 
-      // Derive unique active Establishments from live listings
       const estMap = new Map<string, Establishment>();
       formatted.forEach((f, idx) => {
         if (!estMap.has(f.establishment)) {
           estMap.set(f.establishment, {
             id: `EST-${idx}`,
+            merchantId: f.merchantId,
             name: f.establishment,
+            address: f.merchantAddress,
+            lat: f.merchantLat,
+            lng: f.merchantLng,
+            avgRating: f.merchantAvgRating,
+            reviewCount: f.merchantReviewCount,
             category: f.category,
             distance: f.distance,
             image: f.image,
@@ -349,25 +548,16 @@ export default function Homepage() {
       }
 
       await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
-      const totalItems = cart.reduce(
-        (total: number, item: any) => total + (item.quantity || 0),
-        0
-      );
-      setCartCount(totalItems);
+      setCartCount(cart.length);
 
       setSelectedFood(null);
       setQuantity(1);
 
-      if (Platform.OS === "web") {
-        alert(
-          `${food.name} (${qty}x) added to your Rescue Cart at ₱${finalCartPrice.toFixed(2)}!`
-        );
-      } else {
-        Alert.alert(
-          "Added to Cart",
-          `${food.name} (${qty}x) has been added to your cart at ₱${finalCartPrice.toFixed(2)}!`
-        );
-      }
+      showModal(
+        "Added to Rescue Cart!",
+        `${food.name} (${qty}x) from ${food.establishment} has been added to your Rescue Cart at ₱${finalCartPrice.toFixed(2)}.`,
+        "success"
+      );
     } catch (error) {
       console.log("Error adding to cart:", error);
     }
@@ -398,6 +588,13 @@ export default function Homepage() {
     );
     setModalLivePrice(initialCalc.livePrice);
   };
+
+  const openMerchantStorefront = (est: Establishment) => {
+    setSelectedMerchant(est);
+  };
+
+  const announcementsList = feedNotifs.filter((n) => n.type === "announcement");
+  const activityNotifsList = feedNotifs.filter((n) => n.type !== "announcement");
 
   const FoodCard = ({
     item,
@@ -431,9 +628,11 @@ export default function Homepage() {
             source={{ uri: item.image }}
             style={horizontal ? styles.featuredImage : styles.foodImage}
           />
-          <View style={styles.discountBadge}>
-            <Text style={styles.discountText}>{item.discount}% OFF</Text>
-          </View>
+          {item.discount > 0 && (
+            <View style={styles.discountBadge}>
+              <Text style={styles.discountText}>{item.discount}% OFF</Text>
+            </View>
+          )}
         </View>
 
         <View
@@ -443,7 +642,10 @@ export default function Homepage() {
             {item.name}
           </Text>
           <Text style={styles.establishmentName} numberOfLines={1}>
-            {item.establishment}
+            {item.establishment}{" "}
+            {item.merchantReviewCount > 0
+              ? `• ⭐ ${item.merchantAvgRating.toFixed(1)} (${item.merchantReviewCount})`
+              : ""}
           </Text>
 
           <View style={styles.priceRow}>
@@ -456,6 +658,10 @@ export default function Homepage() {
               </Text>
             )}
           </View>
+
+          <Text style={styles.explicitExpiryText} numberOfLines={1}>
+            Exp: {item.expiryDate} • {item.expiryTime}
+          </Text>
 
           <View style={styles.detailsMetaRow}>
             <LiveCountdown
@@ -480,21 +686,28 @@ export default function Homepage() {
   };
 
   const EstablishmentCard = ({ item }: { item: Establishment }) => {
+    const stars = "⭐".repeat(
+      item.reviewCount > 0 ? Math.max(1, Math.round(item.avgRating)) : 5
+    );
     return (
       <TouchableOpacity
         activeOpacity={0.88}
         style={styles.establishmentCard}
-        onPress={() => setSearchText(item.name)}
+        onPress={() => openMerchantStorefront(item)}
       >
         <Image source={{ uri: item.image }} style={styles.establishmentImage} />
         <View style={styles.establishmentInfo}>
           <Text style={styles.establishmentNameLarge} numberOfLines={1}>
             {item.name}
           </Text>
-          <Text style={styles.establishmentCategory}>{item.category}</Text>
+          <Text style={styles.ratingInlineText}>
+            {stars} ({item.reviewCount}) • {item.category}
+          </Text>
           <View style={styles.distanceRow}>
             <Ionicons name="location-outline" size={12} color={Colors.icon} />
-            <Text style={styles.distanceText}>{item.distance} away</Text>
+            <Text style={styles.distanceText} numberOfLines={1}>
+              {item.distance} away • Tap to view shop & map
+            </Text>
           </View>
         </View>
         <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
@@ -506,16 +719,31 @@ export default function Homepage() {
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
+      {/* TOP HEADER WITH ANNOUNCEMENTS & NOTIFICATIONS */}
       <View style={styles.header}>
         <View>
           <Text style={styles.logo}>RESERVE</Text>
-          <Text style={styles.logoSubtitle}>Consumer Portal</Text>
+          <Text style={styles.logoSubtitle}>Consumer Portal • {consumerCity}</Text>
         </View>
-        <View style={styles.locationPill}>
-          <Ionicons name="location-outline" size={13} color={Colors.primary} />
-          <Text style={styles.locationText} numberOfLines={1}>
-            {consumerCity}
-          </Text>
+
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            activeOpacity={0.75}
+            onPress={() => setHeaderModalType("announcements")}
+          >
+            <Ionicons name="megaphone-outline" size={20} color={Colors.primary} />
+            {announcementsList.length > 0 && <View style={styles.headerBadgeDot} />}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            activeOpacity={0.75}
+            onPress={() => setHeaderModalType("notifications")}
+          >
+            <Ionicons name="notifications-outline" size={21} color={Colors.primary} />
+            {activityNotifsList.length > 0 && <View style={styles.headerBadgeDot} />}
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -526,7 +754,7 @@ export default function Homepage() {
         <View style={styles.welcomeSection}>
           <Text style={styles.welcomeText}>Welcome, {consumerName}!</Text>
           <Text style={styles.welcomeSubtext}>
-            Discover affordable surplus food near you.
+            Discover affordable surplus food within 10km of your Cebu City location.
           </Text>
         </View>
 
@@ -604,7 +832,7 @@ export default function Homepage() {
               <View>
                 <Text style={styles.sectionTitle}>Partner Establishments</Text>
                 <Text style={styles.sectionSubtitle}>
-                  Tap a store to filter its surplus listings.
+                  Tap a store to view its rating, active listings & map location.
                 </Text>
               </View>
             </View>
@@ -631,7 +859,7 @@ export default function Homepage() {
             {selectedFood && (
               <>
                 <View style={styles.modalHeader}>
-                  <Text style={styles.modalTitle}>Food Details</Text>
+                  <Text style={styles.modalTitle}>Food Listing Details</Text>
                   <TouchableOpacity
                     style={styles.modalCloseButton}
                     onPress={() => setSelectedFood(null)}
@@ -649,40 +877,71 @@ export default function Homepage() {
                     style={styles.modalFoodImage}
                   />
 
-                  <View style={styles.modalDiscountBadge}>
-                    <Text style={styles.discountText}>
-                      {selectedFood.discount}% OFF
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginTop: 12,
+                    }}
+                  >
+                    {selectedFood.discount > 0 ? (
+                      <View style={[styles.modalDiscountBadge, { marginTop: 0 }]}>
+                        <Text style={styles.discountText}>
+                          {selectedFood.discount}% OFF
+                        </Text>
+                      </View>
+                    ) : (
+                      <View />
+                    )}
+                    <Text style={styles.ratingInlineText}>
+                      {"⭐".repeat(
+                        selectedFood.reviewCount > 0
+                          ? Math.max(1, Math.round(selectedFood.avgRating))
+                          : 5
+                      )}{" "}
+                      ({selectedFood.reviewCount}{" "}
+                      {selectedFood.reviewCount === 1 ? "review" : "reviews"})
                     </Text>
                   </View>
 
                   <Text style={styles.modalFoodName}>{selectedFood.name}</Text>
-                  <Text style={styles.modalEstablishment}>
-                    {selectedFood.establishment}
-                  </Text>
 
-                  <View style={styles.modalInfoRow}>
-                    <View style={styles.modalInfoItem}>
-                      <Ionicons
-                        name="location-outline"
-                        size={15}
-                        color={Colors.icon}
-                      />
-                      <Text style={styles.modalInfoText}>
-                        {selectedFood.distance}
+                  <View style={styles.merchantBannerRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.modalEstablishment}>
+                        {selectedFood.establishment} •{" "}
+                        {"⭐".repeat(
+                          selectedFood.merchantReviewCount > 0
+                            ? Math.max(1, Math.round(selectedFood.merchantAvgRating))
+                            : 5
+                        )}{" "}
+                        ({selectedFood.merchantReviewCount})
+                      </Text>
+                      <Text style={{ fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon }}>
+                        {selectedFood.merchantAddress} ({selectedFood.distance})
                       </Text>
                     </View>
-
-                    <View style={styles.modalInfoItem}>
-                      <Ionicons
-                        name="cube-outline"
-                        size={15}
-                        color={Colors.icon}
-                      />
-                      <Text style={styles.modalInfoText}>
-                        {selectedFood.quantity} available
-                      </Text>
-                    </View>
+                    <TouchableOpacity
+                      style={styles.showMapBtn}
+                      onPress={() =>
+                        setMapModalTarget({
+                          name: selectedFood.establishment,
+                          address: selectedFood.merchantAddress,
+                          lat: selectedFood.merchantLat,
+                          lng: selectedFood.merchantLng,
+                        })
+                      }
+                    >
+                      <Ionicons name="map-outline" size={14} color={Colors.primary} />
+                      <Text style={styles.showMapBtnText}>Show Shop in Maps</Text>
+                    </TouchableOpacity>
                   </View>
+
+                  <Text style={[styles.quantityLabel, { marginTop: 12 }]}>Description</Text>
+                  <Text style={{ fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 17 }}>
+                    {selectedFood.description}
+                  </Text>
 
                   <View style={styles.modalTimerBox}>
                     <Ionicons
@@ -692,7 +951,7 @@ export default function Homepage() {
                     />
                     <View style={{ marginLeft: 10, flex: 1 }}>
                       <Text style={styles.modalTimerLabel}>
-                        Expiry Countdown & Deadline
+                        Expiry Date & Time: {selectedFood.expiryDate} • {selectedFood.expiryTime}
                       </Text>
                       <LiveCountdown
                         prepDate={selectedFood.preparationDate}
@@ -703,8 +962,7 @@ export default function Homepage() {
                         textStyle={{ fontSize: 13, fontFamily: "PoppinsBold" }}
                       />
                       <Text style={styles.modalStorageText}>
-                        Storage: {selectedFood.storageCondition} • Due:{" "}
-                        {selectedFood.expiryDate} {selectedFood.expiryTime}
+                        Prepared: {selectedFood.preparationDate} • Storage: {selectedFood.storageCondition}
                       </Text>
                     </View>
                   </View>
@@ -722,12 +980,52 @@ export default function Homepage() {
                         ).toFixed(2)}
                       </Text>
                     </View>
-                    <Text style={styles.modalOriginalPrice}>
-                      ₱{selectedFood.originalPrice.toFixed(2)}
-                    </Text>
+                    {selectedFood.originalPrice >
+                      (modalLivePrice > 0 ? modalLivePrice : selectedFood.price) && (
+                      <Text style={styles.modalOriginalPrice}>
+                        ₱{selectedFood.originalPrice.toFixed(2)}
+                      </Text>
+                    )}
                   </View>
 
-                  <Text style={styles.quantityLabel}>Quantity</Text>
+                  {selectedFood.reviews && selectedFood.reviews.length > 0 && (
+                    <View style={{ marginTop: 14 }}>
+                      <Text style={styles.quantityLabel}>
+                        Customer Reviews ({selectedFood.reviews.length})
+                      </Text>
+                      {selectedFood.reviews.slice(0, 3).map((rev) => (
+                        <View
+                          key={rev.id}
+                          style={{
+                            backgroundColor: Colors.input,
+                            padding: 10,
+                            borderRadius: 10,
+                            marginBottom: 6,
+                            borderWidth: 1,
+                            borderColor: Colors.border,
+                          }}
+                        >
+                          <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                            <Text style={{ fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.primary2 }}>
+                              {rev.consumer} • {"⭐".repeat(rev.score)}
+                            </Text>
+                            <Text style={{ fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.icon }}>
+                              {rev.date}
+                            </Text>
+                          </View>
+                          {rev.comment ? (
+                            <Text style={{ fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, marginTop: 2 }}>
+                              "{rev.comment}"
+                            </Text>
+                          ) : null}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  <Text style={styles.quantityLabel}>
+                    Quantity ({selectedFood.quantity} {selectedFood.unit} available)
+                  </Text>
                   <View style={styles.quantitySelector}>
                     <TouchableOpacity
                       style={styles.quantityButton}
@@ -771,6 +1069,213 @@ export default function Homepage() {
           </View>
         </View>
       </Modal>
+
+      {/* MERCHANT STOREFRONT PROFILE MODAL (⭐⭐⭐⭐⭐(12) + SHOW SHOP IN MAPS) */}
+      <Modal
+        visible={!!selectedMerchant}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedMerchant(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            {selectedMerchant && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Merchant Profile</Text>
+                  <TouchableOpacity
+                    style={styles.modalCloseButton}
+                    onPress={() => setSelectedMerchant(null)}
+                  >
+                    <Ionicons name="close" size={20} color={Colors.primary2} />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView contentContainerStyle={styles.modalScroll}>
+                  <View style={styles.merchantProfileHeaderCard}>
+                    <Image
+                      source={{ uri: selectedMerchant.image }}
+                      style={{ width: 64, height: 64, borderRadius: 16 }}
+                    />
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={{ fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2 }}>
+                        {selectedMerchant.name}
+                      </Text>
+                      <Text style={styles.ratingInlineText}>
+                        {"⭐".repeat(
+                          selectedMerchant.reviewCount > 0
+                            ? Math.max(1, Math.round(selectedMerchant.avgRating))
+                            : 5
+                        )}{" "}
+                        ({selectedMerchant.reviewCount})
+                      </Text>
+                      <Text style={{ fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, marginTop: 2 }}>
+                        {selectedMerchant.address} • {selectedMerchant.distance}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.addToCartButton, { marginTop: 12, backgroundColor: Colors.primary }]}
+                    onPress={() =>
+                      setMapModalTarget({
+                        name: selectedMerchant.name,
+                        address: selectedMerchant.address,
+                        lat: selectedMerchant.lat,
+                        lng: selectedMerchant.lng,
+                      })
+                    }
+                  >
+                    <Ionicons name="map-outline" size={17} color={Colors.white} />
+                    <Text style={styles.addToCartText}>Show Shop in Maps</Text>
+                  </TouchableOpacity>
+
+                  <Text style={[styles.sectionTitle, { marginTop: 18, marginBottom: 10 }]}>
+                    Available Surplus Listings from {selectedMerchant.name}
+                  </Text>
+
+                  {liveListings
+                    .filter((f) => f.establishment === selectedMerchant.name)
+                    .map((f) => (
+                      <TouchableOpacity
+                        key={f.id}
+                        style={[styles.establishmentCard, { marginBottom: 10 }]}
+                        onPress={() => {
+                          setSelectedMerchant(null);
+                          openFood(f);
+                        }}
+                      >
+                        <Image source={{ uri: f.image }} style={styles.establishmentImage} />
+                        <View style={styles.establishmentInfo}>
+                          <Text style={styles.establishmentNameLarge}>{f.name}</Text>
+                          <Text style={{ fontFamily: "PoppinsBold", fontSize: 12, color: Colors.primary }}>
+                            ₱{f.price.toFixed(2)} • {f.quantity} left
+                          </Text>
+                          <Text style={styles.explicitExpiryText}>
+                            Exp: {f.expiryDate} • {f.expiryTime}
+                          </Text>
+                        </View>
+                        <Ionicons name="add-circle" size={22} color={Colors.button} />
+                      </TouchableOpacity>
+                    ))}
+                </ScrollView>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* TOP HEADER ANNOUNCEMENTS & NOTIFICATIONS MODAL (SORTED LATEST FIRST & CLICKABLE) */}
+      <Modal
+        visible={headerModalType !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setHeaderModalType(null)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <View style={styles.mapModalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {headerModalType === "announcements"
+                  ? "System Announcements"
+                  : "My Activity Notifications"}
+              </Text>
+              <TouchableOpacity
+                style={styles.modalCloseButton}
+                onPress={() => setHeaderModalType(null)}
+              >
+                <Ionicons name="close" size={18} color={Colors.primary2} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={{ maxHeight: 360, padding: 14 }}>
+              {(headerModalType === "announcements" ? announcementsList : activityNotifsList)
+                .length > 0 ? (
+                (headerModalType === "announcements"
+                  ? announcementsList
+                  : activityNotifsList
+                ).map((n, i) => (
+                  <TouchableOpacity
+                    key={n.id || i}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setHeaderModalType(null);
+                      if (n.target_route && n.type !== "announcement") {
+                        router.push(n.target_route as any);
+                      } else if (n.type === "order") {
+                        router.replace("/consumer/claims");
+                      }
+                    }}
+                    style={{
+                      backgroundColor: Colors.input,
+                      padding: 12,
+                      borderRadius: 12,
+                      marginBottom: 10,
+                      borderWidth: 1,
+                      borderColor: Colors.border,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                      <Text style={{ fontFamily: "PoppinsBold", fontSize: 12, color: Colors.primary2, flex: 1 }}>
+                        {n.title}
+                      </Text>
+                      <Text style={{ fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.icon, marginLeft: 6 }}>
+                        {n.time}
+                      </Text>
+                    </View>
+                    <Text style={{ fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 4 }}>
+                      {n.text}
+                    </Text>
+                    {n.type !== "announcement" && (
+                      <Text
+                        style={{
+                          fontFamily: "PoppinsSemiBold",
+                          fontSize: 10,
+                          color: Colors.primary,
+                          marginTop: 6,
+                          alignSelf: "flex-end",
+                        }}
+                      >
+                        View in My Claims →
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <Text
+                  style={{
+                    textAlign: "center",
+                    paddingVertical: 30,
+                    fontFamily: "PoppinsRegular",
+                    fontSize: 11.5,
+                    color: Colors.icon,
+                  }}
+                >
+                  No {headerModalType} yet.
+                </Text>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* SHOP LOCATION MAP MODAL */}
+      <ShopLocationMapModal
+        visible={!!mapModalTarget}
+        shopName={mapModalTarget?.name || ""}
+        address={mapModalTarget?.address || ""}
+        lat={mapModalTarget?.lat || 10.3157}
+        lng={mapModalTarget?.lng || 123.8854}
+        onClose={() => setMapModalTarget(null)}
+      />
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
+      />
 
       {/* BOTTOM NAVIGATION */}
       <View style={styles.bottomNav}>
@@ -828,8 +1333,9 @@ const styles = StyleSheet.create({
   header: { height: 64, paddingHorizontal: 16, backgroundColor: Colors.background, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   logo: { fontFamily: "PoppinsBold", fontSize: 22, color: Colors.primary, letterSpacing: 0.5 },
   logoSubtitle: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: -3 },
-  locationPill: { height: 32, maxWidth: 160, paddingHorizontal: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 16, flexDirection: "row", alignItems: "center", gap: 4 },
-  locationText: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.primary2 },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  headerIconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center", position: "relative" },
+  headerBadgeDot: { position: "absolute", top: 6, right: 6, width: 7, height: 7, borderRadius: 3.5, backgroundColor: "#D9383A" },
   welcomeSection: { marginBottom: 16 },
   welcomeText: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
   welcomeSubtext: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 2 },
@@ -839,7 +1345,7 @@ const styles = StyleSheet.create({
   sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 17, color: Colors.primary2 },
   sectionSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
   featuredScroll: { paddingBottom: 4, gap: 12 },
-  featuredCard: { width: 230, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, overflow: "hidden" },
+  featuredCard: { width: 235, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, overflow: "hidden" },
   featuredImageContainer: { width: "100%", height: 140, position: "relative" },
   featuredImage: { width: "100%", height: "100%", resizeMode: "cover" },
   featuredContent: { padding: 12 },
@@ -852,10 +1358,11 @@ const styles = StyleSheet.create({
   foodCardContent: { padding: 10 },
   foodName: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
   establishmentName: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: 1 },
-  priceRow: { flexDirection: "row", alignItems: "center", marginTop: 6 },
+  priceRow: { flexDirection: "row", alignItems: "center", marginTop: 5 },
   foodPrice: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.primary },
   originalPrice: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.placeholder, textDecorationLine: "line-through", marginLeft: 6 },
-  detailsMetaRow: { marginTop: 4, marginBottom: 2 },
+  explicitExpiryText: { fontFamily: "PoppinsMedium", fontSize: 9.5, color: "#A94A3A", marginTop: 3 },
+  detailsMetaRow: { marginTop: 3, marginBottom: 2 },
   timerRow: { flexDirection: "row", alignItems: "center" },
   timerText: { fontFamily: "PoppinsMedium", fontSize: 10, color: Colors.primary, marginLeft: 4 },
   timerExpiredText: { color: "#B3261E", fontFamily: "PoppinsBold" },
@@ -868,24 +1375,27 @@ const styles = StyleSheet.create({
   establishmentImage: { width: 56, height: 56, borderRadius: 10, resizeMode: "cover" },
   establishmentInfo: { flex: 1, marginLeft: 12 },
   establishmentNameLarge: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
-  establishmentCategory: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: 1, marginBottom: 2 },
+  ratingInlineText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: "#B45309", marginTop: 1 },
   emptySearch: { height: 100, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, alignItems: "center", justifyContent: "center", marginBottom: 16 },
   emptySearchText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 4 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.5)", justifyContent: "flex-end" },
-  modalSheet: { backgroundColor: Colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: "88%", overflow: "hidden" },
+  modalOverlayCenter: { flex: 1, backgroundColor: "rgba(18,55,44,0.55)", justifyContent: "center", alignItems: "center", padding: 18 },
+  mapModalCard: { width: "100%", maxWidth: 420, backgroundColor: Colors.white, borderRadius: 18, overflow: "hidden" },
+  modalSheet: { backgroundColor: Colors.white, borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: "90%", overflow: "hidden" },
   modalHeader: { height: 56, paddingHorizontal: 16, backgroundColor: Colors.background, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  modalTitle: { fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2 },
+  modalTitle: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary2 },
   modalCloseButton: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
   modalScroll: { padding: 16, paddingBottom: 24 },
-  modalFoodImage: { width: "100%", height: 210, borderRadius: 12, resizeMode: "cover" },
+  modalFoodImage: { width: "100%", height: 200, borderRadius: 12, resizeMode: "cover" },
   modalDiscountBadge: { alignSelf: "flex-start", paddingHorizontal: 10, paddingVertical: 4, backgroundColor: Colors.primary, borderRadius: 6, marginTop: 12 },
   modalFoodName: { fontFamily: "PoppinsBold", fontSize: 20, color: Colors.primary2, marginTop: 8 },
-  modalEstablishment: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
-  modalInfoRow: { flexDirection: "row", alignItems: "center", marginTop: 12, gap: 16 },
-  modalInfoItem: { flexDirection: "row", alignItems: "center", gap: 4 },
-  modalInfoText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.icon },
+  modalEstablishment: { fontFamily: "PoppinsSemiBold", fontSize: 11.5, color: Colors.primary2 },
+  merchantBannerRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#F2F7F4", padding: 10, borderRadius: 10, marginTop: 8, borderWidth: 1, borderColor: Colors.border, gap: 8 },
+  showMapBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.white, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: Colors.primary },
+  showMapBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
+  merchantProfileHeaderCard: { flexDirection: "row", alignItems: "center", backgroundColor: "#F2F7F4", padding: 14, borderRadius: 14, borderWidth: 1, borderColor: Colors.border },
   modalTimerBox: { marginTop: 14, padding: 12, backgroundColor: Colors.input, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, flexDirection: "row", alignItems: "center" },
-  modalTimerLabel: { fontFamily: "PoppinsMedium", fontSize: 10, color: Colors.primary1 },
+  modalTimerLabel: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: "#A94A3A" },
   modalStorageText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon, marginTop: 2 },
   modalPriceBox: { marginTop: 14, padding: 12, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   modalPriceLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },

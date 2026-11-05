@@ -559,7 +559,7 @@ export default function FoodBankDonationsScreen() {
             />
           }
           ListHeaderComponent={
-            loadError ? <ErrorBanner message={loadError} onRetry={() => load()} /> : null
+            loadError ? <ErrorBanner message={loadError} onRetry={() => load()} /> : undefined
           }
           ListEmptyComponent={
             <EmptyState
@@ -732,6 +732,12 @@ function OfferCard({
           </View>
 
           <Text style={styles.cardMerchant} numberOfLines={1}>{offer.merchant_name}</Text>
+          <Text style={styles.cardMerchant} numberOfLines={1}>{offer.merchant_name}</Text>
+          {offer.expires_at && (
+            <Text style={{ fontFamily: "PoppinsMedium", fontSize: 10.5, color: "#A94A3A", marginTop: 2 }} numberOfLines={1}>
+              Expiry Date & Time: {formatDateTime(offer.expires_at)}
+            </Text>
+          )}
 
           <View style={styles.cardBottomRow}>
             <View style={{ flex: 1 }}>

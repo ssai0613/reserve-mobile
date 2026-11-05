@@ -1,34 +1,53 @@
-import axios from 'axios';
-import * as SecureStore from 'expo-secure-store';
-
-// REPLACE WITH YOUR ACTUAL LOCAL IPV4 ADDRESS
-// const BASE_URL = 'http://10.57.199.73:8000/api/'; 
-
-// export const api = axios.create({
-//   baseURL: BASE_URL,
-//   headers: {
-//     'Content-Type': 'application/json',
-//   },
-// });
-
+import axios from "axios";
+import Constants from "expo-constants";
+import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-const BASE_URL =
-  Platform.OS === "web"
-    ? "http://127.0.0.1:8000/api/"
-    : "http://192.168.254.201:8000/api/";
+// Replace this fallback with the IPAddress printed by Get-NetIPAddress above
+const FALLBACK_WIFI_IP = "172.25.65.73";
+
+const getBaseUrl = () => {
+  if (Platform.OS === "web") {
+    return "http://127.0.0.1:8000/api/";
+  }
+
+  // Automatically grab the active LAN IP from Expo Metro bundler
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    Constants.manifest2?.extra?.expoGo?.debuggerHost ||
+    Constants.manifest?.debuggerHost;
+
+  if (hostUri) {
+    const detectedIp = hostUri.split(":")[0];
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(detectedIp)) {
+      return `http://${detectedIp}:8000/api/`;
+    }
+  }
+
+  return `http://${FALLBACK_WIFI_IP}:8000/api/`;
+};
 
 export const api = axios.create({
-  baseURL: BASE_URL,
-  timeout: 15000,
+  baseURL: getBaseUrl(),
+  timeout: 45000,
+  headers: {
+    "Content-Type": "application/json",
+  },
 });
 
-// Helper functions for secure token storage
 export const saveTokens = async (access, refresh) => {
-  await SecureStore.setItemAsync('access_token', access);
-  await SecureStore.setItemAsync('refresh_token', refresh);
+  if (Platform.OS === "web") {
+    localStorage.setItem("access_token", access);
+    localStorage.setItem("refresh_token", refresh);
+  } else {
+    await SecureStore.setItemAsync("access_token", access);
+    await SecureStore.setItemAsync("refresh_token", refresh);
+  }
 };
 
 export const getAccessToken = async () => {
-  return await SecureStore.getItemAsync('access_token');
+  if (Platform.OS === "web") {
+    return localStorage.getItem("access_token");
+  }
+  return await SecureStore.getItemAsync("access_token");
 };

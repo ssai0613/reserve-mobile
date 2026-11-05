@@ -16,7 +16,10 @@ import {
 import { api } from "../../../services/api";
 import {
   CebuAddressMapPicker,
+  PhoneOtpVerifier,
   RegistrationOtpModal,
+  ReserveAlertModal,
+  ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
 
 export default function ConsumerSignup() {
@@ -28,6 +31,7 @@ export default function ConsumerSignup() {
 
   const [fullName, setFullName] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
   const [barangay, setBarangay] = useState("");
   const [streetDetail, setStreetDetail] = useState("");
   const [address, setAddress] = useState("");
@@ -36,33 +40,100 @@ export default function ConsumerSignup() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isAgreed, setIsAgreed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // OTP Modal States
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpCode, setOtpCode] = useState("");
   const [devOtpHint, setDevOtpHint] = useState("");
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
 
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+    onConfirm: null,
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info",
+    onConfirm: (() => void) | null = null
+  ) => {
+    setModalAlert({ visible: true, title, message, type, onConfirm });
+  };
+
   const handleRequestOtp = async () => {
-    if (!fullName || !phoneNumber || !barangay || !streetDetail || !email || !password) {
-      alert("Please fill in all required fields and select your Cebu City Barangay.");
+    if (
+      !fullName ||
+      !phoneNumber ||
+      !barangay ||
+      !streetDetail ||
+      !email ||
+      !password ||
+      !confirmPassword
+    ) {
+      showModal(
+        "Missing Required Fields",
+        "Please fill in all required fields, including Confirm Password, and select your Cebu City Barangay.",
+        "warning"
+      );
+      return;
+    }
+    if (password.length < 6) {
+      showModal(
+        "Weak Password",
+        "Your password must be at least 6 characters long.",
+        "warning"
+      );
+      return;
+    }
+    if (password !== confirmPassword) {
+      showModal(
+        "Password Mismatch",
+        "Your Password and Confirm Password do not match. Please re-check both fields.",
+        "error"
+      );
+      return;
+    }
+    if (!isPhoneVerified) {
+      showModal(
+        "Phone Verification Required",
+        "Please verify your Philippine phone number first by tapping 'Send OTP' inside the Phone Number field.",
+        "warning"
+      );
       return;
     }
     if (!isAgreed) {
-      alert("You must agree to the Terms of Service.");
+      showModal(
+        "Terms of Service",
+        "You must agree to the Terms of Service before creating your account.",
+        "warning"
+      );
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await api.post("accounts/send-otp/", { email });
+      const res = await api.post("accounts/send-otp/", {
+        email: email.trim(),
+        phone: phoneNumber.trim(),
+        channel: "email",
+      });
       setDevOtpHint(res.data?.dev_otp_preview || "");
       setOtpCode("");
       setOtpModalVisible(true);
     } catch (error: any) {
-      alert(error.response?.data?.error || "Could not send verification OTP.");
+      showModal(
+        "Email OTP Error",
+        error.response?.data?.error || "Could not send email verification OTP.",
+        "error"
+      );
     } finally {
       setIsLoading(false);
     }
@@ -70,20 +141,29 @@ export default function ConsumerSignup() {
 
   const handleVerifyAndRegister = async () => {
     if (otpCode.trim().length < 6) {
-      alert("Please enter the 6-digit OTP code.");
+      showModal(
+        "Incomplete Code",
+        "Please enter the 6-digit Email OTP code.",
+        "warning"
+      );
       return;
     }
 
     setIsVerifyingOtp(true);
     try {
-      await api.post("accounts/verify-otp/", { email, otp: otpCode.trim() });
+      await api.post("accounts/verify-otp/", {
+        email: email.trim(),
+        phone: phoneNumber.trim(),
+        otp: otpCode.trim(),
+        channel: "email",
+      });
 
       const formData = new FormData();
       formData.append("user_email", email.trim());
       formData.append("user_pass", password);
       formData.append("user_role", "Consumer");
       formData.append("full_name", fullName);
-      formData.append("phone_number", phoneNumber);
+      formData.append("phone_number", phoneNumber.trim());
       formData.append("address", address);
       formData.append("latitude", String(latitude));
       formData.append("longitude", String(longitude));
@@ -93,8 +173,12 @@ export default function ConsumerSignup() {
       });
 
       setOtpModalVisible(false);
-      alert("Email verified & Consumer account created! Please log in.");
-      router.replace("/consumer");
+      showModal(
+        "Account Created!",
+        "Phone & Email verified! Your Consumer account is now ready. Please log in.",
+        "success",
+        () => router.replace("/consumer")
+      );
     } catch (error: any) {
       const errorData = error.response?.data;
       const errorMessage =
@@ -102,7 +186,7 @@ export default function ConsumerSignup() {
         (typeof errorData === "object" && errorData !== null
           ? Object.values(errorData).flat().join("\n")
           : "Verification or registration failed.");
-      alert(errorMessage);
+      showModal("Registration Error", errorMessage, "error");
     } finally {
       setIsVerifyingOtp(false);
     }
@@ -182,27 +266,15 @@ export default function ConsumerSignup() {
             </View>
           </View>
 
-          <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Phone Number *</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="call-outline"
-                size={19}
-                color={Colors.primary}
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. +63 912 345 6789"
-                placeholderTextColor={Colors.placeholder}
-                keyboardType="phone-pad"
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-              />
-            </View>
-          </View>
+          {/* INLINE PHONE OTP VERIFIER */}
+          <PhoneOtpVerifier
+            label="Phone Number (SMS OTP Required) *"
+            phone={phoneNumber}
+            onChangePhone={setPhoneNumber}
+            isVerified={isPhoneVerified}
+            onVerifiedChange={setIsPhoneVerified}
+          />
 
-          {/* CEBU CITY CASCADING DROPDOWNS + MAP PINNING */}
           <CebuAddressMapPicker
             selectedBarangay={barangay}
             onSelectBarangay={(brgy, fullAddr) => {
@@ -265,11 +337,59 @@ export default function ConsumerSignup() {
                 style={styles.input}
                 placeholder="Create a secure password"
                 placeholderTextColor={Colors.placeholder}
-                secureTextEntry
+                secureTextEntry={!showPassword}
                 autoCapitalize="none"
                 value={password}
                 onChangeText={setPassword}
               />
+              <TouchableOpacity
+                onPress={() => setShowPassword(!showPassword)}
+                style={{ paddingHorizontal: 4 }}
+              >
+                <Ionicons
+                  name={showPassword ? "eye-off-outline" : "eye-outline"}
+                  size={18}
+                  color={Colors.icon}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* CONFIRM PASSWORD FIELD */}
+          <View style={styles.fieldContainer}>
+            <Text style={styles.label}>Confirm Password *</Text>
+            <View
+              style={[
+                styles.inputContainer,
+                confirmPassword.length > 0 &&
+                  password !== confirmPassword && { borderColor: "#D9383A" },
+              ]}
+            >
+              <Ionicons
+                name="shield-checkmark-outline"
+                size={19}
+                color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Re-enter your password to confirm"
+                placeholderTextColor={Colors.placeholder}
+                secureTextEntry={!showConfirmPassword}
+                autoCapitalize="none"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+              />
+              <TouchableOpacity
+                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                style={{ paddingHorizontal: 4 }}
+              >
+                <Ionicons
+                  name={showConfirmPassword ? "eye-off-outline" : "eye-outline"}
+                  size={18}
+                  color={Colors.icon}
+                />
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -301,7 +421,9 @@ export default function ConsumerSignup() {
             disabled={isLoading}
           >
             <Text style={styles.submitText}>
-              {isLoading ? "SENDING OTP..." : "Verify Email & Create Account"}
+              {isLoading
+                ? "SENDING EMAIL OTP..."
+                : "Verify Email & Create Account"}
             </Text>
             <Ionicons name="arrow-forward" size={18} color={Colors.white} />
           </TouchableOpacity>
@@ -321,6 +443,7 @@ export default function ConsumerSignup() {
       <RegistrationOtpModal
         visible={otpModalVisible}
         email={email}
+        phone={phoneNumber}
         otpCode={otpCode}
         onChangeOtp={setOtpCode}
         onVerify={handleVerifyAndRegister}
@@ -328,6 +451,18 @@ export default function ConsumerSignup() {
         onClose={() => setOtpModalVisible(false)}
         isVerifying={isVerifyingOtp}
         devOtpHint={devOtpHint}
+      />
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => {
+          const cb = modalAlert.onConfirm;
+          setModalAlert((prev) => ({ ...prev, visible: false, onConfirm: null }));
+          if (cb) cb();
+        }}
       />
     </KeyboardAvoidingView>
   );

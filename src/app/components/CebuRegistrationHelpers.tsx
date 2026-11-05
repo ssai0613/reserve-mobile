@@ -1,5 +1,6 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
+import * as ExpoLocation from "expo-location";
 import React, { useEffect, useState } from "react";
 import {
   Modal,
@@ -11,11 +12,21 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { WebView } from "react-native-webview";
+import { api } from "../../../services/api";
 
 export type BarangayCoord = {
   name: string;
   lat: number;
   lng: number;
+};
+
+export type ReserveModalState = {
+  visible: boolean;
+  title: string;
+  message: string;
+  type?: "success" | "error" | "info" | "warning";
+  onConfirm?: (() => void) | null;
 };
 
 export const CEBU_CITY_BARANGAYS: BarangayCoord[] = [
@@ -68,6 +79,507 @@ export const CEBU_CITY_BARANGAYS: BarangayCoord[] = [
   { name: "Zapatera", lat: 10.3086, lng: 123.9006 },
 ];
 
+/**
+ * Global Reusable Alert Modal (Replaces native alert() across Web & Mobile)
+ */
+export function ReserveAlertModal({
+  visible,
+  title,
+  message,
+  type = "info",
+  buttonText = "OK",
+  onClose,
+}: {
+  visible: boolean;
+  title: string;
+  message: string;
+  type?: "success" | "error" | "info" | "warning";
+  buttonText?: string;
+  onClose: () => void;
+}) {
+  const iconConfig = {
+    success: { name: "checkmark-circle" as const, color: Colors.primary, bg: "#E7F3EC" },
+    error: { name: "alert-circle" as const, color: "#D9383A", bg: "#FDECEC" },
+    warning: { name: "warning" as const, color: "#D97706", bg: "#FEF3C7" },
+    info: { name: "information-circle" as const, color: Colors.primary, bg: "#E8EFEA" },
+  }[type];
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalCard, { padding: 22, maxWidth: 370 }]}>
+          <View style={[styles.otpIconCircle, { backgroundColor: iconConfig.bg }]}>
+            <Ionicons name={iconConfig.name} size={30} color={iconConfig.color} />
+          </View>
+
+          <Text style={styles.otpTitle}>{title}</Text>
+          <Text style={[styles.otpSubtitle, { marginTop: 6, marginBottom: 18 }]}>
+            {message}
+          </Text>
+
+          <TouchableOpacity
+            style={[
+              styles.verifyBtn,
+              type === "error" && { backgroundColor: "#D9383A" },
+            ]}
+            activeOpacity={0.85}
+            onPress={onClose}
+          >
+            <Text style={styles.verifyBtnText}>{buttonText}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/**
+ * Global Reusable Confirmation Modal (Used for Logout Confirmation & Destructive Actions)
+ */
+export function ReserveConfirmModal({
+  visible,
+  title = "Confirm Action",
+  message = "Are you sure you want to proceed?",
+  confirmText = "Yes, Proceed",
+  cancelText = "Cancel",
+  isDestructive = false,
+  onConfirm,
+  onCancel,
+}: {
+  visible: boolean;
+  title?: string;
+  message?: string;
+  confirmText?: string;
+  cancelText?: string;
+  isDestructive?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onCancel}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalCard, { padding: 22, maxWidth: 370 }]}>
+          <View
+            style={[
+              styles.otpIconCircle,
+              { backgroundColor: isDestructive ? "#FDECEC" : "#E8EFEA" },
+            ]}
+          >
+            <Ionicons
+              name={isDestructive ? "log-out-outline" : "help-circle-outline"}
+              size={28}
+              color={isDestructive ? "#D9383A" : Colors.primary}
+            />
+          </View>
+
+          <Text style={styles.otpTitle}>{title}</Text>
+          <Text style={[styles.otpSubtitle, { marginTop: 6, marginBottom: 18 }]}>
+            {message}
+          </Text>
+
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <TouchableOpacity
+              style={[
+                styles.verifyBtn,
+                {
+                  flex: 1,
+                  backgroundColor: "#F2F4F3",
+                  borderWidth: 1,
+                  borderColor: Colors.border,
+                },
+              ]}
+              activeOpacity={0.8}
+              onPress={onCancel}
+            >
+              <Text style={[styles.verifyBtnText, { color: Colors.primary2 }]}>
+                {cancelText}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.verifyBtn,
+                {
+                  flex: 1,
+                  backgroundColor: isDestructive ? "#D9383A" : Colors.button,
+                },
+              ]}
+              activeOpacity={0.85}
+              onPress={onConfirm}
+            >
+              <Text style={styles.verifyBtnText}>{confirmText}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+/**
+ * Forgot Password Modal (Sends a clickable password reset link to the user's email)
+ */
+export function ForgotPasswordEmailModal({
+  visible,
+  initialEmail = "",
+  onClose,
+  onSuccess,
+}: {
+  visible: boolean;
+  initialEmail?: string;
+  onClose: () => void;
+  onSuccess?: (msg: string) => void;
+}) {
+  const [resetEmail, setResetEmail] = useState(initialEmail);
+  const [sending, setSending] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (visible) {
+      setResetEmail(initialEmail);
+      setFeedback(null);
+    }
+  }, [visible, initialEmail]);
+
+  const handleSendResetLink = async () => {
+    const cleanEmail = resetEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      setFeedback({
+        type: "error",
+        text: "Please enter the valid email address linked to your RESERVE account.",
+      });
+      return;
+    }
+
+    setSending(true);
+    setFeedback(null);
+    try {
+      const res = await api.post("accounts/forgot-password/", {
+        email: cleanEmail,
+      });
+      const msg =
+        res.data?.message ||
+        `A password reset link has been sent to ${cleanEmail}. Check your email inbox and click the link to set a new password.`;
+      setFeedback({ type: "success", text: msg });
+      if (onSuccess) onSuccess(msg);
+    } catch (err: any) {
+      setFeedback({
+        type: "error",
+        text:
+          err.response?.data?.error ||
+          "Could not send password reset email. Please verify your email address.",
+      });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalCard, { padding: 22, maxWidth: 380 }]}>
+          <View style={styles.otpIconCircle}>
+            <Ionicons name="key-outline" size={28} color={Colors.primary} />
+          </View>
+
+          <Text style={styles.otpTitle}>Forgot Your Password?</Text>
+          <Text style={styles.otpSubtitle}>
+            Enter your registered email address below. We will send you a secure
+            link to reset your password directly from your email.
+          </Text>
+
+          <Text style={styles.fieldLabel}>Registered Email Address *</Text>
+          <View style={[styles.inputBox, { marginBottom: 12 }]}>
+            <Ionicons
+              name="mail-outline"
+              size={18}
+              color={Colors.primary}
+              style={{ marginRight: 8 }}
+            />
+            <TextInput
+              style={styles.textInput}
+              placeholder="e.g. user@email.com"
+              placeholderTextColor={Colors.placeholder}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              value={resetEmail}
+              onChangeText={setResetEmail}
+            />
+          </View>
+
+          {feedback && (
+            <View
+              style={[
+                styles.feedbackBanner,
+                feedback.type === "success"
+                  ? styles.feedbackSuccess
+                  : styles.feedbackError,
+              ]}
+            >
+              <Ionicons
+                name={
+                  feedback.type === "success"
+                    ? "checkmark-circle"
+                    : "alert-circle"
+                }
+                size={16}
+                color={feedback.type === "success" ? Colors.primary : "#D9383A"}
+              />
+              <Text
+                style={[
+                  styles.feedbackText,
+                  {
+                    color:
+                      feedback.type === "success" ? Colors.primary2 : "#B91C1C",
+                  },
+                ]}
+              >
+                {feedback.text}
+              </Text>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={styles.verifyBtn}
+            activeOpacity={0.85}
+            onPress={handleSendResetLink}
+            disabled={sending}
+          >
+            <Text style={styles.verifyBtnText}>
+              {sending ? "SENDING RESET LINK..." : "Send Reset Link to Email"}
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={{ marginTop: 14, alignSelf: "center" }}
+            onPress={onClose}
+          >
+            <Text style={styles.cancelText}>Close</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+export function PhoneOtpVerifier({
+  label = "Phone Number (SMS OTP Verified) *",
+  phone,
+  onChangePhone,
+  isVerified,
+  onVerifiedChange,
+  iconName = "call-outline",
+}: {
+  label?: string;
+  phone: string;
+  onChangePhone: (val: string) => void;
+  isVerified: boolean;
+  onVerifiedChange: (verified: boolean) => void;
+  iconName?: any;
+}) {
+  const [sendingSms, setSendingSms] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [smsCode, setSmsCode] = useState("");
+  const [verifyingSms, setVerifyingSms] = useState(false);
+  const [normalizedDisplay, setNormalizedDisplay] = useState("");
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModalAlert = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => {
+    setModalAlert({ visible: true, title, message, type });
+  };
+
+  const handlePhoneTextChange = (text: string) => {
+    onChangePhone(text);
+    if (isVerified) {
+      onVerifiedChange(false);
+    }
+  };
+
+  const handleSendPhoneOtp = async () => {
+    if (!phone.trim()) {
+      showModalAlert(
+        "Phone Number Required",
+        "Please enter your Philippine mobile number first.",
+        "warning"
+      );
+      return;
+    }
+
+    setSendingSms(true);
+    try {
+      const res = await api.post("accounts/send-otp/", {
+        phone: phone.trim(),
+        channel: "sms",
+      });
+      setNormalizedDisplay(res.data?.normalized_phone || phone.trim());
+      setSmsCode("");
+      setOtpSent(true);
+      showModalAlert(
+        "SMS OTP Sent",
+        res.data?.message ||
+          `6-digit SMS OTP sent to ${res.data?.normalized_phone || phone.trim()}!`,
+        "success"
+      );
+    } catch (err: any) {
+      showModalAlert(
+        "SMS Dispatch Error",
+        err.response?.data?.error ||
+          "Could not send SMS OTP. Please check your phone number.",
+        "error"
+      );
+    } finally {
+      setSendingSms(false);
+    }
+  };
+
+  const handleVerifyPhoneOtp = async () => {
+    if (smsCode.trim().length < 6) {
+      showModalAlert(
+        "Incomplete Code",
+        "Please enter the 6-digit SMS OTP sent to your phone.",
+        "warning"
+      );
+      return;
+    }
+
+    setVerifyingSms(true);
+    try {
+      await api.post("accounts/verify-otp/", {
+        phone: phone.trim(),
+        sms_otp: smsCode.trim(),
+        channel: "sms",
+      });
+      onVerifiedChange(true);
+      setOtpSent(false);
+      showModalAlert(
+        "Phone Verified",
+        "Your Philippine mobile number has been verified!",
+        "success"
+      );
+    } catch (err: any) {
+      showModalAlert(
+        "Verification Failed",
+        err.response?.data?.error || "Invalid SMS OTP code.",
+        "error"
+      );
+    } finally {
+      setVerifyingSms(false);
+    }
+  };
+
+  return (
+    <View style={{ width: "100%", marginBottom: 12 }}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <View
+        style={[
+          styles.inputBox,
+          { marginBottom: otpSent && !isVerified ? 8 : 0 },
+          isVerified && { borderColor: Colors.primary, backgroundColor: "#F2F9F5" },
+        ]}
+      >
+        <Ionicons
+          name={iconName}
+          size={19}
+          color={Colors.primary}
+          style={{ marginRight: 9 }}
+        />
+        <TextInput
+          style={styles.textInput}
+          placeholder="e.g. 09123456789 or +639123456789"
+          placeholderTextColor={Colors.placeholder}
+          keyboardType="phone-pad"
+          value={phone}
+          onChangeText={handlePhoneTextChange}
+        />
+
+        {isVerified ? (
+          <View style={styles.verifiedBadge}>
+            <Ionicons name="checkmark-circle" size={14} color={Colors.white} />
+            <Text style={styles.verifiedBadgeText}>Verified</Text>
+          </View>
+        ) : (
+          phone.trim().length >= 10 && (
+            <TouchableOpacity
+              style={styles.inlineSendOtpBtn}
+              activeOpacity={0.8}
+              onPress={handleSendPhoneOtp}
+              disabled={sendingSms}
+            >
+              <Text style={styles.inlineSendOtpText}>
+                {sendingSms ? "Sending..." : otpSent ? "Resend OTP" : "Send OTP"}
+              </Text>
+            </TouchableOpacity>
+          )
+        )}
+      </View>
+
+      {otpSent && !isVerified && (
+        <View style={styles.inlineOtpContainer}>
+          <Text style={styles.inlineOtpHint}>
+            Enter 6-digit SMS code sent to {normalizedDisplay || phone}:
+          </Text>
+          <View style={styles.inlineOtpRow}>
+            <TextInput
+              style={styles.inlineOtpInput}
+              placeholder="••••••"
+              placeholderTextColor={Colors.placeholder}
+              keyboardType="numeric"
+              maxLength={6}
+              value={smsCode}
+              onChangeText={setSmsCode}
+            />
+            <TouchableOpacity
+              style={styles.inlineVerifyBtn}
+              activeOpacity={0.85}
+              onPress={handleVerifyPhoneOtp}
+              disabled={verifyingSms}
+            >
+              <Text style={styles.inlineVerifyBtnText}>
+                {verifyingSms ? "Checking..." : "Verify OTP"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
+      />
+    </View>
+  );
+}
+
 export function CebuAddressMapPicker({
   selectedBarangay,
   onSelectBarangay,
@@ -87,14 +599,21 @@ export function CebuAddressMapPicker({
 }) {
   const [brgyModalOpen, setBrgyModalOpen] = useState(false);
   const [brgySearch, setBrgySearch] = useState("");
+  const [locating, setLocating] = useState(false);
+  const [gpsAlert, setGpsAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
 
   useEffect(() => {
     if (Platform.OS === "web") {
       const handler = (event: MessageEvent) => {
         if (event.data && event.data.type === "RESERVE_MAP_PIN") {
           onChangeCoords(
-            Number(event.data.lat.toFixed(6)),
-            Number(event.data.lng.toFixed(6))
+            Number(Number(event.data.lat).toFixed(6)),
+            Number(Number(event.data.lng).toFixed(6))
           );
         }
       };
@@ -105,7 +624,7 @@ export function CebuAddressMapPicker({
 
   const buildFullAddress = (street: string, brgy: string) => {
     const cleanStreet = street.trim();
-    const cleanBrgy = brgy.trim() || " Santo Niño";
+    const cleanBrgy = brgy.trim() || "Santo Niño";
     return cleanStreet
       ? `${cleanStreet}, Brgy. ${cleanBrgy}, Cebu City, Cebu, Region VII`
       : `Brgy. ${cleanBrgy}, Cebu City, Cebu, Region VII`;
@@ -123,21 +642,75 @@ export function CebuAddressMapPicker({
     onChangeStreetDetail(val, fullAddr);
   };
 
-  const useDeviceGps = () => {
-    if (Platform.OS === "web" && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          onChangeCoords(
-            Number(pos.coords.latitude.toFixed(6)),
-            Number(pos.coords.longitude.toFixed(6))
+  const useDeviceGps = async () => {
+    setLocating(true);
+    try {
+      if (Platform.OS === "web") {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              onChangeCoords(
+                Number(pos.coords.latitude.toFixed(6)),
+                Number(pos.coords.longitude.toFixed(6))
+              );
+              setLocating(false);
+            },
+            () => {
+              setGpsAlert({
+                visible: true,
+                title: "GPS Notice",
+                message:
+                  "Browser GPS permission denied or unavailable. Tap on the map to pin your location.",
+                type: "warning",
+              });
+              setLocating(false);
+            },
+            { enableHighAccuracy: true, timeout: 10000 }
           );
-        },
-        () => {
-          alert("Could not access browser GPS. You can click directly on the map to pin your location.");
+        } else {
+          setGpsAlert({
+            visible: true,
+            title: "GPS Unsupported",
+            message:
+              "Geolocation is not supported by your browser. Please tap the map to pin.",
+            type: "warning",
+          });
+          setLocating(false);
         }
-      );
-    } else {
-      alert("Pin centered on your selected Cebu City Barangay! Use the nudge buttons below to fine-tune.");
+      } else {
+        const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          setGpsAlert({
+            visible: true,
+            title: "Location Permission Required",
+            message:
+              "RESERVE needs location access to match surplus food within your 10km Cebu City radius. Please allow location access in your device settings.",
+            type: "warning",
+          });
+          setLocating(false);
+          return;
+        }
+
+        const location = await ExpoLocation.getCurrentPositionAsync({
+          accuracy: ExpoLocation.Accuracy.High,
+        });
+
+        onChangeCoords(
+          Number(location.coords.latitude.toFixed(6)),
+          Number(location.coords.longitude.toFixed(6))
+        );
+        setLocating(false);
+      }
+    } catch (e: any) {
+      console.log("GPS Location capture error:", e);
+      setGpsAlert({
+        visible: true,
+        title: "GPS Notice",
+        message:
+          "Could not fetch device coordinates. You can drag or tap on the map to place your pin.",
+        type: "info",
+      });
+      setLocating(false);
     }
   };
 
@@ -149,7 +722,7 @@ export function CebuAddressMapPicker({
     <!DOCTYPE html>
     <html>
     <head>
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <style>
@@ -159,21 +732,32 @@ export function CebuAddressMapPicker({
     <body>
       <div id="map"></div>
       <script>
-        var map = L.map('map').setView([${latitude}, ${longitude}], 15);
+        var map = L.map('map', { zoomControl: true, tap: false }).setView([${latitude}, ${longitude}], 15);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
           attribution: '© OpenStreetMap'
         }).addTo(map);
-        var marker = L.marker([${latitude}, ${longitude}], {draggable: true}).addTo(map);
-        marker.bindPopup("<b>Pinned Cebu City Location</b><br>Tap map or drag pin").openPopup();
+
+        var marker = L.marker([${latitude}, ${longitude}], { draggable: true }).addTo(map);
+        marker.bindPopup("<b>Pinned Location</b><br>Drag pin or tap map").openPopup();
+
+        function emitCoords(lat, lng) {
+          var payload = JSON.stringify({ type: 'RESERVE_MAP_PIN', lat: lat, lng: lng });
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(payload);
+          } else if (window.parent) {
+            window.parent.postMessage({ type: 'RESERVE_MAP_PIN', lat: lat, lng: lng }, '*');
+          }
+        }
 
         map.on('click', function(e) {
           marker.setLatLng(e.latlng);
-          window.parent.postMessage({ type: 'RESERVE_MAP_PIN', lat: e.latlng.lat, lng: e.latlng.lng }, '*');
+          emitCoords(e.latlng.lat, e.latlng.lng);
         });
+
         marker.on('dragend', function(e) {
           var pos = marker.getLatLng();
-          window.parent.postMessage({ type: 'RESERVE_MAP_PIN', lat: pos.lat, lng: pos.lng }, '*');
+          emitCoords(pos.lat, pos.lng);
         });
       </script>
     </body>
@@ -186,7 +770,6 @@ export function CebuAddressMapPicker({
         Service Area Address (Strictly Cebu City Scope)
       </Text>
 
-      {/* LOCKED REGION / PROVINCE / CITY ROW */}
       <View style={styles.lockedGrid}>
         <View style={styles.lockedPill}>
           <Text style={styles.lockedTitle}>Region</Text>
@@ -219,7 +802,6 @@ export function CebuAddressMapPicker({
         </View>
       </View>
 
-      {/* BARANGAY DROPDOWN */}
       <Text style={styles.fieldLabel}>Barangay (Cebu City) *</Text>
       <TouchableOpacity
         style={styles.dropdownBtn}
@@ -250,7 +832,6 @@ export function CebuAddressMapPicker({
         <Ionicons name="chevron-down" size={18} color={Colors.primary2} />
       </TouchableOpacity>
 
-      {/* STREET / BUILDING INPUT */}
       <Text style={styles.fieldLabel}>Street / Building / Landmark *</Text>
       <View style={styles.inputBox}>
         <Ionicons
@@ -268,7 +849,6 @@ export function CebuAddressMapPicker({
         />
       </View>
 
-      {/* INTERACTIVE MAP PINNING FOR HAVERSINE FORMULA */}
       <View style={styles.mapHeaderRow}>
         <View>
           <Text style={styles.fieldLabel}>
@@ -282,9 +862,12 @@ export function CebuAddressMapPicker({
           style={styles.gpsBtn}
           activeOpacity={0.8}
           onPress={useDeviceGps}
+          disabled={locating}
         >
           <Ionicons name="locate" size={14} color={Colors.white} />
-          <Text style={styles.gpsBtnText}>Use GPS</Text>
+          <Text style={styles.gpsBtnText}>
+            {locating ? "Locating..." : "Use GPS"}
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -296,45 +879,30 @@ export function CebuAddressMapPicker({
             title: "Cebu City Map Picker",
           })
         ) : (
-          <View style={styles.mobileMapFallback}>
-            <Ionicons name="map" size={28} color={Colors.primary} />
-            <Text style={styles.mobileMapTitle}>
-              Cebu City Geolocation Pin Active
-            </Text>
-            <Text style={styles.mobileMapCoords}>
-              Lat: {latitude.toFixed(5)} | Lng: {longitude.toFixed(5)}
-            </Text>
-            <View style={{ flexDirection: "row", gap: 8, marginTop: 8 }}>
-              <TouchableOpacity
-                style={styles.nudgeBtn}
-                onPress={() => onChangeCoords(latitude + 0.0005, longitude)}
-              >
-                <Text style={styles.nudgeText}>+ North</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.nudgeBtn}
-                onPress={() => onChangeCoords(latitude - 0.0005, longitude)}
-              >
-                <Text style={styles.nudgeText}>- South</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.nudgeBtn}
-                onPress={() => onChangeCoords(latitude, longitude + 0.0005)}
-              >
-                <Text style={styles.nudgeText}>+ East</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.nudgeBtn}
-                onPress={() => onChangeCoords(latitude, longitude - 0.0005)}
-              >
-                <Text style={styles.nudgeText}>- West</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <WebView
+            originWhitelist={["*"]}
+            source={{ html: leafletHtml }}
+            style={{ flex: 1 }}
+            scrollEnabled={false}
+            onMessage={(event) => {
+              try {
+                const data = JSON.parse(event.nativeEvent.data);
+                if (data.type === "RESERVE_MAP_PIN") {
+                  onChangeCoords(
+                    Number(Number(data.lat).toFixed(6)),
+                    Number(Number(data.lng).toFixed(6))
+                  );
+                }
+              } catch (err) {
+                console.log("WebView postMessage error:", err);
+              }
+            }}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+          />
         )}
       </View>
 
-      {/* BARANGAY MODAL */}
       <Modal
         visible={brgyModalOpen}
         transparent
@@ -387,6 +955,14 @@ export function CebuAddressMapPicker({
           </View>
         </View>
       </Modal>
+
+      <ReserveAlertModal
+        visible={gpsAlert.visible}
+        title={gpsAlert.title}
+        message={gpsAlert.message}
+        type={gpsAlert.type}
+        onClose={() => setGpsAlert((prev) => ({ ...prev, visible: false }))}
+      />
     </View>
   );
 }
@@ -411,11 +987,8 @@ export function validatePhilippinePhone(rawPhone: string): {
 export function RegistrationOtpModal({
   visible,
   email,
-  phone,
   otpCode,
   onChangeOtp,
-  smsOtpCode,
-  onChangeSmsOtp,
   onVerify,
   onResend,
   onClose,
@@ -445,19 +1018,19 @@ export function RegistrationOtpModal({
         <View style={[styles.modalCard, { padding: 20 }]}>
           <View style={styles.otpIconCircle}>
             <Ionicons
-              name="shield-checkmark-outline"
+              name="mail-unread-outline"
               size={28}
               color={Colors.primary}
             />
           </View>
 
-          <Text style={styles.otpTitle}>Multi-Factor Verification</Text>
+          <Text style={styles.otpTitle}>Email Verification</Text>
           <Text style={styles.otpSubtitle}>
-            Enter the 6-digit verification code sent to your email{" "}
+            Your phone number is verified! Now enter the 6-digit code sent to your email{" "}
             <Text style={{ fontFamily: "PoppinsSemiBold", color: Colors.primary2 }}>
               ({email})
             </Text>
-            {phone ? ` and Philippine mobile (${phone})` : ""}.
+            .
           </Text>
 
           <Text style={styles.fieldLabel}>Email Verification Code (6 Digits)</Text>
@@ -470,22 +1043,6 @@ export function RegistrationOtpModal({
             style={styles.otpInput}
           />
 
-          {onChangeSmsOtp !== undefined && (
-            <>
-              <Text style={styles.fieldLabel}>
-                SMS OTP Code Sent to {phone || "+63 Mobile"} (Optional if Twilio Trial)
-              </Text>
-              <TextInput
-                value={smsOtpCode}
-                onChangeText={onChangeSmsOtp}
-                placeholder="••••••"
-                keyboardType="numeric"
-                maxLength={6}
-                style={styles.otpInput}
-              />
-            </>
-          )}
-
           <TouchableOpacity
             style={styles.verifyBtn}
             activeOpacity={0.85}
@@ -495,13 +1052,13 @@ export function RegistrationOtpModal({
             <Text style={styles.verifyBtnText}>
               {isVerifying
                 ? "VERIFYING & CREATING ACCOUNT..."
-                : "Verify & Complete Registration"}
+                : "Verify Email & Complete Registration"}
             </Text>
           </TouchableOpacity>
 
           <View style={styles.otpFooterRow}>
             <TouchableOpacity onPress={onResend}>
-              <Text style={styles.resendText}>Resend Codes</Text>
+              <Text style={styles.resendText}>Resend Email Code</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={onClose}>
               <Text style={styles.cancelText}>Cancel</Text>
@@ -575,7 +1132,7 @@ const styles = StyleSheet.create({
   },
   inputBox: {
     width: "100%",
-    height: 44,
+    height: 45,
     backgroundColor: Colors.input,
     borderRadius: 10,
     flexDirection: "row",
@@ -591,6 +1148,77 @@ const styles = StyleSheet.create({
     fontFamily: "PoppinsRegular",
     fontSize: 10.5,
     color: Colors.primary2,
+  },
+  inlineSendOtpBtn: {
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 7,
+    marginLeft: 6,
+  },
+  inlineSendOtpText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 9.5,
+    color: Colors.white,
+  },
+  verifiedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 7,
+    marginLeft: 6,
+  },
+  verifiedBadgeText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 9,
+    color: Colors.white,
+  },
+  inlineOtpContainer: {
+    backgroundColor: "#F2F7F4",
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  inlineOtpHint: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 9.5,
+    color: Colors.primary2,
+    marginBottom: 6,
+  },
+  inlineOtpRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  inlineOtpInput: {
+    flex: 1,
+    height: 40,
+    backgroundColor: Colors.white,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    textAlign: "center",
+    fontFamily: "PoppinsBold",
+    fontSize: 15,
+    letterSpacing: 4,
+    color: Colors.primary2,
+  },
+  inlineVerifyBtn: {
+    height: 40,
+    backgroundColor: Colors.button,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inlineVerifyBtnText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10.5,
+    color: Colors.white,
   },
   mapHeaderRow: {
     flexDirection: "row",
@@ -619,43 +1247,12 @@ const styles = StyleSheet.create({
   },
   mapFrame: {
     width: "100%",
-    height: 185,
+    height: 195,
     borderRadius: 12,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: Colors.border,
     backgroundColor: "#E8EFEA",
-  },
-  mobileMapFallback: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 12,
-  },
-  mobileMapTitle: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
-    color: Colors.primary2,
-    marginTop: 4,
-  },
-  mobileMapCoords: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 10,
-    color: Colors.primary,
-    marginTop: 2,
-  },
-  nudgeBtn: {
-    backgroundColor: Colors.white,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  nudgeText: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 9,
-    color: Colors.primary2,
   },
   modalOverlay: {
     flex: 1,
@@ -748,19 +1345,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
     marginBottom: 12,
   },
-  devOtpBanner: {
-    backgroundColor: "#E7F0E9",
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-    marginBottom: 10,
-    alignItems: "center",
-  },
-  devOtpText: {
-    fontFamily: "PoppinsBold",
-    fontSize: 11,
-    color: Colors.primary,
-  },
   otpInput: {
     height: 48,
     borderWidth: 1.5,
@@ -801,5 +1385,28 @@ const styles = StyleSheet.create({
     fontFamily: "PoppinsRegular",
     fontSize: 11,
     color: Colors.placeholder,
+  },
+  feedbackBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+  },
+  feedbackSuccess: {
+    backgroundColor: "#ECFDF5",
+    borderColor: "#A7F3D0",
+  },
+  feedbackError: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FECACA",
+  },
+  feedbackText: {
+    flex: 1,
+    fontFamily: "PoppinsMedium",
+    fontSize: 10,
+    lineHeight: 15,
   },
 });

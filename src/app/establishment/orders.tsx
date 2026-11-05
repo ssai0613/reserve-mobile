@@ -17,12 +17,17 @@ import {
   View,
 } from "react-native";
 import { api } from "../../../services/api";
+import {
+  ReserveAlertModal,
+  ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
 import { EstablishmentBottomNav, EstablishmentHeader } from "../components/EstablishmentNav";
 
 type Order = {
   id: string;
   prod_id?: number;
   customer: string;
+  customer_phone?: string;
   item: string;
   qty: string;
   time: string;
@@ -31,6 +36,10 @@ type Order = {
   image: string;
   establishment: string;
   price: string;
+  unit_price?: string;
+  total_price?: string;
+  deposit_paid?: string;
+  cash_due?: string;
   category: string;
   description: string;
   preparationDate: string;
@@ -62,6 +71,25 @@ export default function EstablishmentOrders() {
   const [verifyMode, setVerifyMode] = useState<"choose" | "manual">("choose");
   const [qrOrderCode, setQrOrderCode] = useState("");
 
+  // ORDER SUMMARY CONFIRMATION BEFORE RELEASE MODAL STATE
+  const [summaryConfirmOrder, setSummaryConfirmOrder] = useState<Order | null>(null);
+  const [releasingOrder, setReleasingOrder] = useState(false);
+
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => {
+    setModalAlert({ visible: true, title, message, type });
+  };
+
   const openVerificationModal = () => {
     setVerifyMode("choose");
     setQrOrderCode("");
@@ -73,7 +101,11 @@ export default function EstablishmentOrders() {
       if (Platform.OS !== "web") {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== "granted") {
-          alert("Camera permission is required to scan the customer's QR code.");
+          showModal(
+            "Camera Permission Required",
+            "Camera permission is required to scan the customer's QR code.",
+            "warning"
+          );
           return;
         }
       }
@@ -83,13 +115,16 @@ export default function EstablishmentOrders() {
       });
 
       if (!result.canceled) {
-        // After scanning the QR image, prompt or auto-verify the active order
         if (pendingOrders.length === 1) {
-          await handleConfirmPickup(pendingOrders[0]);
           setQrModalVisible(false);
+          setSummaryConfirmOrder(pendingOrders[0]);
         } else {
           setVerifyMode("manual");
-          alert("QR captured! Please confirm the Transaction / Order ID below.");
+          showModal(
+            "QR Code Captured",
+            "Please enter or confirm the Transaction / Voucher ID below to view the Order Summary before release.",
+            "info"
+          );
         }
       }
     } catch (err) {
@@ -118,36 +153,77 @@ export default function EstablishmentOrders() {
     }
   };
 
-  const handleConfirmPickup = async (order: Order) => {
+  // Step 1: Open Order Summary Modal before releasing
+  const promptOrderSummaryBeforeRelease = (order: Order) => {
+    setSummaryConfirmOrder(order);
+  };
+
+  // Step 1B: Lookup Order Summary by QR/Voucher Code
+  const handleLookupOrderSummaryByCode = async () => {
+    const code = qrOrderCode.trim().toUpperCase();
+    if (!code) {
+      showModal(
+        "Order ID Required",
+        "Please enter the customer's Order ID / Voucher code (e.g. OID101).",
+        "warning"
+      );
+      return;
+    }
+
+    const localMatch = pendingOrders.find(
+      (o) => o.id.toUpperCase() === code
+    );
+    if (localMatch) {
+      setQrModalVisible(false);
+      setQrOrderCode("");
+      setSummaryConfirmOrder(localMatch);
+      return;
+    }
+
     try {
       const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
-        action: "confirm_order",
-        prod_id: order.prod_id,
-        order_code: order.id,
+        action: "preview_order",
+        order_code: code,
       });
-      alert(res.data.message || "Pickup confirmed!");
-      await loadOrders();
+      if (res.data?.order) {
+        setQrModalVisible(false);
+        setQrOrderCode("");
+        setSummaryConfirmOrder(res.data.order);
+      }
     } catch (e: any) {
-      alert(e.response?.data?.error || "Could not confirm pickup.");
+      showModal(
+        "Order Not Found",
+        e.response?.data?.error || `No pending order matches code "${code}".`,
+        "error"
+      );
     }
   };
 
-  const handleVerifyQrCode = async () => {
-    if (!qrOrderCode.trim()) {
-      alert("Please enter the customer's Order ID / Voucher code (e.g. OID101).");
-      return;
-    }
+  // Step 2: Execute Release after Merchant confirms the Order Summary Modal
+  const executeReleaseOrder = async () => {
+    if (!summaryConfirmOrder) return;
+    setReleasingOrder(true);
     try {
       const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
         action: "confirm_order",
-        order_code: qrOrderCode.trim(),
+        prod_id: summaryConfirmOrder.prod_id,
+        order_code: summaryConfirmOrder.id,
       });
-      setQrModalVisible(false);
-      setQrOrderCode("");
-      alert(res.data.message || "Order pickup verified!");
+      setSummaryConfirmOrder(null);
       await loadOrders();
+      showModal(
+        "Order Released & Completed!",
+        res.data.message || "Pickup confirmed and deposit credited to your wallet!",
+        "success"
+      );
     } catch (e: any) {
-      alert(e.response?.data?.error || "Matching pending order not found.");
+      showModal(
+        "Release Failed",
+        e.response?.data?.error || "Could not confirm pickup.",
+        "error"
+      );
+    } finally {
+      setReleasingOrder(false);
     }
   };
 
@@ -184,10 +260,8 @@ export default function EstablishmentOrders() {
     <SafeAreaView style={styles.container}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
-      {/* HEADER */}
       <EstablishmentHeader />
 
-      {/* MAIN CONTENT */}
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.pageHeader}>
           <Text style={styles.pageTitle}>Orders management</Text>
@@ -257,7 +331,7 @@ export default function EstablishmentOrders() {
           </View>
           <View style={styles.scanTextContainer}>
             <Text style={styles.scanTitle}>Scan QR code / Enter Voucher</Text>
-            <Text style={styles.scanSubtitle}>Verify customer pickup</Text>
+            <Text style={styles.scanSubtitle}>Preview order summary & verify pickup</Text>
           </View>
           <Ionicons name="chevron-forward" size={19} color={Colors.white} />
         </TouchableOpacity>
@@ -281,7 +355,7 @@ export default function EstablishmentOrders() {
                 orders={filteredPendingOrders}
                 pending
                 onView={openViewOrder}
-                onConfirm={handleConfirmPickup}
+                onConfirm={promptOrderSummaryBeforeRelease}
               />
             ) : (
               <EmptyOrders
@@ -320,10 +394,9 @@ export default function EstablishmentOrders() {
         <View style={{ height: 30 }} />
       </ScrollView>
 
-      {/* BOTTOM NAVIGATION */}
       <EstablishmentBottomNav activeTab="Orders" />
 
-      {/* DUAL-OPTION QR CAMERA SCAN OR MANUAL TRANSACTION ID MODAL */}
+      {/* QR SCAN OR MANUAL TRANSACTION ID MODAL */}
       <Modal
         visible={qrModalVisible}
         transparent
@@ -345,7 +418,6 @@ export default function EstablishmentOrders() {
                   Choose how you want to verify the customer's pickup voucher:
                 </Text>
 
-                {/* OPTION 1: SCAN QR CODE VIA CAMERA */}
                 <TouchableOpacity
                   style={{
                     flexDirection: "row",
@@ -381,7 +453,6 @@ export default function EstablishmentOrders() {
                   <Ionicons name="chevron-forward" size={18} color={Colors.white} />
                 </TouchableOpacity>
 
-                {/* OPTION 2: INPUT TRANSACTION / ORDER ID */}
                 <TouchableOpacity
                   style={{
                     flexDirection: "row",
@@ -422,7 +493,7 @@ export default function EstablishmentOrders() {
             ) : (
               <View style={{ marginTop: 4 }}>
                 <Text style={[styles.modalSubtitle, { marginBottom: 12 }]}>
-                  Enter the Transaction / Order ID shown on the customer's Rescue Voucher (e.g. OID101 or TXN-1):
+                  Enter the Transaction / Order ID shown on the customer's Rescue Voucher (e.g. OID101):
                 </Text>
                 <TextInput
                   value={qrOrderCode}
@@ -443,10 +514,126 @@ export default function EstablishmentOrders() {
                       styles.viewCloseButton,
                       { backgroundColor: Colors.button, borderColor: Colors.button },
                     ]}
-                    onPress={handleVerifyQrCode}
+                    onPress={handleLookupOrderSummaryByCode}
                   >
                     <Text style={[styles.viewCloseButtonText, { color: Colors.white }]}>
-                      Verify Pickup
+                      Review Order Summary
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ORDER SUMMARY BEFORE RELEASE CONFIRMATION MODAL */}
+      <Modal
+        visible={!!summaryConfirmOrder}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSummaryConfirmOrder(null)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <View style={[styles.qrCard, { maxWidth: 410 }]}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+              <View>
+                <Text style={styles.modalTitle}>Order Summary Confirmation</Text>
+                <Text style={styles.modalSubtitle}>
+                  Review details before releasing item to customer
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setSummaryConfirmOrder(null)}>
+                <Ionicons name="close" size={22} color={Colors.primary2} />
+              </TouchableOpacity>
+            </View>
+
+            {summaryConfirmOrder && (
+              <View style={{ gap: 10 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                    backgroundColor: "#E9EFE9",
+                    padding: 12,
+                    borderRadius: 12,
+                  }}
+                >
+                  <Image
+                    source={{ uri: summaryConfirmOrder.image }}
+                    style={{ width: 58, height: 58, borderRadius: 10, backgroundColor: Colors.input }}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontFamily: "PoppinsBold", fontSize: 14, color: Colors.primary2 }}>
+                      {summaryConfirmOrder.item}
+                    </Text>
+                    <Text style={{ fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary }}>
+                      Voucher ID: {summaryConfirmOrder.id} • Qty: {summaryConfirmOrder.qty}
+                    </Text>
+                    <Text style={{ fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1 }}>
+                      Customer: {summaryConfirmOrder.customer}
+                    </Text>
+                  </View>
+                </View>
+
+                <View
+                  style={{
+                    backgroundColor: "#F8FAF9",
+                    borderRadius: 12,
+                    padding: 12,
+                    borderWidth: 1,
+                    borderColor: Colors.border,
+                    gap: 6,
+                  }}
+                >
+                  <SummaryLine
+                    label="Expiry Date & Time"
+                    value={`${summaryConfirmOrder.pickupDate} • ${summaryConfirmOrder.pickupTime}`}
+                  />
+                  <SummaryLine
+                    label="Total Order Value"
+                    value={summaryConfirmOrder.total_price || summaryConfirmOrder.price.split(" ")[0]}
+                  />
+                  <SummaryLine
+                    label="10% Online Deposit (Paid)"
+                    value={summaryConfirmOrder.deposit_paid || "Paid via Xendit"}
+                  />
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                      paddingTop: 6,
+                      borderTopWidth: 1,
+                      borderTopColor: Colors.border,
+                    }}
+                  >
+                    <Text style={{ fontFamily: "PoppinsBold", fontSize: 11.5, color: "#B45309" }}>
+                      90% Cash to Collect Now:
+                    </Text>
+                    <Text style={{ fontFamily: "PoppinsBold", fontSize: 13, color: "#B45309" }}>
+                      {summaryConfirmOrder.cash_due || "See breakdown above"}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 6 }}>
+                  <TouchableOpacity
+                    style={styles.viewCloseButton}
+                    onPress={() => setSummaryConfirmOrder(null)}
+                  >
+                    <Text style={styles.viewCloseButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.viewCloseButton,
+                      { backgroundColor: Colors.button, borderColor: Colors.button, flex: 1.4 },
+                    ]}
+                    onPress={executeReleaseOrder}
+                    disabled={releasingOrder}
+                  >
+                    <Text style={[styles.viewCloseButtonText, { color: Colors.white }]}>
+                      {releasingOrder ? "Releasing..." : "Confirm & Release Order"}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -499,49 +686,42 @@ export default function EstablishmentOrders() {
                 </View>
 
                 <View style={styles.viewPriceBox}>
-                  <View>
-                    <Text style={styles.viewLabel}>Price</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.viewLabel}>Price & Payment Breakdown</Text>
                     <Text style={styles.viewPrice}>{selectedOrder.price}</Text>
                   </View>
-                  <View>
-                    <Text style={styles.viewLabel}>Quantity</Text>
-                    <Text style={styles.viewValue}>{selectedOrder.qty}</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.viewLabel}>Category</Text>
-                    <Text style={styles.viewValue}>{selectedOrder.category}</Text>
-                  </View>
                 </View>
 
                 <View style={styles.viewSection}>
-                  <Text style={styles.viewSectionTitle}>Description</Text>
-                  <Text style={styles.viewDescription}>{selectedOrder.description || "No description provided."}</Text>
-                </View>
-
-                <View style={styles.viewSection}>
-                  <Text style={styles.viewSectionTitle}>Order information</Text>
+                  <Text style={styles.viewSectionTitle}>Order & Expiry Information</Text>
                   <DetailRow icon="person-outline" label="Customer" value={selectedOrder.customer} />
-                  <DetailRow icon="calendar-outline" label="Time ordered" value={selectedOrder.time} />
                   <DetailRow icon="basket-outline" label="Quantity" value={selectedOrder.qty} />
-                </View>
-
-                <View style={styles.viewSection}>
-                  <Text style={styles.viewSectionTitle}>Pickup information</Text>
-                  <DetailRow icon="calendar-outline" label="Pickup date" value={selectedOrder.pickupDate} />
-                  <DetailRow icon="time-outline" label="Pickup time" value={selectedOrder.pickupTime} />
-                  <DetailRow icon="ticket-outline" label="Rescue voucher" value={selectedOrder.rescueVoucher ? "Required" : "Not required"} />
-                </View>
-
-                <View style={styles.viewSection}>
-                  <Text style={styles.viewSectionTitle}>Expiry</Text>
-                  <DetailRow icon="time-outline" label="Time remaining" value={selectedOrder.expiry} />
-                  <DetailRow icon="thermometer-outline" label="Storage condition" value={selectedOrder.storageCondition} />
+                  <DetailRow icon="calendar-outline" label="Time ordered" value={selectedOrder.time} />
+                  <DetailRow
+                    icon="alarm-outline"
+                    label="Expiry date & time"
+                    value={`${selectedOrder.pickupDate} • ${selectedOrder.pickupTime}`}
+                  />
                 </View>
 
                 <View style={styles.viewActions}>
                   <TouchableOpacity style={styles.viewCloseButton} activeOpacity={0.8} onPress={() => setViewModalVisible(false)}>
                     <Text style={styles.viewCloseButtonText}>Close</Text>
                   </TouchableOpacity>
+                  {selectedOrder.status === "Pending Pickup" && (
+                    <TouchableOpacity
+                      style={[styles.viewCloseButton, { backgroundColor: Colors.button, borderColor: Colors.button }]}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        setViewModalVisible(false);
+                        setSummaryConfirmOrder(selectedOrder);
+                      }}
+                    >
+                      <Text style={[styles.viewCloseButtonText, { color: Colors.white }]}>
+                        Review & Release
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
                 <View style={{ height: 20 }} />
               </ScrollView>
@@ -549,7 +729,28 @@ export default function EstablishmentOrders() {
           </View>
         </View>
       </Modal>
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
+  );
+}
+
+function SummaryLine({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+      <Text style={{ fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 }}>
+        {label}:
+      </Text>
+      <Text style={{ fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2 }}>
+        {value}
+      </Text>
+    </View>
   );
 }
 
@@ -574,7 +775,7 @@ function OrdersTable({
             <Text style={[styles.tableHeaderText, styles.tableItem]}>Item</Text>
             <Text style={[styles.tableHeaderText, styles.tableQty]}>Qty</Text>
             <Text style={[styles.tableHeaderText, styles.tableTime]}>Time Ordered</Text>
-            <Text style={[styles.tableHeaderText, styles.tableExpiry]}>Expiry</Text>
+            <Text style={[styles.tableHeaderText, styles.tableExpiry]}>Expiry Date & Time</Text>
             <Text style={[styles.tableHeaderText, styles.tableStatus]}>Status</Text>
             <Text style={[styles.tableHeaderText, styles.tableActions]}>Action</Text>
           </View>
@@ -586,7 +787,9 @@ function OrdersTable({
               <Text style={[styles.tableCell, styles.tableItem]} numberOfLines={1}>{order.item}</Text>
               <Text style={[styles.tableCell, styles.tableQty]}>{order.qty}</Text>
               <Text style={[styles.tableCell, styles.tableTime]} numberOfLines={1}>{order.time}</Text>
-              <Text style={[styles.tableCell, styles.tableExpiry, pending && styles.expiryUrgent]}>{order.expiry}</Text>
+              <Text style={[styles.tableCell, styles.tableExpiry, pending && styles.expiryUrgent]} numberOfLines={2}>
+                {order.pickupDate} {order.pickupTime}
+              </Text>
               <View style={[styles.tableStatus, styles.statusCell]}>
                 <View style={[styles.statusBadgeSmall, pending ? styles.pendingBadge : styles.successBadge]}>
                   <View style={[styles.statusDot, pending ? styles.pendingDot : styles.successDot]} />
@@ -639,28 +842,8 @@ function EmptyOrders({ title, description }: { title: string; description: strin
   );
 }
 
-function BottomNavItem({ icon, label, active, onPress }: { icon: any; label: string; active?: boolean; onPress: () => void }) {
-  return (
-    <TouchableOpacity
-      style={[styles.navItem, active && styles.navItemActive]}
-      activeOpacity={active ? 1 : 0.7}
-      onPress={active ? undefined : onPress}
-    >
-      <Ionicons name={icon} size={24} color={active ? Colors.primary : Colors.icon} />
-      <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { minHeight: 70, backgroundColor: Colors.background, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 18, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  logo: { fontFamily: "PoppinsBold", fontSize: 26, color: Colors.primary, letterSpacing: 0.7 },
-  headerSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: -2 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 15 },
-  headerIconButton: { position: "relative", padding: 4 },
-  notificationDot: { position: "absolute", width: 7, height: 7, borderRadius: 4, backgroundColor: "#A94A3A", right: 3, top: 2, borderWidth: 1.5, borderColor: Colors.background },
-  profileCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
   scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 90 },
   pageHeader: { marginBottom: 16 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, lineHeight: 31, color: Colors.primary2 },
@@ -696,7 +879,7 @@ const styles = StyleSheet.create({
   completedBadge: { backgroundColor: "#E7EEE9" },
   completedBadgeText: { color: Colors.primary },
   tableOuter: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, overflow: "hidden" },
-  table: { width: 820 },
+  table: { width: 860 },
   tableHeader: { height: 42, backgroundColor: "#F3F6F4", flexDirection: "row", alignItems: "center", borderBottomWidth: 1, borderBottomColor: Colors.border },
   tableHeaderText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, paddingHorizontal: 10 },
   tableRow: { minHeight: 52, flexDirection: "row", alignItems: "center", borderBottomWidth: 1, borderBottomColor: Colors.border },
@@ -706,8 +889,8 @@ const styles = StyleSheet.create({
   tableCustomer: { width: 110 },
   tableItem: { width: 130 },
   tableQty: { width: 65, textAlign: "center" },
-  tableTime: { width: 130 },
-  tableExpiry: { width: 95 },
+  tableTime: { width: 120 },
+  tableExpiry: { width: 135 },
   tableStatus: { width: 125 },
   tableActions: { width: 85 },
   statusCell: { alignItems: "flex-start", justifyContent: "center" },
@@ -729,11 +912,6 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 56, height: 56, borderRadius: 28, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginBottom: 12 },
   emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2 },
   emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, textAlign: "center", marginTop: 4 },
-  bottomNav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 90, paddingBottom: 25, backgroundColor: Colors.white, flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, elevation: 10, paddingHorizontal: 2 },
-  navItem: { flex: 1, alignItems: "center", justifyContent: "center", marginVertical: 5, marginHorizontal: 2, borderRadius: 7 },
-  navItemActive: { backgroundColor: "#E8EFEA" },
-  navText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.icon, marginTop: 4 },
-  navTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.primary },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalOverlayCenter: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", padding: 20 },
   qrCard: { width: "100%", maxWidth: 360, backgroundColor: Colors.white, borderRadius: 16, padding: 20 },
@@ -758,11 +936,10 @@ const styles = StyleSheet.create({
   orderIdText: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.primary },
   viewPriceBox: { flexDirection: "row", backgroundColor: "#E9EFE9", borderRadius: 12, padding: 14, justifyContent: "space-between", marginBottom: 18 },
   viewLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginBottom: 2 },
-  viewPrice: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary },
+  viewPrice: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.primary },
   viewValue: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
   viewSection: { marginBottom: 18, borderBottomWidth: 1, borderBottomColor: Colors.border, paddingBottom: 15 },
   viewSectionTitle: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.primary2, marginBottom: 10 },
-  viewDescription: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, lineHeight: 18 },
   detailRow: { flexDirection: "row", alignItems: "center", marginBottom: 10 },
   detailIcon: { width: 35, height: 35, borderRadius: 18, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 11 },
   detailLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },

@@ -28,7 +28,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import { EstablishmentBottomNav, EstablishmentHeader } from "../components/EstablishmentNav";
 
-
+import {
+  ReserveAlertModal,
+  ReserveModalState
+} from "../components/CebuRegistrationHelpers";
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
 
@@ -47,6 +50,20 @@ export default function EstablishmentDashboard() {
   const [completedCount, setCompletedCount] = useState(0);
   const [rescuedKg, setRescuedKg] = useState(0);
   const [notifications, setNotifications] = useState<any[]>([]);
+
+  const [avgRating, setAvgRating] = useState(0);
+  const [reviewCount, setReviewCount] = useState(0);
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => setModalAlert({ visible: true, title, message, type });
 
   const parseSafeDate = (dateStr: string, timeStr?: string) => {
     try {
@@ -515,9 +532,7 @@ export default function EstablishmentDashboard() {
 
   const openEditListing = (item: any) => {
     if (item.status === "Flagged") {
-      alert(
-        "Flagged items cannot be edited because they are past or near their expiry threshold."
-      );
+      showModal("Notice", "Flagged items cannot be edited because they are past or near their expiry threshold.", "warning")
       return;
     }
     setEditingListing(item);
@@ -590,7 +605,7 @@ export default function EstablishmentDashboard() {
 
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== "granted") {
-        alert("Camera permission is required to snap photos of surplus items.");
+        showModal("Notice", "Camera permission is required to snap photos of surplus items.", "warning")
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
@@ -609,21 +624,21 @@ export default function EstablishmentDashboard() {
 
   const saveListing = async (statusArg?: "Active" | "Draft") => {
     if (!foodName.trim()) {
-      alert("Please enter a food item name.");
+      showModal("Notice", "Please enter a food item name.", "warning");
       return;
     }
     if (!unit) {
-      alert("Please select a Selling Unit.");
+      showModal("Notice", "Please select a Selling Unit.", "warning");
       return;
     }
     if (!quantity || Number(quantity) <= 0) {
-      alert("Please enter a valid Quantity.");
+      showModal("Notice", "Please enter a valid Quantity.", "warning");
       return;
     }
 
     if (pricingMode === "fixed") {
       if (!normalPrice || Number(normalPrice) <= 0) {
-        alert("Please enter a normal retail price.");
+        showModal("Notice", "Please enter a valid normal retail price.", "warning");
         return;
       }
     } else {
@@ -635,7 +650,7 @@ export default function EstablishmentDashboard() {
         !floorPrice ||
         Number(floorPrice) <= 0
       ) {
-        alert("Please fill in Original, Discounted, and Floor prices correctly.");
+        showModal("Notice", "Please fill in Original, Discounted, and Floor prices correctly.", "warning");
         return;
       }
     }
@@ -736,14 +751,14 @@ export default function EstablishmentDashboard() {
       resetForm();
     } catch (error: any) {
       console.error("Dashboard Save Error:", error);
-      alert("Error saving listing.");
+      showModal("Notice", "Error saving listing.", "warning");
     }
   };
 
   const removeListing = async (id: number) => {
     const target = foodListings.find((item: any) => item.id === id);
     if (target?.status === "Flagged") {
-      alert("Flagged items cannot be removed.");
+      showModal("Notice", "Flagged items cannot be removed.", "warning");
       return;
     }
     try {
@@ -755,7 +770,7 @@ export default function EstablishmentDashboard() {
       setSelectedListing(null);
     } catch (error) {
       console.error("Dashboard Delete Error:", error);
-      alert("Error removing listing.");
+      showModal("Notice", "Error removing listing.", "warning");
     }
   };
 
@@ -1504,6 +1519,13 @@ export default function EstablishmentDashboard() {
           </Animated.View>
         </View>
       </Modal>
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }
@@ -1664,6 +1686,18 @@ function ListingCard({
                 </Text>
               </>
             )}
+          </Text>
+
+          <Text
+            style={{
+              fontFamily: "PoppinsMedium",
+              fontSize: 10.5,
+              color: "#A94A3A",
+              marginTop: 3,
+            }}
+            numberOfLines={1}
+          >
+            Exp: {item.expiryDate} • {item.expiryTime}
           </Text>
 
           <View style={styles.uiCardBottomRow}>

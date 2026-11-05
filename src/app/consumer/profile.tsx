@@ -13,16 +13,34 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
+import { ReserveConfirmModal } from "../components/CebuRegistrationHelpers";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
   return await SecureStore.getItemAsync(key);
 };
 
+const clearConsumerStorage = async () => {
+  const keys = [
+    "access",
+    "refresh",
+    "user_role",
+    "user_email",
+    "profile_id",
+    "entity_name",
+    "account_status",
+  ];
+  for (const k of keys) {
+    if (Platform.OS === "web") localStorage.removeItem(k);
+    else await SecureStore.deleteItemAsync(k);
+  }
+};
+
 export default function Profile() {
   const [fullName, setFullName] = useState("Consumer");
   const [email, setEmail] = useState("Loading...");
   const [city, setCity] = useState("Cebu City");
+  const [logoutConfirmVisible, setLogoutConfirmVisible] = useState(false);
 
   useEffect(() => {
     loadConsumerProfile();
@@ -47,9 +65,14 @@ export default function Profile() {
     } catch (e) {}
   };
 
+  const executeLogout = async () => {
+    setLogoutConfirmVisible(false);
+    await clearConsumerStorage();
+    router.replace("/consumer");
+  };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
       {/* HEADER */}
@@ -61,7 +84,9 @@ export default function Profile() {
 
         <View style={styles.locationPill}>
           <Ionicons name="location-outline" size={13} color={Colors.primary} />
-          <Text style={styles.locationText}>{city}</Text>
+          <Text style={styles.locationText} numberOfLines={1}>
+            {city}
+          </Text>
         </View>
       </View>
 
@@ -70,7 +95,7 @@ export default function Profile() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        <Text style={styles.pageTitle}>Profile</Text>
+        <Text style={styles.pageTitle}>Profile & Settings</Text>
 
         {/* PROFILE CARD */}
         <View style={styles.profileCard}>
@@ -102,24 +127,9 @@ export default function Profile() {
             </View>
             <View>
               <Text style={styles.menuText}>Personal Information</Text>
-              <Text style={styles.menuSubtext}>Manage your personal details</Text>
-            </View>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.menuItem}
-          activeOpacity={0.88}
-          onPress={() => router.push("/consumer/notifications")}
-        >
-          <View style={styles.menuLeft}>
-            <View style={styles.menuIcon}>
-              <Ionicons name="notifications-outline" size={18} color={Colors.primary} />
-            </View>
-            <View>
-              <Text style={styles.menuText}>Notifications</Text>
-              <Text style={styles.menuSubtext}>Manage your notification preferences</Text>
+              <Text style={styles.menuSubtext}>
+                Manage your personal details & Cebu City pin
+              </Text>
             </View>
           </View>
           <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
@@ -132,18 +142,47 @@ export default function Profile() {
         >
           <View style={styles.menuLeft}>
             <View style={styles.menuIcon}>
-              <Ionicons name="lock-closed-outline" size={18} color={Colors.primary} />
+              <Ionicons
+                name="lock-closed-outline"
+                size={18}
+                color={Colors.primary}
+              />
             </View>
             <View>
               <Text style={styles.menuText}>Privacy & Security</Text>
-              <Text style={styles.menuSubtext}>Manage your privacy and security</Text>
+              <Text style={styles.menuSubtext}>
+                Manage your password and account security
+              </Text>
             </View>
           </View>
           <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
         </TouchableOpacity>
 
-        {/* INFORMATION */}
-        <Text style={styles.sectionTitle}>Information</Text>
+        {/* HELP & SUPPORT + INFORMATION */}
+        <Text style={styles.sectionTitle}>Support & Information</Text>
+
+        <TouchableOpacity
+          style={styles.menuItem}
+          activeOpacity={0.88}
+          onPress={() => router.push("/help-support?role=Consumer" as any)}
+        >
+          <View style={styles.menuLeft}>
+            <View style={styles.menuIcon}>
+              <Ionicons
+                name="help-buoy-outline"
+                size={18}
+                color={Colors.primary}
+              />
+            </View>
+            <View>
+              <Text style={styles.menuText}>Help & Support</Text>
+              <Text style={styles.menuSubtext}>
+                View FAQs or send a report to ReServe Admin
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
+        </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.menuItem}
@@ -152,7 +191,11 @@ export default function Profile() {
         >
           <View style={styles.menuLeft}>
             <View style={styles.menuIcon}>
-              <Ionicons name="information-circle-outline" size={18} color={Colors.primary} />
+              <Ionicons
+                name="information-circle-outline"
+                size={18}
+                color={Colors.primary}
+              />
             </View>
             <View>
               <Text style={styles.menuText}>About RESERVE</Text>
@@ -162,11 +205,11 @@ export default function Profile() {
           <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
         </TouchableOpacity>
 
-        {/* LOG OUT */}
+        {/* LOG OUT WITH CONFIRMATION MODAL */}
         <TouchableOpacity
           style={styles.logoutButton}
           activeOpacity={0.85}
-          onPress={() => router.replace("/consumer")}
+          onPress={() => setLogoutConfirmVisible(true)}
         >
           <Ionicons name="log-out-outline" size={18} color="#B3261E" />
           <Text style={styles.logoutText}>Log Out</Text>
@@ -174,6 +217,17 @@ export default function Profile() {
 
         <View style={styles.bottomSpacing} />
       </ScrollView>
+
+      <ReserveConfirmModal
+        visible={logoutConfirmVisible}
+        title="Confirm Logout"
+        message="Are you sure you want to log out of your Consumer account?"
+        confirmText="Yes, Log Out"
+        cancelText="Stay Logged In"
+        isDestructive
+        onConfirm={executeLogout}
+        onCancel={() => setLogoutConfirmVisible(false)}
+      />
 
       {/* BOTTOM NAVIGATION */}
       <View style={styles.bottomNav}>
@@ -217,198 +271,33 @@ export default function Profile() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  header: {
-    height: 64,
-    paddingHorizontal: 16,
-    backgroundColor: Colors.background,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  logo: {
-    fontFamily: "PoppinsBold",
-    fontSize: 22,
-    color: Colors.primary,
-    letterSpacing: 0.5,
-  },
-  logoSubtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.primary1,
-    marginTop: -3,
-  },
-  locationPill: {
-    height: 32,
-    paddingHorizontal: 12,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  locationText: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 11,
-    color: Colors.primary2,
-  },
-  scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 24,
-  },
-  pageTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 24,
-    color: Colors.primary2,
-    marginBottom: 16,
-  },
-  profileCard: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 14,
-    padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  profileCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: "#E8EFEA",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  profileDetails: {
-    flex: 1,
-    marginLeft: 14,
-  },
-  profileName: {
-    fontFamily: "PoppinsBold",
-    fontSize: 18,
-    color: Colors.primary2,
-  },
-  profileEmail: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    color: Colors.placeholder,
-    marginTop: 1,
-  },
-  consumerBadge: {
-    alignSelf: "flex-start",
-    backgroundColor: "#E7F0E9",
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    marginTop: 6,
-  },
-  consumerBadgeText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 9,
-    color: Colors.primary,
-  },
-  sectionTitle: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 15,
-    color: Colors.primary2,
-    marginBottom: 8,
-    marginTop: 4,
-  },
-  menuItem: {
-    height: 60,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  menuLeft: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-  },
-  menuIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: "#E8EFEA",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  menuText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: Colors.primary2,
-  },
-  menuSubtext: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.placeholder,
-    marginTop: 1,
-  },
-  logoutButton: {
-    height: 48,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    marginTop: 16,
-  },
-  logoutText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: "#B3261E",
-  },
-  bottomSpacing: {
-    height: 16,
-  },
-  bottomNav: {
-    height: 84,
-    paddingBottom: 20,
-    backgroundColor: Colors.white,
-    flexDirection: "row",
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    elevation: 8,
-    paddingHorizontal: 2,
-  },
-  navItem: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    marginVertical: 4,
-    borderRadius: 8,
-  },
-  navItemActive: {
-    backgroundColor: "#E8EFEA",
-  },
-  navText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.icon,
-    marginTop: 2,
-  },
-  navTextActive: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    color: Colors.primary,
-  },
+  container: { flex: 1, backgroundColor: Colors.background },
+  header: { height: 64, paddingHorizontal: 16, backgroundColor: Colors.background, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  logo: { fontFamily: "PoppinsBold", fontSize: 22, color: Colors.primary, letterSpacing: 0.5 },
+  logoSubtitle: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: -3 },
+  locationPill: { height: 32, maxWidth: 165, paddingHorizontal: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 16, flexDirection: "row", alignItems: "center", gap: 4 },
+  locationText: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.primary2 },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 },
+  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2, marginBottom: 16 },
+  profileCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 16, flexDirection: "row", alignItems: "center", marginBottom: 20 },
+  profileCircle: { width: 68, height: 68, borderRadius: 34, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center" },
+  profileDetails: { flex: 1, marginLeft: 14 },
+  profileName: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary2 },
+  profileEmail: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.placeholder, marginTop: 1 },
+  consumerBadge: { alignSelf: "flex-start", backgroundColor: "#E7F0E9", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3, marginTop: 6 },
+  consumerBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 9, color: Colors.primary },
+  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2, marginBottom: 8, marginTop: 4 },
+  menuItem: { height: 60, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  menuLeft: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
+  menuIcon: { width: 34, height: 34, borderRadius: 8, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center" },
+  menuText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
+  menuSubtext: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.placeholder, marginTop: 1 },
+  logoutButton: { height: 48, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 16 },
+  logoutText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: "#B3261E" },
+  bottomSpacing: { height: 16 },
+  bottomNav: { height: 84, paddingBottom: 20, backgroundColor: Colors.white, flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, elevation: 8, paddingHorizontal: 2 },
+  navItem: { flex: 1, alignItems: "center", justifyContent: "center", marginVertical: 4, borderRadius: 8 },
+  navItemActive: { backgroundColor: "#E8EFEA" },
+  navText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon, marginTop: 2 },
+  navTextActive: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
 });

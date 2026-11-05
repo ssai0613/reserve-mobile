@@ -15,11 +15,32 @@ import {
   View,
 } from "react-native";
 import { api } from "../../../services/api";
-import { CebuAddressMapPicker } from "../components/CebuRegistrationHelpers";
+import {
+  CebuAddressMapPicker,
+  ReserveAlertModal,
+  ReserveConfirmModal,
+  ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
   return await SecureStore.getItemAsync(key);
+};
+
+const clearFoodBankStorage = async () => {
+  const keys = [
+    "access",
+    "refresh",
+    "user_role",
+    "user_email",
+    "profile_id",
+    "entity_name",
+    "account_status",
+  ];
+  for (const k of keys) {
+    if (Platform.OS === "web") localStorage.removeItem(k);
+    else await SecureStore.deleteItemAsync(k);
+  }
 };
 
 export default function FoodBankProfile() {
@@ -47,6 +68,20 @@ export default function FoodBankProfile() {
   const [pwModalVisible, setPwModalVisible] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
+
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => setModalAlert({ visible: true, title, message, type });
 
   useEffect(() => {
     loadProfile();
@@ -109,19 +144,27 @@ export default function FoodBankProfile() {
       setLatitude(editLat);
       setLongitude(editLng);
       setEditModalVisible(false);
-      alert(res.data.message || "Organization updated!");
+      showModal(
+        "Organization Updated",
+        res.data.message || "Organization details & Cebu City pin updated!",
+        "success"
+      );
     } catch (e) {
-      alert("Could not update organization details.");
+      showModal("Update Failed", "Could not update organization details.", "error");
     }
   };
 
   const handleChangePassword = async () => {
     if (!newPassword || newPassword.length < 6) {
-      alert("Password must be at least 6 characters.");
+      showModal(
+        "Weak Password",
+        "Password must be at least 6 characters.",
+        "warning"
+      );
       return;
     }
     if (newPassword !== confirmPassword) {
-      alert("Passwords do not match.");
+      showModal("Password Mismatch", "Passwords do not match.", "error");
       return;
     }
     try {
@@ -132,13 +175,23 @@ export default function FoodBankProfile() {
       setPwModalVisible(false);
       setNewPassword("");
       setConfirmPassword("");
-      alert(res.data.message || "Password updated!");
+      showModal(
+        "Password Updated",
+        res.data.message || "Password updated!",
+        "success"
+      );
     } catch (e: any) {
-      alert(e.response?.data?.error || "Could not update password.");
+      showModal(
+        "Error",
+        e.response?.data?.error || "Could not update password.",
+        "error"
+      );
     }
   };
 
-  const handleLogout = () => {
+  const executeLogout = async () => {
+    setLogoutConfirmOpen(false);
+    await clearFoodBankStorage();
     router.replace("/consumer");
   };
 
@@ -189,7 +242,7 @@ export default function FoodBankProfile() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account settings</Text>
+          <Text style={styles.sectionTitle}>Account settings & Support</Text>
           <View style={styles.settingsCard}>
             <TouchableOpacity style={styles.settingItem} activeOpacity={0.7} onPress={openEditModal}>
               <View style={styles.settingIcon}>
@@ -220,10 +273,34 @@ export default function FoodBankProfile() {
               </View>
               <Ionicons name="chevron-forward" size={18} color={Colors.icon} />
             </TouchableOpacity>
+
+            <View style={styles.settingDivider} />
+
+            {/* HELP & SUPPORT OPTION */}
+            <TouchableOpacity
+              style={styles.settingItem}
+              activeOpacity={0.7}
+              onPress={() => router.push("/help-support?role=FoodBank" as any)}
+            >
+              <View style={styles.settingIcon}>
+                <Ionicons name="help-buoy-outline" size={18} color={Colors.primary} />
+              </View>
+              <View style={styles.settingContent}>
+                <Text style={styles.settingTitle}>Help & Support</Text>
+                <Text style={styles.settingSubtitle}>
+                  View Food Bank FAQs or send a report to ReServe Admin
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.icon} />
+            </TouchableOpacity>
           </View>
         </View>
 
-        <TouchableOpacity style={styles.logoutButton} activeOpacity={0.8} onPress={handleLogout}>
+        <TouchableOpacity
+          style={styles.logoutButton}
+          activeOpacity={0.8}
+          onPress={() => setLogoutConfirmOpen(true)}
+        >
           <Ionicons name="log-out-outline" size={20} color="#A94A3A" />
           <Text style={styles.logoutText}>Log Out</Text>
         </TouchableOpacity>
@@ -323,6 +400,25 @@ export default function FoodBankProfile() {
           </View>
         </View>
       </Modal>
+
+      <ReserveConfirmModal
+        visible={logoutConfirmOpen}
+        title="Confirm Logout"
+        message="Are you sure you want to log out of your Food Bank Partner account?"
+        confirmText="Yes, Log Out"
+        cancelText="Stay Logged In"
+        isDestructive
+        onConfirm={executeLogout}
+        onCancel={() => setLogoutConfirmOpen(false)}
+      />
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

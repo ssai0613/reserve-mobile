@@ -2118,6 +2118,19 @@ function ListingCard({
             </Text>{" "}
             <Text style={styles.currentLivePrice}>₱{livePrice.toFixed(2)}</Text>
           </Text>
+          
+          <Text
+            style={{
+              fontFamily: "PoppinsMedium",
+              fontSize: 10.5,
+              color: "#A94A3A",
+              marginTop: 3,
+            }}
+            numberOfLines={1}
+          >
+            Exp: {item.expiryDate} • {item.expiryTime}
+          </Text>
+
           <View style={styles.uiCardBottomRow}>
             <Text style={styles.uiCardQty}>
               {item.quantity} {item.unitLabel} available

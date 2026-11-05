@@ -18,7 +18,10 @@ import {
 import { api } from "../../../services/api";
 import {
   CebuAddressMapPicker,
+  PhoneOtpVerifier,
   RegistrationOtpModal,
+  ReserveAlertModal,
+  ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
 
 export default function FoodBankSignup() {
@@ -28,7 +31,6 @@ export default function FoodBankSignup() {
   const isNarrowPhone = width < 360;
   const horizontalPadding = isNarrowPhone ? 12 : 15;
 
-  // Section 1: Organization Details
   const [orgName, setOrgName] = useState("");
   const [barangay, setBarangay] = useState("");
   const [streetDetail, setStreetDetail] = useState("");
@@ -38,21 +40,39 @@ export default function FoodBankSignup() {
   const [contactPerson, setContactPerson] = useState("");
   const [hotline, setHotline] = useState("");
   const [phone, setPhone] = useState("");
+  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
 
-  // Section 2: Account Details
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // Section 3: Accreditation Document
   const [accreditationFile, setAccreditationFile] = useState<any>(null);
   const [isAgreed, setIsAgreed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
-  // OTP Modal States
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpCode, setOtpCode] = useState("");
   const [devOtpHint, setDevOtpHint] = useState("");
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
+
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+    onConfirm: null,
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info",
+    onConfirm: (() => void) | null = null
+  ) => {
+    setModalAlert({ visible: true, title, message, type, onConfirm });
+  };
 
   const pickDocument = async () => {
     try {
@@ -84,26 +104,65 @@ export default function FoodBankSignup() {
       !phone ||
       !email ||
       !password ||
+      !confirmPassword ||
       !accreditationFile
     ) {
-      alert(
-        "Please fill in all required organization details, select your Cebu City Barangay, and upload your Accreditation Certificate."
+      showModal(
+        "Missing Organization Details",
+        "Please fill in all required organization details (including Confirm Password), select your Cebu City Barangay, and upload your Accreditation Certificate.",
+        "warning"
+      );
+      return;
+    }
+    if (password.length < 6) {
+      showModal(
+        "Weak Password",
+        "Your password must be at least 6 characters long.",
+        "warning"
+      );
+      return;
+    }
+    if (password !== confirmPassword) {
+      showModal(
+        "Password Mismatch",
+        "Your Password and Confirm Password do not match. Please re-check both fields.",
+        "error"
+      );
+      return;
+    }
+    if (!isPhoneVerified) {
+      showModal(
+        "Phone Verification Required",
+        "Please verify your Contact Person Number first by tapping 'Send OTP' inside the phone number field.",
+        "warning"
       );
       return;
     }
     if (!isAgreed) {
-      alert("You must agree to the Terms of Service.");
+      showModal(
+        "Terms of Service",
+        "You must agree to the Terms of Service for Food Bank Partners.",
+        "warning"
+      );
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await api.post("accounts/send-otp/", { email });
+      const res = await api.post("accounts/send-otp/", {
+        email: email.trim(),
+        phone: phone.trim(),
+        channel: "email",
+      });
       setDevOtpHint(res.data?.dev_otp_preview || "");
       setOtpCode("");
       setOtpModalVisible(true);
     } catch (err: any) {
-      alert(err.response?.data?.error || "Failed to send OTP.");
+      showModal(
+        "Email OTP Error",
+        err.response?.data?.error || "Failed to send Email OTP.",
+        "error"
+      );
     } finally {
       setIsLoading(false);
     }
@@ -111,17 +170,30 @@ export default function FoodBankSignup() {
 
   const handleVerifyAndSubmit = async () => {
     if (otpCode.trim().length < 6) {
-      alert("Please enter the 6-digit OTP code.");
+      showModal(
+        "Incomplete Code",
+        "Please enter the 6-digit Email OTP code.",
+        "warning"
+      );
       return;
     }
 
     setIsVerifyingOtp(true);
     try {
-      await api.post("accounts/verify-otp/", { email, otp: otpCode.trim() });
+      await api.post("accounts/verify-otp/", {
+        email: email.trim(),
+        phone: phone.trim(),
+        otp: otpCode.trim(),
+        channel: "email",
+      });
       setOtpModalVisible(false);
       await handleSignup();
     } catch (err: any) {
-      alert(err.response?.data?.error || "Invalid OTP code.");
+      showModal(
+        "Verification Failed",
+        err.response?.data?.error || "Invalid Email OTP code.",
+        "error"
+      );
     } finally {
       setIsVerifyingOtp(false);
     }
@@ -134,11 +206,11 @@ export default function FoodBankSignup() {
       formData.append("user_email", email.trim());
       formData.append("user_pass", password);
       formData.append("user_role", "FoodBank");
-      formData.append("org_name", orgName);
+      formData.append("org_name", orgName.trim());
       formData.append("address", address);
       formData.append("contact_person", contactPerson);
       formData.append("hotline", hotline);
-      formData.append("phone", phone);
+      formData.append("phone", phone.trim());
       formData.append("latitude", String(latitude));
       formData.append("longitude", String(longitude));
 
@@ -166,17 +238,19 @@ export default function FoodBankSignup() {
         },
       });
 
-      alert(
-        "Email verified & Food Bank application submitted! Pending Admin Review."
+      showModal(
+        "Application Submitted!",
+        "Phone & Email verified! Your Food Bank partner application has been submitted for Admin Review.",
+        "success",
+        () => router.replace("/consumer")
       );
-      router.replace("/consumer");
     } catch (error: any) {
       const errorData = error.response?.data;
       const errorMessage =
         typeof errorData === "object" && errorData !== null
           ? Object.values(errorData).flat().join("\n")
           : "Registration failed.";
-      alert(errorMessage);
+      showModal("Registration Error", errorMessage, "error");
     } finally {
       setIsLoading(false);
     }
@@ -230,7 +304,6 @@ export default function FoodBankSignup() {
             </Text>
           </View>
 
-          {/* SECTION 1: ORGANIZATION DETAILS */}
           <View style={styles.sectionHeader}>
             <View style={styles.sectionNumber}>
               <Text style={styles.sectionNumberText}>1</Text>
@@ -315,27 +388,16 @@ export default function FoodBankSignup() {
             </View>
           </View>
 
-          <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Contact Person Number *</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="phone-portrait-outline"
-                size={19}
-                color={Colors.primary}
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. +63 912 345 6789"
-                placeholderTextColor={Colors.placeholder}
-                keyboardType="phone-pad"
-                value={phone}
-                onChangeText={setPhone}
-              />
-            </View>
-          </View>
+          {/* INLINE PHONE OTP VERIFIER */}
+          <PhoneOtpVerifier
+            label="Contact Person Number (SMS OTP Required) *"
+            phone={phone}
+            onChangePhone={setPhone}
+            isVerified={isPhoneVerified}
+            onVerifiedChange={setIsPhoneVerified}
+            iconName="phone-portrait-outline"
+          />
 
-          {/* SECTION 2: ACCOUNT DETAILS */}
           <View style={styles.sectionDivider} />
 
           <View style={styles.sectionHeader}>
@@ -381,15 +443,62 @@ export default function FoodBankSignup() {
                 style={styles.input}
                 placeholder="Create a secure password"
                 placeholderTextColor={Colors.placeholder}
-                secureTextEntry
+                secureTextEntry={!showPassword}
                 autoCapitalize="none"
                 value={password}
                 onChangeText={setPassword}
               />
+              <TouchableOpacity
+                onPress={() => setShowPassword(!showPassword)}
+                style={{ paddingHorizontal: 4 }}
+              >
+                <Ionicons
+                  name={showPassword ? "eye-off-outline" : "eye-outline"}
+                  size={18}
+                  color={Colors.icon}
+                />
+              </TouchableOpacity>
             </View>
           </View>
 
-          {/* SECTION 3: UPLOAD CERTIFICATES */}
+          {/* CONFIRM PASSWORD FIELD */}
+          <View style={styles.fieldContainer}>
+            <Text style={styles.label}>Confirm Password *</Text>
+            <View
+              style={[
+                styles.inputContainer,
+                confirmPassword.length > 0 &&
+                  password !== confirmPassword && { borderColor: "#D9383A" },
+              ]}
+            >
+              <Ionicons
+                name="shield-checkmark-outline"
+                size={19}
+                color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="Re-enter your password to confirm"
+                placeholderTextColor={Colors.placeholder}
+                secureTextEntry={!showConfirmPassword}
+                autoCapitalize="none"
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+              />
+              <TouchableOpacity
+                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                style={{ paddingHorizontal: 4 }}
+              >
+                <Ionicons
+                  name={showConfirmPassword ? "eye-off-outline" : "eye-outline"}
+                  size={18}
+                  color={Colors.icon}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+
           <View style={styles.sectionDivider} />
 
           <View style={styles.sectionHeader}>
@@ -466,7 +575,9 @@ export default function FoodBankSignup() {
             disabled={isLoading}
           >
             <Text style={styles.submitText}>
-              {isLoading ? "SENDING OTP..." : "Verify Email & Submit Application"}
+              {isLoading
+                ? "SENDING EMAIL OTP..."
+                : "Verify Email & Submit Application"}
             </Text>
             <Ionicons name="arrow-forward" size={18} color={Colors.white} />
           </TouchableOpacity>
@@ -486,6 +597,7 @@ export default function FoodBankSignup() {
       <RegistrationOtpModal
         visible={otpModalVisible}
         email={email}
+        phone={phone}
         otpCode={otpCode}
         onChangeOtp={setOtpCode}
         onVerify={handleVerifyAndSubmit}
@@ -493,6 +605,18 @@ export default function FoodBankSignup() {
         onClose={() => setOtpModalVisible(false)}
         isVerifying={isVerifyingOtp}
         devOtpHint={devOtpHint}
+      />
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => {
+          const cb = modalAlert.onConfirm;
+          setModalAlert((prev) => ({ ...prev, visible: false, onConfirm: null }));
+          if (cb) cb();
+        }}
       />
     </KeyboardAvoidingView>
   );

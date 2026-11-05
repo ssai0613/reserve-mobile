@@ -9,12 +9,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { api } from "../../../services/api";
-import { EstablishmentBottomNav, EstablishmentHeader } from "../components/EstablishmentNav";
-
+import {
+  EstablishmentBottomNav,
+  EstablishmentHeader,
+} from "../components/EstablishmentNav";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -27,13 +28,16 @@ export default function EstablishmentImpact() {
   const [successfulRescues, setSuccessfulRescues] = useState("0");
   const [co2AvoidedKg, setCo2AvoidedKg] = useState("0");
   const [portionsRescued, setPortionsRescued] = useState("0");
+  const [avgRating, setAvgRating] = useState<number>(0);
+  const [reviewCount, setReviewCount] = useState<number>(0);
+  const [reviews, setReviews] = useState<any[]>([]);
   const [monthlyData, setMonthlyData] = useState<any[]>([
-    { month: "May", rescued: 0 },
     { month: "Jun", rescued: 0 },
     { month: "Jul", rescued: 0 },
     { month: "Aug", rescued: 0 },
     { month: "Sep", rescued: 0 },
     { month: "Oct", rescued: 0 },
+    { month: "Nov", rescued: 0 },
   ]);
   const [recentImpact, setRecentImpact] = useState<any[]>([]);
 
@@ -44,8 +48,19 @@ export default function EstablishmentImpact() {
   const loadImpact = async () => {
     try {
       const storedId = (await getStorageItem("profile_id")) || "1";
-      const res = await api.get(`listings/merchant-portal/${storedId}/`);
+      const storedEmail = (await getStorageItem("user_email")) || "";
+      const res = await api.get(
+        `listings/merchant-portal/${storedId}/?email=${encodeURIComponent(
+          storedEmail
+        )}`
+      );
+      const p = res.data.profile;
       const imp = res.data.impact;
+      if (p) {
+        setAvgRating(Number(p.avg_rating || 0));
+        setReviewCount(Number(p.review_count || 0));
+        setReviews(Array.isArray(p.reviews) ? p.reviews : []);
+      }
       if (imp) {
         setFoodRescuedKg(imp.food_rescued_kg || "0");
         setPeopleHelped(imp.people_helped || "0");
@@ -75,16 +90,59 @@ export default function EstablishmentImpact() {
     <SafeAreaView style={styles.container}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
-      {/* HEADER */}
       <EstablishmentHeader />
 
-      {/* MAIN CONTENT */}
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
         <View style={styles.pageHeader}>
-          <Text style={styles.pageTitle}>Your impact</Text>
+          <Text style={styles.pageTitle}>Impact & Customer Reviews</Text>
           <Text style={styles.pageSubtitle}>
-            Monitor your environmental contributions and community reach
+            Monitor your environmental contributions and consumer ratings
           </Text>
+        </View>
+
+        {/* CUSTOMER RATINGS & REVIEWS SECTION */}
+        <View style={styles.ratingHeroCard}>
+          <View style={styles.ratingHeroTop}>
+            <View>
+              <Text style={styles.ratingHeroLabel}>Overall Storefront Rating</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 }}>
+                <Text style={styles.ratingHeroScore}>
+                  {reviewCount > 0 ? avgRating.toFixed(1) : "5.0"}
+                </Text>
+                <View>
+                  <Text style={{ fontSize: 13 }}>
+                    {"⭐".repeat(reviewCount > 0 ? Math.max(1, Math.round(avgRating)) : 5)}
+                  </Text>
+                  <Text style={styles.ratingHeroCount}>
+                    Based on {reviewCount} verified consumer {reviewCount === 1 ? "review" : "reviews"}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          </View>
+
+          {reviews.length > 0 ? (
+            <View style={{ marginTop: 14, gap: 10 }}>
+              {reviews.map((rev) => (
+                <View key={rev.id} style={styles.reviewItemCard}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={styles.reviewConsumerName}>
+                      {rev.consumer} • {"⭐".repeat(rev.score)} ({rev.score}/5)
+                    </Text>
+                    <Text style={styles.reviewDateText}>{rev.date}</Text>
+                  </View>
+                  <Text style={styles.reviewItemBadge}>Item: {rev.item}</Text>
+                  {rev.comment ? (
+                    <Text style={styles.reviewCommentText}>"{rev.comment}"</Text>
+                  ) : null}
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={[styles.ratingHeroCount, { marginTop: 10 }]}>
+              No customer reviews submitted yet. Reviews will appear here as consumers complete pickups!
+            </Text>
+          )}
         </View>
 
         <View style={styles.impactHero}>
@@ -195,23 +253,6 @@ export default function EstablishmentImpact() {
         </View>
 
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Environmental impact</Text>
-          <Text style={styles.sectionSubtitle}>Your contribution to reducing food waste</Text>
-        </View>
-
-        <View style={styles.environmentCard}>
-          <View style={styles.environmentIcon}>
-            <Ionicons name="earth-outline" size={25} color={Colors.primary} />
-          </View>
-          <View style={styles.environmentContent}>
-            <Text style={styles.environmentTitle}>{co2AvoidedKg} kg CO₂ avoided</Text>
-            <Text style={styles.environmentDescription}>
-              By rescuing surplus food instead of letting it go to waste, your establishment is helping reduce its environmental footprint.
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent impact</Text>
           <Text style={styles.sectionSubtitle}>Your latest contributions</Text>
         </View>
@@ -240,22 +281,9 @@ export default function EstablishmentImpact() {
           )}
         </View>
 
-        <View style={styles.motivationCard}>
-          <View style={styles.motivationIcon}>
-            <Ionicons name="heart" size={20} color={Colors.primary} />
-          </View>
-          <View style={styles.motivationContent}>
-            <Text style={styles.motivationTitle}>Keep making an impact</Text>
-            <Text style={styles.motivationDescription}>
-              Every rescued listing helps reduce food waste and makes affordable food more accessible to the community.
-            </Text>
-          </View>
-        </View>
-
         <View style={{ height: 35 }} />
       </ScrollView>
 
-      {/* BOTTOM NAVIGATION */}
       <EstablishmentBottomNav activeTab="Impact" />
     </SafeAreaView>
   );
@@ -289,32 +317,22 @@ function ImpactRow({ icon, title, value, description }: { icon: any; title: stri
   );
 }
 
-function BottomNavItem({ icon, label, active, onPress }: { icon: any; label: string; active?: boolean; onPress: () => void }) {
-  return (
-    <TouchableOpacity
-      style={[styles.navItem, active && styles.navItemActive]}
-      activeOpacity={active ? 1 : 0.7}
-      onPress={active ? undefined : onPress}
-    >
-      <Ionicons name={icon} size={24} color={active ? Colors.primary : Colors.icon} />
-      <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { minHeight: 70, backgroundColor: Colors.background, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 18, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  logo: { fontFamily: "PoppinsBold", fontSize: 26, color: Colors.primary, letterSpacing: 0.7 },
-  headerSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: -2 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 15 },
-  headerIconButton: { position: "relative", padding: 4 },
-  notificationDot: { position: "absolute", width: 7, height: 7, borderRadius: 4, backgroundColor: "#A94A3A", right: 3, top: 2, borderWidth: 1.5, borderColor: Colors.background },
-  profileCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
   scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 90 },
   pageHeader: { marginBottom: 16 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, lineHeight: 31, color: Colors.primary2 },
   pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 2 },
+  ratingHeroCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 16, marginBottom: 20 },
+  ratingHeroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  ratingHeroLabel: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
+  ratingHeroScore: { fontFamily: "PoppinsBold", fontSize: 32, color: Colors.primary },
+  ratingHeroCount: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
+  reviewItemCard: { backgroundColor: "#F8FAF9", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: Colors.border },
+  reviewConsumerName: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
+  reviewDateText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon },
+  reviewItemBadge: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: Colors.primary, marginTop: 2 },
+  reviewCommentText: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 4, fontStyle: "italic" },
   impactHero: { backgroundColor: Colors.primary, borderRadius: 14, padding: 18, marginBottom: 24 },
   heroIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center", marginBottom: 12 },
   heroTitle: { fontFamily: "PoppinsBold", fontSize: 19, color: Colors.white },
@@ -355,11 +373,6 @@ const styles = StyleSheet.create({
   impactRowDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 15, marginTop: 2 },
   impactRowValue: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.primary },
   impactDivider: { height: 1, backgroundColor: Colors.border },
-  environmentCard: { backgroundColor: "#E9EFE9", borderRadius: 14, padding: 16, flexDirection: "row", marginBottom: 24 },
-  environmentIcon: { width: 45, height: 45, borderRadius: 22, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center", marginRight: 12 },
-  environmentContent: { flex: 1 },
-  environmentTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2 },
-  environmentDescription: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, lineHeight: 17, marginTop: 3 },
   recentCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 14, marginBottom: 24 },
   recentRow: { minHeight: 72, flexDirection: "row", alignItems: "center", borderBottomWidth: 1, borderBottomColor: Colors.border },
   recentRowLast: { borderBottomWidth: 0 },
@@ -368,14 +381,4 @@ const styles = StyleSheet.create({
   recentTitle: { fontFamily: "PoppinsMedium", fontSize: 12.5, color: Colors.primary2 },
   recentDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 15, marginTop: 2, paddingRight: 6 },
   recentDate: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, alignSelf: "flex-start", marginTop: 18 },
-  motivationCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 16, flexDirection: "row" },
-  motivationIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 12 },
-  motivationContent: { flex: 1 },
-  motivationTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2 },
-  motivationDescription: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, lineHeight: 17, marginTop: 3 },
-  bottomNav: { position: "absolute", bottom: 0, left: 0, right: 0, height: 90, paddingBottom: 25, backgroundColor: Colors.white, flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, elevation: 10, paddingHorizontal: 2 },
-  navItem: { flex: 1, alignItems: "center", justifyContent: "center", marginVertical: 5, marginHorizontal: 2, borderRadius: 7 },
-  navItemActive: { backgroundColor: "#E8EFEA" },
-  navText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.icon, marginTop: 4 },
-  navTextActive: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary },
 });

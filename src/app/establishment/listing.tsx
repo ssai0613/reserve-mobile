@@ -77,15 +77,6 @@ const initialFoodListings: FoodListing[] = [];
    MAIN LISTING SCREEN
 ===================================================== */
 
-useEffect(() => {
-  getStorageItem("merch_type").then((mType) => {
-    if (mType && mType.toLowerCase().includes("market")) {
-      router.replace("/establishment/market_listing" as any);
-    }
-  });
-}, []);
-
-
 export default function EstablishmentListing() {
   const [merchantId, setMerchantId] = useState<string>("1");
   const [establishmentName, setEstablishmentName] = useState<string>("Establishment Portal");
@@ -97,6 +88,14 @@ export default function EstablishmentListing() {
      VIEW MODAL: SLIDE-UP + PULL-DOWN-TO-CLOSE
   ===================================================== */
   const viewTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
+
+  useEffect(() => {
+    getStorageItem("merch_type").then((mType) => {
+      if (mType && mType.toLowerCase().includes("market")) {
+        router.replace("/establishment/market_listing" as any);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     if (viewModalVisible) {
@@ -2233,6 +2232,19 @@ function ListingCard({
               </>
             )}
           </Text>
+
+          <Text
+            style={{
+              fontFamily: "PoppinsMedium",
+              fontSize: 10.5,
+              color: "#A94A3A",
+              marginTop: 3,
+            }}
+            numberOfLines={1}
+          >
+            Exp: {item.expiryDate} • {item.expiryTime}
+          </Text>
+          
           <View style={styles.uiCardBottomRow}>
             <Text style={styles.uiCardQty}>
               {item.quantity} {item.unitLabel} available
