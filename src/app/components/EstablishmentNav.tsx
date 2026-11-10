@@ -1,128 +1,192 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router, usePathname } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
-import { Platform, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  DeviceEventEmitter,
+  Platform,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 
+export const MERCHANT_READ_NOTIFS_KEY = "@reserve_merchant_read_notifs";
+export const MERCHANT_DISMISSED_NOTIFS_KEY = "@reserve_merchant_dismissed_notifs";
+
 export const getAppStorage = async (key: string): Promise<string | null> => {
+  if (!key || typeof key !== "string" || key.trim() === "") return null;
   if (Platform.OS === "web") return localStorage.getItem(key);
-  return await SecureStore.getItemAsync(key);
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch (e) {
+    return null;
+  }
 };
 
-export const setAppStorage = async (key: string, value: string): Promise<void> => {
-  if (Platform.OS === "web") localStorage.setItem(key, value);
-  else await SecureStore.setItemAsync(key, value);
+export const setAppStorage = async (
+  key: string,
+  value: string
+): Promise<void> => {
+  if (!key || typeof key !== "string" || key.trim() === "") return;
+  if (Platform.OS === "web") {
+    localStorage.setItem(key, value);
+  } else {
+    try {
+      await SecureStore.setItemAsync(key, value);
+    } catch (e) {}
+  }
 };
 
-export function EstablishmentHeader({ subtitle }: { subtitle?: string }) {
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
-  const [unreadAnnounceCount, setUnreadAnnounceCount] = useState(0);
-  const [portalSubtitle, setPortalSubtitle] = useState(subtitle || "Establishment Portal");
+export function EstablishmentHeader() {
+  const pathname = usePathname();
+  const [busName, setBusName] = useState("Merchant Portal");
+  const [merchType, setMerchType] = useState("Establishment");
+  const [unreadTotalCount, setUnreadTotalCount] = useState(0);
 
   useEffect(() => {
-    checkHeaderCounts();
-    const timer = setInterval(checkHeaderCounts, 4000);
-    return () => clearInterval(timer);
-  }, [subtitle]);
+    loadHeaderData();
+    const interval = setInterval(loadHeaderData, 4000);
 
-  const checkHeaderCounts = async () => {
+    const sub = DeviceEventEmitter.addListener("merchant_notifs_updated", () => {
+      loadHeaderData();
+    });
+    const profSub = DeviceEventEmitter.addListener(
+      "merchant_profile_updated",
+      () => {
+        loadHeaderData();
+      }
+    );
+
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+      profSub.remove();
+    };
+  }, []);
+
+  const loadHeaderData = async () => {
     try {
-      const mId = (await getAppStorage("profile_id")) || "1";
-      const email = (await getAppStorage("user_email")) || "";
-      const mType = (await getAppStorage("merch_type")) || "";
+      const storedId = (await getAppStorage("profile_id")) || "1";
+      const storedEmail = (await getAppStorage("user_email")) || "";
+      const storedName = (await getAppStorage("entity_name")) || "";
+      const storedType = (await getAppStorage("merch_type")) || "Establishment";
 
-      if (!subtitle) {
-        setPortalSubtitle(
-          mType.toLowerCase().includes("market")
-            ? "Market Vendor Portal"
-            : "Establishment Portal"
-        );
+      if (storedName) setBusName(storedName);
+      if (storedType) setMerchType(storedType);
+
+      const [notifRes, annRes, rawReadIds, rawDismissedIds] = await Promise.all([
+        api
+          .get(
+            `listings/notifications/?merchant=${storedId}&email=${encodeURIComponent(
+              storedEmail
+            )}`
+          )
+          .catch(() => ({ data: [] })),
+        api
+          .get(
+            `listings/announcements/?merchant=${storedId}&email=${encodeURIComponent(
+              storedEmail
+            )}`
+          )
+          .catch(() => ({ data: [] })),
+        AsyncStorage.getItem(`${MERCHANT_READ_NOTIFS_KEY}_${storedId}`),
+        AsyncStorage.getItem(`${MERCHANT_DISMISSED_NOTIFS_KEY}_${storedId}`),
+      ]);
+
+      let readSet = new Set<string>();
+      if (rawReadIds) {
+        try {
+          readSet = new Set(JSON.parse(rawReadIds));
+        } catch (e) {}
       }
 
-      // 1. Calculate Unread Operational Notifications (excluding dismissed/deleted ones)
-      const seenNotifsRaw = (await getAppStorage("seen_notif_ids")) || "[]";
-      const dismissedNotifsRaw = (await getAppStorage("dismissed_notif_ids")) || "[]";
-      const seenNotifIds: string[] = JSON.parse(seenNotifsRaw);
-      const dismissedNotifIds: string[] = JSON.parse(dismissedNotifsRaw);
+      let dismissedSet = new Set<string>();
+      if (rawDismissedIds) {
+        try {
+          dismissedSet = new Set(JSON.parse(rawDismissedIds));
+        } catch (e) {}
+      }
 
-      const notifRes = await api.get(
-        `listings/notifications/?merchant=${mId}&email=${encodeURIComponent(email)}`
-      );
-      const notifList = Array.isArray(notifRes.data)
+      const rawNotifs = Array.isArray(notifRes.data)
         ? notifRes.data
-        : notifRes.data.notifications || [];
+        : notifRes.data?.notifications || [];
+      const rawAnns = Array.isArray(annRes.data) ? annRes.data : [];
 
-      const activeNotifs = notifList.filter(
-        (n: any) => !dismissedNotifIds.includes(String(n.id))
+      const activeNotifs = rawNotifs.filter(
+        (n: any) => !dismissedSet.has(String(n.id))
       );
-      const unseenNotifs = activeNotifs.filter(
-        (n: any) => !seenNotifIds.includes(String(n.id))
+      const unreadNotifs = activeNotifs.filter(
+        (n: any) => !readSet.has(String(n.id))
       );
-      setUnreadNotifCount(unseenNotifs.length);
+      const unreadAnns = rawAnns.filter(
+        (a: any) => !readSet.has(String(a.id))
+      );
 
-      // 2. Calculate Unread Admin Announcements
-      const seenAnnounceRaw = (await getAppStorage("seen_announce_ids")) || "[]";
-      const seenAnnounceIds: string[] = JSON.parse(seenAnnounceRaw);
-
-      const announceRes = await api.get("listings/announcements/");
-      const announceList = Array.isArray(announceRes.data) ? announceRes.data : [];
-      const unseenAnnouncements = announceList.filter(
-        (a: any) => !seenAnnounceIds.includes(String(a.id))
-      );
-      setUnreadAnnounceCount(unseenAnnouncements.length);
+      setUnreadTotalCount(unreadNotifs.length + unreadAnns.length);
     } catch (e) {}
   };
 
+  const isProfileActive = pathname?.includes("/establishment/profile");
+
   return (
     <View style={styles.header}>
-      <View>
-        <Text style={styles.logo}>RESERVE</Text>
-        <Text style={styles.headerSubtitle}>{portalSubtitle}</Text>
-      </View>
+      <TouchableOpacity
+        style={styles.brandTouchable}
+        activeOpacity={0.75}
+        onPress={() => router.replace("/establishment/dashboard" as any)}
+      >
+        <View style={styles.brandIconBox}>
+          <Ionicons name="storefront-outline" size={20} color={Colors.primary} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.logo} numberOfLines={1}>
+            RESERVE
+          </Text>
+          <Text style={styles.headerSubtitle} numberOfLines={1}>
+            {busName} • {merchType}
+          </Text>
+        </View>
+      </TouchableOpacity>
 
+      {/* FUSED SINGLE NOTIFICATION BELL + PROFILE BUTTON */}
       <View style={styles.headerActions}>
-        {/* SYSTEM ANNOUNCEMENTS (MEGAPHONE WITH NUMERIC BADGE) */}
         <TouchableOpacity
-          style={styles.headerIconButton}
-          activeOpacity={0.7}
-          onPress={() => router.push("/establishment/announcements" as any)}
+          style={styles.headerIconBtn}
+          activeOpacity={0.75}
+          onPress={() => router.push("/establishment/notifications" as any)}
         >
-          <Ionicons name="megaphone-outline" size={22} color={Colors.primary} />
-          {unreadAnnounceCount > 0 && (
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>
-                {unreadAnnounceCount > 99 ? "99+" : unreadAnnounceCount}
+          <Ionicons
+            name="notifications-outline"
+            size={21}
+            color={Colors.primary}
+          />
+          {unreadTotalCount > 0 && (
+            <View style={styles.headerCountBadge}>
+              <Text style={styles.headerCountBadgeText}>
+                {unreadTotalCount > 99 ? "99+" : unreadTotalCount}
               </Text>
             </View>
           )}
         </TouchableOpacity>
 
-        {/* OPERATIONAL NOTIFICATIONS (BELL WITH NUMERIC BADGE) */}
         <TouchableOpacity
-          style={styles.headerIconButton}
-          activeOpacity={0.7}
-          onPress={() => router.push("/establishment/notifications")}
+          style={[
+            styles.profileBtn,
+            isProfileActive && styles.profileBtnActive,
+          ]}
+          activeOpacity={0.8}
+          onPress={() => router.replace("/establishment/profile" as any)}
         >
-          <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
-          {unreadNotifCount > 0 && (
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>
-                {unreadNotifCount > 99 ? "99+" : unreadNotifCount}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-
-        {/* MERCHANT PROFILE */}
-        <TouchableOpacity
-          activeOpacity={0.7}
-          onPress={() => router.push("/establishment/profile")}
-        >
-          <View style={styles.profileCircle}>
-            <Ionicons name="person" size={16} color={Colors.white} />
-          </View>
+          <Ionicons
+            name={isProfileActive ? "person" : "person-outline"}
+            size={18}
+            color={Colors.white}
+          />
         </TouchableOpacity>
       </View>
     </View>
@@ -132,61 +196,74 @@ export function EstablishmentHeader({ subtitle }: { subtitle?: string }) {
 export function EstablishmentBottomNav({
   activeTab,
 }: {
-  activeTab: "Home" | "Listings" | "Orders" | "Earnings" | "Donation" | "Impact";
+  activeTab?:
+    | "Home"
+    | "Listings"
+    | "Orders"
+    | "Donation"
+    | "Earnings"
+    | "Impact"
+    | "Profile";
 }) {
+  const insets = useSafeAreaInsets();
   const [merchType, setMerchType] = useState("Bakeshop");
 
   useEffect(() => {
-    getAppStorage("merch_type").then((val) => {
-      if (val) setMerchType(val);
+    getAppStorage("merch_type").then((t) => {
+      if (t) setMerchType(t);
     });
   }, []);
 
-  const goToListings = () => {
-    if (merchType.toLowerCase().includes("market")) {
-      router.replace("/establishment/market_listing" as any);
-    } else {
-      router.replace("/establishment/listing");
-    }
-  };
+  const bottomInsetPad = Platform.OS === "ios" ? Math.max(insets.bottom, 6) : 6;
+  const listingsRoute = merchType.toLowerCase().includes("market")
+    ? "/establishment/market_listing"
+    : "/establishment/listing";
 
   return (
-    <View style={styles.bottomNav}>
+    <View
+      style={[
+        styles.bottomNav,
+        {
+          height: 56 + bottomInsetPad,
+          paddingBottom: bottomInsetPad,
+        },
+      ]}
+    >
       <BottomNavItem
-        icon={activeTab === "Home" ? "grid" : "grid-outline"}
+        icon={activeTab === "Home" ? "home" : "home-outline"}
         label="Home"
         active={activeTab === "Home"}
-        onPress={() => router.replace("/establishment/dashboard")}
+        onPress={() => router.replace("/establishment/dashboard" as any)}
       />
       <BottomNavItem
         icon={activeTab === "Listings" ? "restaurant" : "restaurant-outline"}
         label="Listings"
         active={activeTab === "Listings"}
-        onPress={goToListings}
+        onPress={() => router.replace(listingsRoute as any)}
       />
       <BottomNavItem
-        icon={activeTab === "Orders" ? "basket" : "basket-outline"}
+        icon={activeTab === "Orders" ? "receipt" : "receipt-outline"}
         label="Orders"
         active={activeTab === "Orders"}
-        onPress={() => router.replace("/establishment/orders")}
+        onPress={() => router.replace("/establishment/orders" as any)}
       />
       <BottomNavItem
-        icon={activeTab === "Earnings" ? "cash" : "cash-outline"}
-        label="Earnings"
-        active={activeTab === "Earnings"}
-        onPress={() => router.replace("/establishment/earnings")}
-      />
-      <BottomNavItem
-        icon={activeTab === "Donation" ? "heart" : "heart-outline"}
+        icon={activeTab === "Donation" ? "gift" : "gift-outline"}
         label="Donation"
         active={activeTab === "Donation"}
-        onPress={() => router.replace("/establishment/donation")}
+        onPress={() => router.replace("/establishment/donation" as any)}
       />
       <BottomNavItem
-        icon={activeTab === "Impact" ? "person" : "person-outline"}
+        icon={activeTab === "Earnings" ? "wallet" : "wallet-outline"}
+        label="Earnings"
+        active={activeTab === "Earnings"}
+        onPress={() => router.replace("/establishment/earnings" as any)}
+      />
+      <BottomNavItem
+        icon={activeTab === "Impact" ? "leaf" : "leaf-outline"}
         label="Impact"
         active={activeTab === "Impact"}
-        onPress={() => router.replace("/establishment/impact")}
+        onPress={() => router.replace("/establishment/impact" as any)}
       />
     </View>
   );
@@ -211,7 +288,7 @@ function BottomNavItem({
     >
       <Ionicons
         name={icon}
-        size={24}
+        size={20}
         color={active ? Colors.primary : Colors.icon}
       />
       <Text style={[styles.navText, active && styles.navTextActive]}>
@@ -223,96 +300,122 @@ function BottomNavItem({
 
 const styles = StyleSheet.create({
   header: {
-    minHeight: 70,
+    height: 60,
+    paddingHorizontal: 16,
     backgroundColor: Colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+  },
+  brandTouchable: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 12,
+    gap: 9,
+  },
+  brandIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#E8EFEA",
+    alignItems: "center",
+    justifyContent: "center",
   },
   logo: {
     fontFamily: "PoppinsBold",
-    fontSize: 26,
+    fontSize: 18,
     color: Colors.primary,
-    letterSpacing: 0.7,
+    letterSpacing: 0.5,
   },
   headerSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 12,
+    fontSize: 10,
     color: Colors.primary1,
     marginTop: -2,
   },
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
+    gap: 10,
   },
-  headerIconButton: {
-    position: "relative",
-    padding: 5,
-  },
-  countBadge: {
-    position: "absolute",
-    top: -2,
-    right: -3,
-    minWidth: 17,
-    height: 17,
-    borderRadius: 8.5,
-    backgroundColor: "#B3261E",
+  headerIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
     alignItems: "center",
     justifyContent: "center",
+    position: "relative",
+  },
+  headerCountBadge: {
+    position: "absolute",
+    top: -4,
+    right: -4,
+    minWidth: 17,
+    height: 17,
     paddingHorizontal: 4,
+    borderRadius: 8.5,
+    backgroundColor: "#B3261E",
     borderWidth: 1.5,
-    borderColor: Colors.background,
+    borderColor: Colors.white,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  countBadgeText: {
+  headerCountBadgeText: {
     fontFamily: "PoppinsBold",
-    fontSize: 9,
+    fontSize: 8.5,
     color: Colors.white,
-    lineHeight: 11,
   },
-  profileCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+  profileBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: Colors.primary,
     alignItems: "center",
     justifyContent: "center",
   },
+  profileBtnActive: {
+    backgroundColor: Colors.button,
+    borderWidth: 2,
+    borderColor: "#8BC3A3",
+  },
   bottomNav: {
-    height: 90,
-    paddingBottom: 25,
     backgroundColor: Colors.white,
     flexDirection: "row",
     borderTopWidth: 1,
     borderTopColor: Colors.border,
+    paddingHorizontal: 4,
+    paddingTop: 4,
     elevation: 10,
-    paddingHorizontal: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
   },
   navItem: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    marginVertical: 5,
-    marginHorizontal: 2,
-    borderRadius: 7,
+    borderRadius: 10,
+    paddingVertical: 4,
   },
   navItemActive: {
     backgroundColor: "#E8EFEA",
   },
   navText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 11,
+    fontSize: 9.5,
     color: Colors.icon,
-    marginTop: 4,
+    marginTop: 1,
   },
   navTextActive: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
+    fontSize: 9.5,
     color: Colors.primary,
   },
 });
-
-export default EstablishmentHeader;

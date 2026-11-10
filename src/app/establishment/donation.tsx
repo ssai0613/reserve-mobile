@@ -1,17 +1,12 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { Stack } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Animated,
-  Dimensions,
   Image,
-  KeyboardAvoidingView,
+  Linking,
   Modal,
-  PanResponder,
-  Platform,
-  Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,768 +16,543 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
-import { EstablishmentBottomNav, EstablishmentHeader, getAppStorage } from "../components/EstablishmentNav";
+import {
+  ReserveAlertModal,
+  ReserveConfirmModal,
+  ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
+import {
+  EstablishmentBottomNav,
+  EstablishmentHeader,
+  getAppStorage,
+} from "../components/EstablishmentNav";
 
-const SCREEN_HEIGHT = Dimensions.get("window").height;
-
-/* =====================================================
-   TYPES
-===================================================== */
-
-type DonationRequest = {
-  id: string;
+type AppealLineItem = {
   donation_req_id: number;
-  requester: string;
-  type: string;
-  quantity: string;
-  urgency: string;
-  date: string;
-  createdAt: string;
+  listing_id?: number | null;
+  food_name: string;
+  food_type: string;
+  qty_needed: number;
+  qty_available: number;
+  unit_name: string;
+  image_path?: string | null;
+  expiry_date?: string;
+  expiry_time?: string;
+  expiry_display?: string;
   status: string;
 };
 
-type PostedDonationItem = {
-  id: string;
-  donation_id: number;
-  name: string;
-  quantity: string;
-  category: string;
+type FoodBankAppeal = {
+  donation_req_id: number;
+  batch_code: string;
+  food_name: string;
+  food_type: string;
+  qty_needed: number;
+  unit_name: string;
+  reason: string;
+  additional_info: string;
   status: string;
-  datePosted: string;
-  claimedBy?: string;
-  image: string;
-  expires_at?: string | null;
+  created_at: string;
+  food_bank: number;
+  food_bank_name: string;
+  food_bank_contact_person: string;
+  food_bank_phone: string;
+  food_bank_hotline: string;
+  food_bank_email: string;
+  food_bank_address: string;
+  expiry_display: string;
+  image_path?: string | null;
+  items_breakdown: AppealLineItem[];
 };
 
-type ListingItem = {
-  id: number;
+type ActiveInventoryListing = {
+  prod_id: number;
+  commerce_id: number;
   name: string;
-  quantity: string;
   category: string;
+  qty_available: number;
+  unit_name: string;
   price: string;
+  expiry_date: string;
+  expiry_time: string;
   image: string;
 };
 
-/* =====================================================
-   EXPIRY HELPER
-===================================================== */
-
-function getExpiryDisplay(expiresAt?: string | null) {
-  if (!expiresAt) return { text: "No expiry", expired: false };
-  const ms = new Date(expiresAt).getTime() - Date.now();
-  if (ms <= 0) return { text: "Expired", expired: true };
-  const hrs = Math.floor(ms / (1000 * 60 * 60));
-  if (hrs > 48) return { text: `${Math.floor(hrs / 24)}d left`, expired: false };
-  if (hrs > 0) return { text: `${hrs}h left`, expired: false };
-  const mins = Math.floor(ms / (1000 * 60));
-  return { text: `${mins}m left`, expired: false };
-}
-
-const parseSafeDate = (dateStr: string) => {
-  if (!dateStr) return 0;
-  try {
-    let full = dateStr.replace(/,/g, '').replace(/\u202f/g, ' ').replace(/\s+/g, ' ').trim(); 
-    const parts = full.split(' '); 
-    
-    if (parts.length < 3) return new Date(dateStr).getTime();
-
-    const monthIndex = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(parts[0]);
-    if (monthIndex === -1) return new Date(dateStr).getTime();
-    
-    const day = parseInt(parts[1], 10);
-    const year = parseInt(parts[2], 10);
-    
-    let hours = 0;
-    let minutes = 0;
-    
-    if (parts[3]) {
-      const timeParts = parts[3].split(':');
-      hours = parseInt(timeParts[0], 10);
-      minutes = parseInt(timeParts[1], 10);
-      
-      const fullUpper = full.toUpperCase();
-      if (fullUpper.includes('PM') && hours < 12) hours += 12;
-      if (fullUpper.includes('AM') && hours === 12) hours = 0;
-    }
-
-    return new Date(year, monthIndex, day, hours, minutes).getTime();
-  } catch (error) {
-    return new Date(dateStr).getTime(); 
-  }
+type PostedDonation = {
+  donation_id: number;
+  food_name: string;
+  food_type: string;
+  qty_donated: number;
+  unit_name: string;
+  status: string;
+  created_at: string;
+  expiry_date: string;
+  expiry_time: string;
+  expiry_display: string;
+  image_path?: string | null;
+  food_bank_name?: string | null;
+  food_bank_contact_person?: string | null;
+  food_bank_phone?: string | null;
+  food_bank_email?: string | null;
+  food_bank_address?: string | null;
 };
-
-// Same rule as the listings: 30 minutes (1830 seconds) or less before the expiry
-// time, the food is automatically Flagged (this also covers anything already expired).
-const FLAG_THRESHOLD_MS = 1830 * 1000;
-
-function isFlagTime(expiresAt?: string | null) {
-  if (!expiresAt) return false;
-  let end = parseSafeDate(expiresAt);
-  if (!end || isNaN(end)) end = new Date(expiresAt).getTime();
-  if (!end || isNaN(end)) return false;
-  return end - Date.now() <= FLAG_THRESHOLD_MS;
-}
-
-/* =====================================================
-   BOTTOM SHEET HOOK: SLIDE-UP + PULL-DOWN-TO-CLOSE
-===================================================== */
-function useBottomSheet(visible: boolean, setVisible: (v: boolean) => void) {
-  const translateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
-
-  // Slide the sheet up whenever it opens
-  useEffect(() => {
-    if (visible) {
-      translateY.setValue(SCREEN_HEIGHT);
-      Animated.spring(translateY, {
-        toValue: 0,
-        useNativeDriver: true,
-        bounciness: 0,
-        speed: 14,
-      }).start();
-    }
-  }, [visible]);
-
-  const close = () => {
-    Animated.timing(translateY, {
-      toValue: SCREEN_HEIGHT,
-      duration: 220,
-      useNativeDriver: true,
-    }).start(() => {
-      setVisible(false);
-    });
-  };
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 5,
-      onPanResponderMove: (_, g) => {
-        if (g.dy > 0) translateY.setValue(g.dy); // only allow dragging down
-      },
-      onPanResponderRelease: (_, g) => {
-        if (g.dy > 120 || g.vy > 0.8) {
-          Animated.timing(translateY, {
-            toValue: SCREEN_HEIGHT,
-            duration: 200,
-            useNativeDriver: true,
-          }).start(() => setVisible(false));
-        } else {
-          Animated.spring(translateY, {
-            toValue: 0,
-            useNativeDriver: true,
-            bounciness: 6,
-          }).start();
-        }
-      },
-    })
-  ).current;
-
-  return { translateY, close, panHandlers: panResponder.panHandlers };
-}
-
-/* =====================================================
-   MAIN DONATION SCREEN
-===================================================== */
 
 export default function DonationHub() {
+  const [merchantId, setMerchantId] = useState("1");
+  const [mainTab, setMainTab] = useState<"Requests" | "Donations">("Requests");
+  const [requestFilter, setRequestFilter] = useState<
+    "All" | "Pending" | "Ongoing" | "Successful" | "Rejected"
+  >("All");
+  const [donationSubTab, setDonationSubTab] = useState<
+    "Select Inventory" | "Posted Donations"
+  >("Select Inventory");
   const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState("Active Donations");
-  const [historyFilter, setHistoryFilter] = useState("Requested"); // "Requested" | "Claimed" | "Cancelled" | "Flagged"
+  const [refreshing, setRefreshing] = useState(false);
 
-  const [requests, setRequests] = useState<DonationRequest[]>([]);
-  const [merchantListings, setMerchantListings] = useState<ListingItem[]>([]);
-  const [postedDonations, setPostedDonations] = useState<PostedDonationItem[]>([]);
+  const [appeals, setAppeals] = useState<FoodBankAppeal[]>([]);
+  const [activeInventory, setActiveInventory] = useState<
+    ActiveInventoryListing[]
+  >([]);
+  const [postedDonations, setPostedDonations] = useState<PostedDonation[]>([]);
 
-  // Re-check every 30s so donations hitting the 30-minute mark move to Flagged live
-  const [, setFlagTick] = useState(0);
-  useEffect(() => {
-    const tick = setInterval(() => setFlagTick((n) => n + 1), 30000);
-    return () => clearInterval(tick);
-  }, []);
+  const [selectedInventoryMap, setSelectedInventoryMap] = useState<{
+    [commerceId: number]: number;
+  }>({});
+  const [postingDonations, setPostingDonations] = useState(false);
 
-/* =====================================================
-    SORT & FILTER
-===================================================== */
-  const [dateFilterMode, setDateFilterMode] = useState<"All" | "Today" | "Last 7 Days" | "Last 30 Days" | "Custom">("All");
-  const [showMainDatePicker, setShowMainDatePicker] = useState(false);
-  const [customMainDate, setCustomMainDate] = useState(new Date());
+  const [selectedAppeal, setSelectedAppeal] = useState<FoodBankAppeal | null>(
+    null
+  );
+  const [editableAppealQtys, setEditableAppealQtys] = useState<{
+    [reqId: number]: number;
+  }>({});
+  const [processingAppeal, setProcessingAppeal] = useState(false);
 
-  const [sortMode, setSortMode] = useState<"A-Z" | "Date Posted">("A-Z");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedPosted, setSelectedPosted] = useState<PostedDonation | null>(
+    null
+  );
+  const [editPostedQty, setEditPostedQty] = useState("1");
 
-  const [dateDropdownOpen, setDateDropdownOpen] = useState(false);
-  const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
-
-  const filterByDateRange = (
-    item: PostedDonationItem | DonationRequest
-  ) => {
-    if (dateFilterMode === "All") return true;
-
-    const rawDate =
-      "createdAt" in item
-        ? item.createdAt
-        : item.datePosted;
-
-    if (!rawDate || rawDate === "Not Set") return false;
-
-    const itemDate = new Date(rawDate);
-
-    if (isNaN(itemDate.getTime())) return false;
-
-    const itemDay = new Date(
-      itemDate.getFullYear(),
-      itemDate.getMonth(),
-      itemDate.getDate()
-    ).getTime();
-
-    const now = new Date();
-    const todayDay = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate()
-    ).getTime();
-
-    if (dateFilterMode === "Today") {
-      return itemDay === todayDay;
-    }
-
-    if (
-      dateFilterMode === "Last 7 Days" ||
-      dateFilterMode === "Last 30 Days"
-    ) {
-      const diffDays =
-        (todayDay - itemDay) / (1000 * 60 * 60 * 24);
-
-      const limit =
-        dateFilterMode === "Last 7 Days" ? 7 : 30;
-
-      return diffDays >= 0 && diffDays <= limit;
-    }
-
-    if (dateFilterMode === "Custom") {
-      const customDay = new Date(
-        customMainDate.getFullYear(),
-        customMainDate.getMonth(),
-        customMainDate.getDate()
-      ).getTime();
-
-      return itemDay === customDay;
-    }
-
-    return true;
-  };
-  const handleSortSelection = (mode: "A-Z" | "Date Posted") => {
-    if (sortMode === mode) {
-      setSortDirection(prev => (prev === "asc" ? "desc" : "asc"));
-    } else {
-      setSortMode(mode);
-      setSortDirection("asc");
-    }
-    setSortDropdownOpen(false);
-  };
-
-  /* =====================================================
-     MODAL STATES
-  ===================================================== */
-  const [selectedRequest, setSelectedRequest] = useState<DonationRequest | null>(null);
-  const [viewModalVisible, setViewModalVisible] = useState(false);
-
-  const [selectedPostedItem, setSelectedPostedItem] = useState<PostedDonationItem | null>(null);
-  const [viewPostedModalVisible, setViewPostedModalVisible] = useState(false);
-
-  // Bottom-sheet behaviour for the two detail modals
-  const viewSheet = useBottomSheet(viewModalVisible, setViewModalVisible);
-  const postedSheet = useBottomSheet(viewPostedModalVisible, setViewPostedModalVisible);
-  
-  const [editItemQty, setEditItemQty] = useState("");
-  const [selectListingModalVisible, setSelectListingModalVisible] = useState(false);
-
-  /* =====================================================
-     CUSTOM CONFIRMATION / ALERT UI ENGINE
-  ===================================================== */
-  const [alertConfig, setAlertConfig] = useState({
+  const [confirmState, setConfirmState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    confirmText: string;
+    isDestructive?: boolean;
+    onConfirm: () => void;
+  }>({
     visible: false,
     title: "",
     message: "",
-    confirmText: "Okay",
-    cancelText: "",
-    onConfirm: () => {}
+    confirmText: "Confirm",
+    onConfirm: () => {},
   });
 
-  const showAlert = (title: string, message: string, confirmText = "Okay", cancelText = "", onConfirm?: () => void) => {
-    setAlertConfig({ 
-      visible: true, 
-      title, 
-      message, 
-      confirmText, 
-      cancelText, 
-      onConfirm: onConfirm || hideAlert 
-    });
-  };
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
 
-  const hideAlert = () => {
-    setAlertConfig((prev) => ({ ...prev, visible: false }));
-  };
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => setModalAlert({ visible: true, title, message, type });
 
   useEffect(() => {
-    fetchDonationData();
+    loadAllDonationData();
   }, []);
 
-  const fetchDonationData = async () => {
+  const loadAllDonationData = async () => {
     try {
       const storedId = (await getAppStorage("profile_id")) || "1";
       const storedEmail = (await getAppStorage("user_email")) || "";
+      setMerchantId(storedId);
 
-      const activeRes = await api.get("donations/available/");
-      const listingsRes = await api.get(
-        `listings/establishment/?merchant=${storedId}&email=${encodeURIComponent(storedEmail)}`
-      );
-      const rawMerchantListings = listingsRes.data.listings || listingsRes.data || [];
+      const [reqRes, estRes, donRes] = await Promise.all([
+        api.get(`donations/requests/?merchant=${storedId}`),
+        api.get(
+          `listings/establishment/?merchant=${storedId}&email=${encodeURIComponent(
+            storedEmail
+          )}`
+        ),
+        api.get(`donations/available/?merchant=${storedId}`),
+      ]);
 
-      const listingsMap: Record<string, any> = {};
-      rawMerchantListings.forEach((l: any) => {
-        const id = l.prod_id || l.id;
-        listingsMap[id] = l;
-      });
+      setAppeals(Array.isArray(reqRes.data) ? reqRes.data : []);
 
-      const myMerchantId = Number(storedId) || 1;
-      const myDonations = Array.isArray(activeRes.data)
-        ? activeRes.data.filter(
-            (d: any) =>
-              !d.merchant ||
-              Number(d.merchant) === myMerchantId ||
-              listingsMap[d.product_id] !== undefined
-          )
-        : [];
-
-      const formattedActive = myDonations.map((item: any) => {
-        const origListing = listingsMap[item.product_id] || {};
-        const expDate = item.expiry_date || origListing.expiry_date || "";
-        const expTime = item.expiry_time || origListing.expiry_time || "";
-        let realExpiry = item.expires_at || origListing.expires_at || null;
-
-        if (!realExpiry && expDate) {
-          realExpiry = `${expDate} ${expTime}`.trim();
-        }
-
-        const rawCreated = item.created_at || origListing.created_at || item.date || new Date();
-        const parsedDate = new Date(rawCreated);
-        const formattedDateStr = !isNaN(parsedDate.getTime())
-          ? parsedDate.toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            })
-          : new Date().toLocaleDateString("en-US", {
-              month: "short",
-              day: "numeric",
-              year: "numeric",
-            });
-
-        return {
-          id: `POST00${item.donation_id}`,
-          donation_id: item.donation_id,
-          name: item.food_name || item.item_name || origListing.prod_name || "Surplus Bundle",
-          quantity: String(item.qty_donated || 0),
-          category: item.food_type || item.category || origListing.category_name || "Surplus",
-          status: item.status === "Active" ? "Available" : item.status || "Available",
-          datePosted: formattedDateStr,
-          claimedBy: item.food_bank_name || item.claimed_by || "Partner Food Bank",
-          image:
-            item.image_path ||
-            origListing.image_path ||
-            "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
-          expires_at: realExpiry,
-        };
-      });
-      setPostedDonations(formattedActive);
-
-      const donatedCommerceIds = Array.isArray(activeRes.data)
-        ? activeRes.data.map((item: any) => item.listing)
-        : [];
-
-      const formattedListings = rawMerchantListings
+      const rawListings = estRes.data?.listings || estRes.data || [];
+      const activeItems: ActiveInventoryListing[] = rawListings
         .filter(
           (l: any) =>
             (l.status || "Active") === "Active" &&
-            Number(l.quantity ?? l.qty_available ?? 0) > 0 &&
-            !donatedCommerceIds.includes(l.commerce_id || l.listing_id || l.id)
+            Number(l.qty_available ?? l.quantity ?? 0) > 0
         )
-        .map((l: any, index: number) => ({
-          id: l.commerce_id || l.listing_id || l.id || l.prod_id || index.toString(),
-          commerce_id: l.commerce_id || l.listing_id || l.id,
-          name: l.prod_name,
-          quantity: String(l.quantity || "0"),
+        .map((l: any) => ({
+          prod_id: Number(l.prod_id || l.id),
+          commerce_id: Number(l.commerce_id || l.prod_id || l.id),
+          name: l.prod_name || "Surplus Food",
           category: l.category_name || l.category || "Surplus",
+          qty_available: Number(l.qty_available ?? l.quantity ?? 0),
+          unit_name: l.unit_name || "pcs",
           price: `₱${Number(l.price || 0).toFixed(2)}`,
+          expiry_date: l.expiry_date || "Not Set",
+          expiry_time: l.expiry_time || "Not Set",
           image:
             l.image_path ||
-            "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
+            "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&q=80",
         }));
-      setMerchantListings(formattedListings);
+      setActiveInventory(activeItems);
 
-      const wishlistRes = await api.get("donations/requests/");
-      const formattedRequests = (Array.isArray(wishlistRes.data) ? wishlistRes.data : []).map(
-        (req: any) => {
-          const rawCreatedAt = req.created_at || "";
-          return {
-            id: `REQ00${req.donation_req_id}`,
-            donation_req_id: req.donation_req_id,
-            requester: req.merchant_name || "Partner Food Bank",
-            type: req.food_type || "Custom Request",
-            quantity: String(req.qty_needed),
-            urgency: "Standard",
-            date: rawCreatedAt
-              ? new Date(rawCreatedAt).toLocaleDateString("en-US", {
-                  month: "short",
-                  day: "numeric",
-                  year: "numeric",
-                })
-              : "Not Set",
-            createdAt: rawCreatedAt,
-            status: req.status || "Active",
-          };
-        }
-      );
-      setRequests(formattedRequests);
-    } catch (error) {
-      console.error("Failed to load live database data:", error);
+      setPostedDonations(Array.isArray(donRes.data) ? donRes.data : []);
+    } catch (err) {
+      console.log("Donation hub load error:", err);
     }
   };
 
-  /* =====================================================
-     FILTERING & TABS LOGIC
-  ===================================================== */
-  const searchVal = search.toLowerCase().trim();
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadAllDonationData();
+    setRefreshing(false);
+  };
 
-  // "Available" + 30 minutes (or less) before expiry, or already expired  =>  "Flagged"
-  const donations = postedDonations.map((i) =>
-    i.status === "Available" && isFlagTime(i.expires_at) ? { ...i, status: "Flagged" } : i
-  );
-
-  const allActive = donations.filter((i) => i.status === "Available");
-  const allClaims = donations.filter((i) => i.status === "Claimed by Food Bank" || i.status === "Claimed");
-  const allWishlists = requests.filter((r) => r.status === "Active");
-  
-  const postedHistory = donations.filter((i) => i.status === "Fulfilled" || i.status === "Completed" || i.status === "Cancelled" || i.status === "Flagged");
-  const requestHistory = requests.filter((r) => r.status === "Fulfilled" || r.status === "Cancelled");
-
-  const getActiveList = () => {
-    if (activeTab === "Active Donations") return allActive;
-    if (activeTab === "Claims") return allClaims;
-    if (activeTab === "Wishlists") return allWishlists;
-    
-    const allHistory = [...postedHistory, ...requestHistory];
-    return allHistory.filter((item: any) => {
-      if (historyFilter === "Requested") return item.type !== undefined; 
-      if (historyFilter === "Claimed") return item.type === undefined && item.status !== "Cancelled" && item.status !== "Flagged";
-      if (historyFilter === "Cancelled") return item.status === "Cancelled";
-      if (historyFilter === "Flagged") return item.status === "Flagged";
-      return true;
+  const toggleSelectInventoryItem = (item: ActiveInventoryListing) => {
+    setSelectedInventoryMap((prev) => {
+      const next = { ...prev };
+      if (next[item.commerce_id]) {
+        delete next[item.commerce_id];
+      } else {
+        next[item.commerce_id] = item.qty_available;
+      }
+      return next;
     });
   };
 
-  const currentList = getActiveList();
+  const adjustInventoryDonateQty = (
+    item: ActiveInventoryListing,
+    delta: number
+  ) => {
+    setSelectedInventoryMap((prev) => {
+      const current = prev[item.commerce_id] || 1;
+      const nextQty = Math.max(
+        1,
+        Math.min(item.qty_available, current + delta)
+      );
+      return { ...prev, [item.commerce_id]: nextQty };
+    });
+  };
 
-  const displayedList = currentList.filter((item: any) => {
-    const itemName = String(item.name || item.requester || item.type || "").toLowerCase();
-    const itemCat = String(item.category || item.type || "").toLowerCase();
-    
-    const matchesSearch = itemName.includes(searchVal) || itemCat.includes(searchVal);
-    const matchesDateFilter = filterByDateRange(item);
-    
-    return matchesSearch && matchesDateFilter;
-  }).sort((a: any, b: any) => {
-    if (sortMode === "A-Z") {
-      const nameA = String(a.name || a.requester || a.type || "").toLowerCase();
-      const nameB = String(b.name || b.requester || b.type || "").toLowerCase();
-      const comp = nameA.localeCompare(nameB);
-      return sortDirection === "asc" ? comp : -comp;
-    } else {
-      const timeA = Number(a.donation_id || a.donation_req_id) || new Date(a.date || a.datePosted || 0).getTime() || 0;
-      const timeB = Number(b.donation_id || b.donation_req_id) || new Date(b.date || b.datePosted || 0).getTime() || 0;
-      return sortDirection === "asc" ? timeA - timeB : timeB - timeA;
+  const handlePostSelectedDonations = () => {
+    const selectedIds = Object.keys(selectedInventoryMap).map(Number);
+    if (selectedIds.length === 0) {
+      showModal(
+        "No Listings Selected",
+        "Please tap one or more active listings and set the quantity you wish to donate.",
+        "warning"
+      );
+      return;
     }
+
+    const itemsPayload = selectedIds.map((cid) => ({
+      commerce_id: cid,
+      qty_donated: selectedInventoryMap[cid],
+    }));
+
+    setConfirmState({
+      visible: true,
+      title: "Post Surplus Donations?",
+      message: `Publish ${selectedIds.length} selected listing(s) to the Food Bank donation feed? Food Banks within 10km will be able to appeal and accept them.`,
+      confirmText: "Yes, Post Donations",
+      onConfirm: async () => {
+        setConfirmState((p) => ({ ...p, visible: false }));
+        setPostingDonations(true);
+        try {
+          const res = await api.post("donations/available/", {
+            merchant: Number(merchantId),
+            items: itemsPayload,
+          });
+          setSelectedInventoryMap({});
+          await loadAllDonationData();
+          setDonationSubTab("Posted Donations");
+          showModal(
+            "Donations Published!",
+            res.data?.message ||
+              "Your surplus listings are now live on the Food Bank portal.",
+            "success"
+          );
+        } catch (e: any) {
+          showModal(
+            "Post Failed",
+            e.response?.data?.error || "Could not post donations.",
+            "error"
+          );
+        } finally {
+          setPostingDonations(false);
+        }
+      },
+    });
+  };
+
+  const openAppealReviewModal = (appeal: FoodBankAppeal) => {
+    setSelectedAppeal(appeal);
+    const initialMap: { [reqId: number]: number } = {};
+    if (
+      Array.isArray(appeal.items_breakdown) &&
+      appeal.items_breakdown.length > 0
+    ) {
+      appeal.items_breakdown.forEach((line) => {
+        initialMap[line.donation_req_id] = Number(line.qty_needed || 1);
+      });
+    } else {
+      initialMap[appeal.donation_req_id] = Number(appeal.qty_needed || 1);
+    }
+    setEditableAppealQtys(initialMap);
+  };
+
+  const changeAppealLineQty = (
+    reqId: number,
+    maxAvail: number,
+    delta: number
+  ) => {
+    setEditableAppealQtys((prev) => {
+      const cur = prev[reqId] || 1;
+      const cap = maxAvail > 0 ? maxAvail : 999;
+      return { ...prev, [reqId]: Math.max(1, Math.min(cap, cur + delta)) };
+    });
+  };
+
+  const handleAppealDecision = (
+    action: "approve" | "reject" | "complete"
+  ) => {
+    if (!selectedAppeal) return;
+
+    const titles = {
+      approve: "Approve Food Bank Request?",
+      reject: "Reject Food Bank Request?",
+      complete: "Mark Handshake as Successful?",
+    };
+    const messages = {
+      approve: `Approve request ${selectedAppeal.batch_code} for ${selectedAppeal.food_bank_name} with the quantities set above? Status will move to Ongoing.`,
+      reject: `Decline request ${selectedAppeal.batch_code} from ${selectedAppeal.food_bank_name}?`,
+      complete: `Confirm that the food items for ${selectedAppeal.batch_code} have been handed over to ${selectedAppeal.food_bank_name}? Status will reflect as Successful.`,
+    };
+
+    const targetAppeal = selectedAppeal;
+    const itemsPayload = Object.keys(editableAppealQtys).map((k) => ({
+      donation_req_id: Number(k),
+      qty_approved: editableAppealQtys[Number(k)],
+    }));
+
+    setConfirmState({
+      visible: true,
+      title: titles[action],
+      message: messages[action],
+      confirmText:
+        action === "approve"
+          ? "Approve (Ongoing)"
+          : action === "reject"
+          ? "Yes, Reject"
+          : "Mark Successful",
+      isDestructive: action === "reject",
+      onConfirm: async () => {
+        setConfirmState((p) => ({ ...p, visible: false }));
+        setProcessingAppeal(true);
+        try {
+          const res = await api.patch("donations/requests/", {
+            donation_req_id: targetAppeal.donation_req_id,
+            batch_code: targetAppeal.batch_code,
+            merchant: Number(merchantId),
+            action,
+            items: itemsPayload,
+          });
+          setSelectedAppeal(null);
+          await loadAllDonationData();
+          showModal(
+            "Request Updated",
+            res.data?.message || `Request status updated!`,
+            "success"
+          );
+        } catch (err: any) {
+          showModal(
+            "Action Failed",
+            err.response?.data?.error || "Could not update request.",
+            "error"
+          );
+        } finally {
+          setProcessingAppeal(false);
+        }
+      },
+    });
+  };
+
+  const handlePostedDonationAction = (
+    donation: PostedDonation,
+    action: "update_qty" | "cancel" | "complete"
+  ) => {
+    setConfirmState({
+      visible: true,
+      title:
+        action === "cancel"
+          ? "Cancel Posted Donation?"
+          : action === "complete"
+          ? "Mark Donation as Successful?"
+          : "Update Donation Quantity?",
+      message:
+        action === "cancel"
+          ? `Remove ${donation.food_name} from posted donations and return ${donation.qty_donated} ${donation.unit_name} to active inventory?`
+          : action === "complete"
+          ? `Confirm that ${
+              donation.food_bank_name || "the Food Bank"
+            } has received ${donation.qty_donated} ${donation.unit_name} of ${
+              donation.food_name
+            }?`
+          : `Update donated quantity of ${donation.food_name} to ${editPostedQty}?`,
+      confirmText: "Confirm",
+      isDestructive: action === "cancel",
+      onConfirm: async () => {
+        setConfirmState((p) => ({ ...p, visible: false }));
+        try {
+          await api.patch(`donations/respond/${donation.donation_id}/`, {
+            action,
+            qty_donated: Number(editPostedQty || donation.qty_donated),
+          });
+          setSelectedPosted(null);
+          await loadAllDonationData();
+          showModal(
+            "Donation Updated",
+            action === "complete"
+              ? "Donation handoff marked as Successful!"
+              : action === "cancel"
+              ? "Donation cancelled and stock restored."
+              : "Donation quantity updated.",
+            "success"
+          );
+        } catch (e: any) {
+          showModal("Error", "Could not update posted donation.", "error");
+        }
+      },
+    });
+  };
+
+  const filteredAppeals = appeals.filter((a) => {
+    const q = search.toLowerCase();
+    const matchesSearch =
+      !q ||
+      (a.food_bank_name || "").toLowerCase().includes(q) ||
+      (a.food_type || "").toLowerCase().includes(q) ||
+      (a.batch_code || "").toLowerCase().includes(q);
+    if (!matchesSearch) return false;
+    if (requestFilter === "All") return true;
+    if (requestFilter === "Pending")
+      return a.status === "Pending" || a.status === "Active";
+    if (requestFilter === "Ongoing") return a.status === "Ongoing";
+    if (requestFilter === "Successful")
+      return a.status === "Successful" || a.status === "Fulfilled";
+    if (requestFilter === "Rejected")
+      return (
+        a.status === "Rejected" ||
+        a.status === "Withdrawn" ||
+        a.status === "Cancelled"
+      );
+    return true;
   });
 
-  /* =====================================================
-     ACTIONS WITH CONFIRMATION MODAL
-  ===================================================== */
-  const handleViewRequest = (request: DonationRequest) => {
-    setSelectedRequest(request);
-    setViewModalVisible(true);
-  };
+  const filteredPostedDonations = postedDonations.filter((d) => {
+    const q = search.toLowerCase();
+    return (
+      !q ||
+      (d.food_name || "").toLowerCase().includes(q) ||
+      (d.food_bank_name || "").toLowerCase().includes(q)
+    );
+  });
 
-  const handleViewPostedItem = (item: PostedDonationItem) => {
-    setSelectedPostedItem(item);
-    setEditItemQty(item.quantity);
-    setViewPostedModalVisible(true);
-  };
-
-  const handleApprovePostedClaim = (item: PostedDonationItem) => {
-    setViewPostedModalVisible(false);
-    setTimeout(() => {
-      showAlert(
-        "Accept this claim?",
-        `Approve the claim for ${item.quantity} of ${item.name}?`,
-        "Yes, accept",
-        "Not now",
-        async () => {
-          try {
-            await api.patch(`donations/respond/${item.donation_id}/`, {
-              action: "received"
-            });
-            
-            setPostedDonations(postedDonations.map((p) => (p.id === item.id ? { ...p, status: "Fulfilled" } : p)));
-            setAlertConfig({ visible: true, title: "Claim Approved", message: `Successfully approved claim for ${item.name}! Moved to History.`, confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-          } catch (error) {
-            setAlertConfig({ visible: true, title: "Error", message: "Could not approve the claim in the database.", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-          }
-        }
-      );
-    }, 300);
-  };
-
-  const handleApproveCustomRequest = async (request: DonationRequest) => {
-    setViewModalVisible(false);
-    setTimeout(() => {
-      showAlert(
-        "Fulfill this request?",
-        `Fulfill the request of ${request.quantity} ${request.type} for ${request.requester}?`,
-        "Yes, fulfill",
-        "Not now",
-        async () => {
-          try {
-            await api.patch("donations/requests/", {
-              donation_req_id: request.donation_req_id,
-              status: "Fulfilled"
-            });
-            setRequests(requests.map((r) => (r.id === request.id ? { ...r, status: "Fulfilled" } : r)));
-            setAlertConfig({ visible: true, title: "Request Fulfilled", message: "Request fulfilled successfully!", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-          } catch (error) {
-            setAlertConfig({ visible: true, title: "Network Error", message: "Could not update the database. Please try again.", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-          }
-        }
-      );
-    }, 300);
-  };
-
-  const handleSelectListingForDonation = async (listing: ListingItem) => {
-    setSelectListingModalVisible(false);
-    setTimeout(() => {
-      showAlert(
-        "Post this donation?",
-        `Post ${listing.quantity} of ${listing.name} from your inventory?`,
-        "Yes, post",
-        "Not now",
-        async () => {
-          try {
-            const storedId = Platform.OS === "web" ? localStorage.getItem("profile_id") : null;
-              await api.post("donations/available/", {
-                listing: (listing as any).commerce_id || listing.id, 
-                qty_donated: Number(listing.quantity),
-                merchant: Number(storedId) || 1, 
-                status: "Active"
-            });
-            fetchDonationData();
-            setAlertConfig({ visible: true, title: "Donation Posted", message: "Item successfully posted for donation!", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-          } catch (error: any) {
-            setAlertConfig({ visible: true, title: "Post Failed", message: "Could not save donation to the database.", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-          }
-        }
-      );
-    }, 300);
-  };
-
-  const handleSaveEditPostedItem = () => {
-    if (!selectedPostedItem) return;
-    setViewPostedModalVisible(false);
-    setTimeout(() => {
-      showAlert(
-        "Save changes?",
-        `Update available quantity to ${editItemQty}?`,
-        "Yes, save",
-        "Not now",
-        () => {
-          setPostedDonations(postedDonations.map((item) => item.id === selectedPostedItem.id ? { ...item, quantity: editItemQty } : item));
-          setAlertConfig({ visible: true, title: "Updated", message: "Donation quantity updated successfully!", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-        }
-      );
-    }, 300);
-  };
-
-  const handleDeletePostedItem = async (id: string) => {
-    const item = postedDonations.find(p => p.id === id);
-    setViewPostedModalVisible(false);
-    setTimeout(() => {
-      showAlert(
-        "Cancel this donation?",
-        `Remove ${item?.quantity} of ${item?.name} from active donations?`,
-        "Yes, cancel",
-        "Not now",
-        async () => {
-            try {
-              await api.patch("donations/requests/", {
-                donation_req_id: item?.donation_id,
-                status: "Cancelled"
-              });
-              
-              setPostedDonations(postedDonations.map((p) => p.id === id ? { ...p, status: "Cancelled" } : p));
-              setAlertConfig({ visible: true, title: "Cancelled", message: "Donation item has been cancelled.", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-            } catch (error) {
-              setAlertConfig({ visible: true, title: "Error", message: "Could not cancel the donation in the database.", confirmText: "Okay", cancelText: "", onConfirm: hideAlert });
-            }
-          }
-      );
-    }, 300);
-  };
-
-  const handleIncrementQty = () => setEditItemQty(String(parseInt(editItemQty || "0", 10) + 1));
-  const handleDecrementQty = () => {
-    if (parseInt(editItemQty || "0", 10) > 1) setEditItemQty(String(parseInt(editItemQty || "0", 10) - 1));
-  };
+  const selectedCount = Object.keys(selectedInventoryMap).length;
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-      
-      {/* HEADER */}
+
       <EstablishmentHeader />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
+      >
         <View style={styles.pageHeader}>
-          <Text style={styles.pageTitle}>Donation Hub</Text>
+          <Text style={styles.pageTitle}>Donation & Request Hub</Text>
+          <Text style={styles.pageSubtitle}>
+            Review Food Bank appeals with editable quantities or donate active surplus listings
+          </Text>
         </View>
 
-        {/* POST BUTTON */}
-        <TouchableOpacity style={styles.createButton} activeOpacity={0.85} onPress={() => setSelectListingModalVisible(true)}>
-          <View style={styles.createIcon}>
-            <Ionicons name="add" size={23} color={Colors.white} />
-          </View>
-          <View style={styles.createTextContainer}>
-            <Text style={styles.createTitle}>Post available donation</Text>
-            <Text style={styles.createSubtitle}>Select from inventory for food banks to choose</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={21} color={Colors.white} />
-        </TouchableOpacity>
-
-        {/* SORT & FILTER ROW */}
-        <View style={{ flexDirection: "row", gap: 8, marginBottom: 8, zIndex: 30, position: "relative" }}>
-          
-          {/* SORT DROPDOWN */}
-          <View style={{ flex: 1, position: "relative" }}>
-            <TouchableOpacity 
-              style={styles.filterDropdownBtn} 
-              activeOpacity={0.7}
-              onPress={() => { setSortDropdownOpen(!sortDropdownOpen); setDateDropdownOpen(false); }}
+        <View style={styles.primaryTabsRow}>
+          <TouchableOpacity
+            style={[
+              styles.primaryTabBtn,
+              mainTab === "Requests" && styles.primaryTabBtnActive,
+            ]}
+            activeOpacity={0.85}
+            onPress={() => setMainTab("Requests")}
+          >
+            <Ionicons
+              name="megaphone-outline"
+              size={17}
+              color={mainTab === "Requests" ? Colors.white : Colors.primary2}
+            />
+            <Text
+              style={[
+                styles.primaryTabText,
+                mainTab === "Requests" && styles.primaryTabTextActive,
+              ]}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1 }}>
-                <Ionicons name="swap-vertical-outline" size={15} color={Colors.primary} />
-                <Text style={styles.filterDropdownText} numberOfLines={1}>
-                  Sort: {sortMode} {sortDirection === "asc" ? "↑" : "↓"}
-                </Text>
-              </View>
-              <Ionicons name={sortDropdownOpen ? "chevron-up" : "chevron-down"} size={15} color={Colors.icon} />
-            </TouchableOpacity>
+              Requests ({appeals.length})
+            </Text>
+          </TouchableOpacity>
 
-            {sortDropdownOpen && (
-              <View style={styles.floatingDropdownContainer}>
-                <TouchableOpacity
-                  style={[styles.inlineDropdownItem, sortMode === "A-Z" && styles.inlineDropdownItemActive]}
-                  onPress={() => handleSortSelection("A-Z")}
-                >
-                  <Text style={[styles.inlineDropdownText, sortMode === "A-Z" && styles.inlineDropdownTextActive]}>
-                    A–Z {sortMode === "A-Z" ? (sortDirection === "asc" ? "(Asc)" : "(Desc)") : ""}
-                  </Text>
-                  {sortMode === "A-Z" && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.inlineDropdownItem, sortMode === "Date Posted" && styles.inlineDropdownItemActive]}
-                  onPress={() => handleSortSelection("Date Posted")}
-                >
-                  <Text style={[styles.inlineDropdownText, sortMode === "Date Posted" && styles.inlineDropdownTextActive]}>
-                    Date Posted {sortMode === "Date Posted" ? (sortDirection === "asc" ? "(Oldest)" : "(Newest)") : ""}
-                  </Text>
-                  {sortMode === "Date Posted" && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-
-          {/* FILTER BY DATE DROPDOWN */}
-          <View style={{ flex: 1, position: "relative" }}>
-            <TouchableOpacity 
-              style={styles.filterDropdownBtn} 
-              activeOpacity={0.7}
-              onPress={() => { setDateDropdownOpen(!dateDropdownOpen); setSortDropdownOpen(false); }}
+          <TouchableOpacity
+            style={[
+              styles.primaryTabBtn,
+              mainTab === "Donations" && styles.primaryTabBtnActive,
+            ]}
+            activeOpacity={0.85}
+            onPress={() => setMainTab("Donations")}
+          >
+            <Ionicons
+              name="gift-outline"
+              size={17}
+              color={mainTab === "Donations" ? Colors.white : Colors.primary2}
+            />
+            <Text
+              style={[
+                styles.primaryTabText,
+                mainTab === "Donations" && styles.primaryTabTextActive,
+              ]}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1 }}>
-                <Ionicons name="filter-outline" size={15} color={Colors.primary} />
-                <Text style={styles.filterDropdownText} numberOfLines={1}>
-                  Filter: {dateFilterMode === "Custom" ? customMainDate.toLocaleDateString() : dateFilterMode}
-                </Text>
-              </View>
-              <Ionicons name={dateDropdownOpen ? "chevron-up" : "chevron-down"} size={15} color={Colors.icon} />
-            </TouchableOpacity>
-
-            {dateDropdownOpen && (
-              <View style={styles.floatingDropdownContainer}>
-                {(["All", "Today", "Last 7 Days", "Last 30 Days", "Custom"] as const).map((mode) => (
-                  <TouchableOpacity
-                    key={mode}
-                    style={[styles.inlineDropdownItem, dateFilterMode === mode && styles.inlineDropdownItemActive]}
-                    onPress={() => {
-                      setDateDropdownOpen(false);
-                      if (mode === "Custom") {
-                        setShowMainDatePicker(true);
-                      } else {
-                        setDateFilterMode(mode);
-                      }
-                    }}
-                  >
-                    <Text style={[styles.inlineDropdownText, dateFilterMode === mode && styles.inlineDropdownTextActive]}>
-                      {mode}
-                    </Text>
-                    {dateFilterMode === mode && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {showMainDatePicker && (
-              <DateTimePicker
-                value={customMainDate}
-                mode="date"
-                display="default"
-                onChange={(event: any, selectedDate?: Date) => {
-                  setShowMainDatePicker(false);
-                  if (event.type === "dismissed") return;
-                  if (selectedDate) {
-                    setCustomMainDate(selectedDate);
-                    setDateFilterMode("Custom");
-                  }
-                }}
-              />
-            )}
-          </View>
+              Donations ({postedDonations.length})
+            </Text>
+          </TouchableOpacity>
         </View>
 
-        {/* UNIFIED TABS */}
-        <View style={styles.tabsContainer}>
-          <TabButton title="Available" isActive={activeTab === "Active Donations"} count={allActive.length} onPress={() => setActiveTab("Active Donations")} />
-          <TabButton title="Claims" isActive={activeTab === "Claims"} count={allClaims.length} onPress={() => setActiveTab("Claims")} />
-          <TabButton title="Requests" isActive={activeTab === "Wishlists"} count={allWishlists.length} onPress={() => setActiveTab("Wishlists")} />
-          <TabButton title="History" isActive={activeTab === "History"} onPress={() => setActiveTab("History")} />
-        </View>
-
-        {/* SEARCH BAR */}
         <View style={styles.searchContainer}>
           <Ionicons name="search-outline" size={18} color={Colors.icon} />
           <TextInput
             value={search}
             onChangeText={setSearch}
-            placeholder="Search food or merchant..."
+            placeholder={
+              mainTab === "Requests"
+                ? "Search Food Bank name, request ID, or food item..."
+                : "Search active listings or posted donations..."
+            }
             placeholderTextColor={Colors.placeholder}
             style={styles.searchInput}
           />
@@ -793,442 +563,898 @@ export default function DonationHub() {
           )}
         </View>
 
-        {/* 4 OPTIONS IN HISTORY */}
-        {activeTab === "History" && (
-          <View style={styles.historySubTabs}>
-            <TouchableOpacity 
-              style={[styles.historySubTab, historyFilter === "Requested" && styles.historySubTabActive]} 
-              onPress={() => setHistoryFilter("Requested")}
+        {mainTab === "Requests" ? (
+          <>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 8, marginBottom: 14 }}
             >
-              <Text style={[styles.historySubTabText, historyFilter === "Requested" && styles.historySubTabTextActive]}>Requested</Text>
-            </TouchableOpacity>
-            
-            {/* NEW CLAIMED BUTTON */}
-            <TouchableOpacity 
-              style={[styles.historySubTab, historyFilter === "Claimed" && styles.historySubTabActive]} 
-              onPress={() => setHistoryFilter("Claimed")}
-            >
-              <Text style={[styles.historySubTabText, historyFilter === "Claimed" && styles.historySubTabTextActive]}>Claimed</Text>
-            </TouchableOpacity>
+              {(
+                [
+                  "All",
+                  "Pending",
+                  "Ongoing",
+                  "Successful",
+                  "Rejected",
+                ] as const
+              ).map((f) => {
+                const active = requestFilter === f;
+                return (
+                  <TouchableOpacity
+                    key={f}
+                    style={[
+                      styles.filterChip,
+                      active && styles.filterChipActive,
+                    ]}
+                    onPress={() => setRequestFilter(f)}
+                  >
+                    <Text
+                      style={[
+                        styles.filterChipText,
+                        active && styles.filterChipTextActive,
+                      ]}
+                    >
+                      {f}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
 
-            <TouchableOpacity 
-              style={[styles.historySubTab, historyFilter === "Cancelled" && styles.historySubTabActive]} 
-              onPress={() => setHistoryFilter("Cancelled")}
-            >
-              <Text style={[styles.historySubTabText, historyFilter === "Cancelled" && styles.historySubTabTextActive]}>Cancelled</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.historySubTab, historyFilter === "Flagged" && styles.historySubTabActive]} 
-              onPress={() => setHistoryFilter("Flagged")}
-            >
-              <Text style={[styles.historySubTabText, historyFilter === "Flagged" && styles.historySubTabTextActive]}>Flagged</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* LISTINGS */}
-        <View style={styles.listingsWrapper}>
-          {displayedList.length > 0 ? (
-            displayedList.map((item: any) => (
-              <DonationItemCard 
-                key={item.id} 
-                item={item} 
-                onView={() => item.type !== undefined ? handleViewRequest(item) : handleViewPostedItem(item)}
-                onApprove={() => item.type !== undefined ? handleApproveCustomRequest(item) : handleApprovePostedClaim(item)}
-                onRemove={() => handleDeletePostedItem(item.id)}
-              />
-            ))
-          ) : (
-            <View style={styles.emptyCard}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="gift-outline" size={25} color={Colors.primary} />
-              </View>
-              <Text style={styles.emptyTitle}>Nothing matches</Text>
-              <Text style={styles.emptyDescription}>Try a different tab or filter.</Text>
-            </View>
-          )}
-        </View>
-
-        <View style={{ height: 30 }} />
-      </ScrollView>
-
-      {/* BOTTOM NAVIGATION */}
-      <EstablishmentBottomNav activeTab="Donation" />
-
-      {/* =================================================
-          CUSTOM CONFIRMATION / ALERT MODAL
-      ===================================================== */}
-      <Modal visible={alertConfig.visible} transparent animationType="fade" onRequestClose={hideAlert}>
-        <View style={styles.alertOverlay}>
-          <View style={styles.alertCard}>
-            <Text style={styles.alertTitle}>{alertConfig.title}</Text>
-            <Text style={styles.alertMessage}>{alertConfig.message}</Text>
-            
-            <View style={styles.alertButtonRow}>
-              {alertConfig.cancelText ? (
-                <TouchableOpacity style={styles.alertCancelButton} activeOpacity={0.7} onPress={hideAlert}>
-                  <Text style={styles.alertCancelButtonText}>{alertConfig.cancelText}</Text>
-                </TouchableOpacity>
-              ) : null}
-              
-              <TouchableOpacity style={styles.alertConfirmButton} activeOpacity={0.8} onPress={alertConfig.onConfirm}>
-                <Text style={styles.alertConfirmButtonText}>{alertConfig.confirmText}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* MODALS */}
-      <Modal visible={selectListingModalVisible} transparent animationType="slide" onRequestClose={() => setSelectListingModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.listingModal}>
-            <View style={styles.modalHeader}>
-              <View>
-                <Text style={styles.modalTitle}>Post available donation</Text>
-                <Text style={styles.modalSubtitle}>Choose items from your inventory</Text>
-              </View>
-              <TouchableOpacity style={styles.closeButton} activeOpacity={0.7} onPress={() => setSelectListingModalVisible(false)}>
-                <Ionicons name="close" size={22} color={Colors.primary} />
-              </TouchableOpacity>
-            </View>
-            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScroll}>
-              {merchantListings.length > 0 ? (
-                merchantListings.map((listing) => (
-                  <View key={listing.id} style={[styles.listingCardLegacy, { marginBottom: 12 }]}>
-                    <View style={styles.productInfoLegacy}>
-                      <View style={styles.productHeaderLegacy}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.productNameLegacy} numberOfLines={1}>{listing.name}</Text>
-                          <Text style={styles.productEstablishmentLegacy}>{listing.category} · {listing.price}</Text>
-                        </View>
-                      </View>
-                      <View style={styles.productBottomLegacy}>
-                        <Text style={styles.quantityTextLegacy}>Available Quantity: {listing.quantity}</Text>
-                      </View>
-                      <View style={[styles.cardActionsLegacy, { justifyContent: 'flex-end' }]}>
-                        <TouchableOpacity
-                          style={[styles.publishButton, { minHeight: 34, paddingHorizontal: 16 }]}
-                          activeOpacity={0.8}
-                          onPress={() => handleSelectListingForDonation(listing)}
+            {filteredAppeals.length > 0 ? (
+              filteredAppeals.map((req) => {
+                const itemCount = Array.isArray(req.items_breakdown)
+                  ? req.items_breakdown.length
+                  : 1;
+                return (
+                  <TouchableOpacity
+                    key={req.batch_code || req.donation_req_id}
+                    style={styles.uiCard}
+                    activeOpacity={0.85}
+                    onPress={() => openAppealReviewModal(req)}
+                  >
+                    <View style={styles.uiCardTop}>
+                      {req.image_path ? (
+                        <Image
+                          source={{ uri: req.image_path }}
+                          style={styles.uiImage}
+                        />
+                      ) : (
+                        <View
+                          style={[styles.uiImage, styles.uiImagePlaceholder]}
                         >
-                          <Text style={[styles.publishButtonText, { fontSize: 11 }]}>Post for donation</Text>
-                        </TouchableOpacity>
+                          <Ionicons
+                            name="people-outline"
+                            size={28}
+                            color={Colors.primary}
+                          />
+                        </View>
+                      )}
+
+                      <View style={styles.uiCardDetails}>
+                        <View style={styles.uiCardHeaderRow}>
+                          <Text style={styles.uiCardTitle} numberOfLines={1}>
+                            {req.food_bank_name}
+                          </Text>
+                          <StatusPill status={req.status} />
+                        </View>
+
+                        <Text style={styles.uiCardSubtitle} numberOfLines={2}>
+                          {req.batch_code} • {req.food_type}
+                        </Text>
+
+                        <Text style={styles.explicitExpiry}>
+                          Exp: {req.expiry_display || "Standard Window"}
+                        </Text>
+
+                        {req.reason ? (
+                          <Text
+                            style={{
+                              fontFamily: "PoppinsRegular",
+                              fontSize: 10.5,
+                              color: Colors.primary1,
+                              marginTop: 2,
+                            }}
+                            numberOfLines={1}
+                          >
+                            Reason: "{req.reason}"
+                          </Text>
+                        ) : null}
                       </View>
                     </View>
-                  </View>
-                ))
-              ) : (
-                <View style={styles.emptyCard}>
-                  <Text style={styles.emptyTitle}>No food listings found</Text>
-                  <Text style={styles.emptyDescription}>Please add items to your active listings first.</Text>
-                </View>
-              )}
-              <View style={{ height: 25 }} />
-            </ScrollView>
-          </KeyboardAvoidingView>
-        </View>
-      </Modal>
 
-      {/* VIEW REQUEST MODAL */}
-      <Modal visible={viewModalVisible} transparent animationType="none" onRequestClose={viewSheet.close}>
-        <View style={styles.modalOverlay}>
-          {/* Tap the dimmed area above the sheet to close */}
-          <Pressable style={StyleSheet.absoluteFill} onPress={viewSheet.close} />
-
-          <Animated.View style={[styles.viewModal, { transform: [{ translateY: viewSheet.translateY }] }]}>
-            {/* Drag handle + header (pull this area down to close) */}
-            <View {...viewSheet.panHandlers} style={styles.sheetHeader}>
-              <View style={styles.dragHandle} />
-              <View style={styles.sheetHeaderText}>
-                <Text style={styles.modalTitle}>Food bank wishlist review</Text>
-                <Text style={styles.modalSubtitle}>Fulfill custom request</Text>
-              </View>
-            </View>
-            {selectedRequest && (
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.viewModalContent}>
-                <View style={styles.viewPriceBox}>
-                  <View>
-                    <Text style={styles.viewLabel}>Requested Qty</Text>
-                    <Text style={styles.viewPrice}>{selectedRequest.quantity}</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.viewLabel}>Urgency</Text>
-                    <Text style={styles.viewValue}>{selectedRequest.urgency}</Text>
-                  </View>
-                  <View>
-                    <Text style={styles.viewLabel}>Status</Text>
-                    <Text style={styles.viewValue}>{selectedRequest.status}</Text>
-                  </View>
-                </View>
-
-                <View style={styles.viewSection}>
-                  <Text style={styles.viewSectionTitle}>Request Details</Text>
-                  <DetailRow icon="business-outline" label="Food Bank Partner" value={selectedRequest.requester} />
-                  <DetailRow icon="cube-outline" label="Custom Requirement" value={selectedRequest.type} />
-                  <DetailRow icon="calendar-outline" label="Date Posted" value={selectedRequest.date} />
-                </View>
-
-                <View style={styles.viewActions}>
-                  <TouchableOpacity style={styles.viewCloseButton} activeOpacity={0.8} onPress={viewSheet.close}>
-                    <Text style={styles.viewCloseButtonText}>Close</Text>
+                    <View style={styles.uiCardActions}>
+                      <TouchableOpacity
+                        style={styles.uiActionBtn}
+                        onPress={() => openAppealReviewModal(req)}
+                      >
+                        <Ionicons
+                          name="eye-outline"
+                          size={16}
+                          color={Colors.primary}
+                        />
+                        <Text
+                          style={[
+                            styles.uiActionBtnText,
+                            {
+                              color: Colors.primary,
+                              fontFamily: "PoppinsSemiBold",
+                            },
+                          ]}
+                        >
+                          {req.status === "Pending" || req.status === "Active"
+                            ? `Review & Edit Qty (${itemCount} item${
+                                itemCount > 1 ? "s" : ""
+                              })`
+                            : req.status === "Ongoing"
+                            ? "View Contact / Mark Successful"
+                            : "View Request Summary"}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   </TouchableOpacity>
-                  {selectedRequest.status !== "Fulfilled" && selectedRequest.status !== "Cancelled" && (
-                    <TouchableOpacity
-                      style={styles.viewEditButton}
-                      activeOpacity={0.85}
-                      onPress={() => handleApproveCustomRequest(selectedRequest)}
-                    >
-                      <Ionicons name="checkmark-circle-outline" size={17} color={Colors.white} />
-                      <Text style={styles.viewEditButtonText}>Fulfill Request</Text>
-                    </TouchableOpacity>
-                  )}
+                );
+              })
+            ) : (
+              <View style={styles.emptyCard}>
+                <View style={styles.emptyIcon}>
+                  <Ionicons
+                    name="megaphone-outline"
+                    size={24}
+                    color={Colors.primary}
+                  />
                 </View>
-                <View style={{ height: 20 }} />
-              </ScrollView>
-            )}
-          </Animated.View>
-        </View>
-      </Modal>
-
-      {/* VIEW POSTED MODAL (WITH STEPPER RESTORED) */}
-      <Modal visible={viewPostedModalVisible} transparent animationType="none" onRequestClose={postedSheet.close}>
-        <View style={styles.modalOverlay}>
-          {/* Tap the dimmed area above the sheet to close */}
-          <Pressable style={StyleSheet.absoluteFill} onPress={postedSheet.close} />
-
-          <Animated.View style={[styles.viewModal, { transform: [{ translateY: postedSheet.translateY }] }]}>
-            {/* Drag handle + header (pull this area down to close) */}
-            <View {...postedSheet.panHandlers} style={styles.sheetHeader}>
-              <View style={styles.dragHandle} />
-              <View style={styles.sheetHeaderText}>
-                <Text style={styles.modalTitle}>Donation item details</Text>
-                <Text style={styles.modalSubtitle}>Manage your listed item</Text>
+                <Text style={styles.emptyTitle}>
+                  No Food Bank requests found
+                </Text>
+                <Text style={styles.emptyDescription}>
+                  When Food Banks within 10km request items from your store,
+                  they will appear here.
+                </Text>
               </View>
+            )}
+          </>
+        ) : (
+          <>
+            <View style={styles.subTabsBar}>
+              {(["Select Inventory", "Posted Donations"] as const).map((st) => {
+                const active = donationSubTab === st;
+                return (
+                  <TouchableOpacity
+                    key={st}
+                    style={[styles.subTabBtn, active && styles.subTabBtnActive]}
+                    onPress={() => setDonationSubTab(st)}
+                  >
+                    <Text
+                      style={[
+                        styles.subTabText,
+                        active && styles.subTabTextActive,
+                      ]}
+                    >
+                      {st === "Select Inventory"
+                        ? `Select Active Listings (${activeInventory.length})`
+                        : `Posted Donations (${postedDonations.length})`}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
-            {selectedPostedItem && (
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.viewModalContent}>
-                <Image source={{ uri: selectedPostedItem.image }} style={styles.viewImage} resizeMode="cover" />
-                
-                <View style={styles.viewPriceBox}>
-                  <View>
-                    <Text style={styles.viewLabel}>Quantity Available</Text>
-                    {selectedPostedItem.status === "Available" ? (
-                      <View style={styles.stepperContainer}>
-                        <TouchableOpacity onPress={handleDecrementQty} style={styles.stepperBtn}>
-                          <Text style={styles.stepperBtnText}>-</Text>
+
+            {donationSubTab === "Select Inventory" ? (
+              <>
+                <View style={styles.helperBanner}>
+                  <Ionicons
+                    name="checkbox-outline"
+                    size={18}
+                    color={Colors.primary}
+                  />
+                  <Text style={styles.helperBannerText}>
+                    Tap multiple active listings below and adjust the quantity
+                    you want to donate, then tap "Post Selected Donations" at
+                    the bottom.
+                  </Text>
+                </View>
+
+                {activeInventory.length > 0 ? (
+                  activeInventory.map((item) => {
+                    const isSelected =
+                      selectedInventoryMap[item.commerce_id] !== undefined;
+                    const chosenQty =
+                      selectedInventoryMap[item.commerce_id] ||
+                      item.qty_available;
+
+                    return (
+                      <View
+                        key={item.commerce_id}
+                        style={[
+                          styles.uiCard,
+                          isSelected && {
+                            borderColor: Colors.primary,
+                            borderWidth: 1.5,
+                            backgroundColor: "#F7FBF8",
+                          },
+                        ]}
+                      >
+                        <TouchableOpacity
+                          style={styles.uiCardTop}
+                          activeOpacity={0.85}
+                          onPress={() => toggleSelectInventoryItem(item)}
+                        >
+                          <View
+                            style={[
+                              styles.checkboxSquare,
+                              isSelected && styles.checkboxSquareActive,
+                            ]}
+                          >
+                            {isSelected && (
+                              <Ionicons
+                                name="checkmark"
+                                size={15}
+                                color={Colors.white}
+                              />
+                            )}
+                          </View>
+
+                          <Image
+                            source={{ uri: item.image }}
+                            style={styles.uiImage}
+                          />
+
+                          <View style={styles.uiCardDetails}>
+                            <Text style={styles.uiCardTitle} numberOfLines={1}>
+                              {item.name}
+                            </Text>
+                            <Text style={styles.uiCardSubtitle}>
+                              {item.category} • Stock: {item.qty_available}{" "}
+                              {item.unit_name}
+                            </Text>
+                            <Text style={styles.explicitExpiry}>
+                              Exp: {item.expiry_date} • {item.expiry_time}
+                            </Text>
+                          </View>
                         </TouchableOpacity>
-                        <Text style={styles.stepperValue}>{editItemQty}</Text>
-                        <TouchableOpacity onPress={handleIncrementQty} style={styles.stepperBtn}>
-                          <Text style={styles.stepperBtnText}>+</Text>
+
+                        {isSelected && (
+                          <View style={styles.qtySelectFooter}>
+                            <Text
+                              style={{
+                                fontFamily: "PoppinsSemiBold",
+                                fontSize: 11.5,
+                                color: Colors.primary2,
+                              }}
+                            >
+                              Quantity to Donate (Max {item.qty_available}):
+                            </Text>
+                            <View style={styles.stepperContainer}>
+                              <TouchableOpacity
+                                style={styles.stepperBtn}
+                                onPress={() =>
+                                  adjustInventoryDonateQty(item, -1)
+                                }
+                              >
+                                <Ionicons
+                                  name="remove"
+                                  size={16}
+                                  color={Colors.primary}
+                                />
+                              </TouchableOpacity>
+                              <Text style={styles.stepperValue}>
+                                {chosenQty}
+                              </Text>
+                              <TouchableOpacity
+                                style={styles.stepperBtn}
+                                onPress={() =>
+                                  adjustInventoryDonateQty(item, 1)
+                                }
+                              >
+                                <Ionicons
+                                  name="add"
+                                  size={16}
+                                  color={Colors.primary}
+                                />
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })
+                ) : (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyTitle}>
+                      No active listings available
+                    </Text>
+                    <Text style={styles.emptyDescription}>
+                      Add surplus food in the Listings tab first to donate them
+                      to Food Banks.
+                    </Text>
+                  </View>
+                )}
+
+                {selectedCount > 0 && (
+                  <TouchableOpacity
+                    style={styles.postBatchBtn}
+                    activeOpacity={0.85}
+                    onPress={handlePostSelectedDonations}
+                    disabled={postingDonations}
+                  >
+                    <Ionicons
+                      name="gift-outline"
+                      size={18}
+                      color={Colors.white}
+                    />
+                    <Text style={styles.postBatchBtnText}>
+                      {postingDonations
+                        ? "POSTING DONATIONS..."
+                        : `Post ${selectedCount} Selected Donation${
+                            selectedCount > 1 ? "s" : ""
+                          } to Food Banks`}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            ) : (
+              <>
+                {filteredPostedDonations.length > 0 ? (
+                  filteredPostedDonations.map((don) => (
+                    <TouchableOpacity
+                      key={don.donation_id}
+                      style={styles.uiCard}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        setSelectedPosted(don);
+                        setEditPostedQty(String(don.qty_donated));
+                      }}
+                    >
+                      <View style={styles.uiCardTop}>
+                        <Image
+                          source={{
+                            uri:
+                              don.image_path ||
+                              "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&q=80",
+                          }}
+                          style={styles.uiImage}
+                        />
+                        <View style={styles.uiCardDetails}>
+                          <View style={styles.uiCardHeaderRow}>
+                            <Text style={styles.uiCardTitle} numberOfLines={1}>
+                              {don.food_name}
+                            </Text>
+                            <StatusPill status={don.status} />
+                          </View>
+                          <Text style={styles.uiCardSubtitle}>
+                            {don.qty_donated} {don.unit_name} • {don.food_type}
+                          </Text>
+                          <Text style={styles.explicitExpiry}>
+                            Exp: {don.expiry_display}
+                          </Text>
+                          {don.food_bank_name && (
+                            <Text
+                              style={{
+                                fontFamily: "PoppinsSemiBold",
+                                fontSize: 10.5,
+                                color: Colors.primary,
+                                marginTop: 2,
+                              }}
+                            >
+                              Claimed by: {don.food_bank_name}
+                            </Text>
+                          )}
+                        </View>
+                      </View>
+                      <View style={styles.uiCardActions}>
+                        <TouchableOpacity
+                          style={styles.uiActionBtn}
+                          onPress={() => {
+                            setSelectedPosted(don);
+                            setEditPostedQty(String(don.qty_donated));
+                          }}
+                        >
+                          <Ionicons
+                            name="eye-outline"
+                            size={16}
+                            color={Colors.primary}
+                          />
+                          <Text
+                            style={[
+                              styles.uiActionBtnText,
+                              {
+                                color: Colors.primary,
+                                fontFamily: "PoppinsSemiBold",
+                              },
+                            ]}
+                          >
+                            View Details & Manage
+                          </Text>
                         </TouchableOpacity>
                       </View>
-                    ) : (
-                      <Text style={styles.viewPrice}>{selectedPostedItem.quantity}</Text>
+                    </TouchableOpacity>
+                  ))
+                ) : (
+                  <View style={styles.emptyCard}>
+                    <Text style={styles.emptyTitle}>
+                      No posted donations yet
+                    </Text>
+                    <Text style={styles.emptyDescription}>
+                      Select items under "Select Active Listings" to post
+                      donations.
+                    </Text>
+                  </View>
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        <View style={{ height: 24 }} />
+      </ScrollView>
+
+      <EstablishmentBottomNav activeTab="Donation" />
+
+      {/* MODAL 1: FOOD BANK APPEAL REVIEW + CONTACT + EDITABLE QTY */}
+      <Modal
+        visible={!!selectedAppeal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedAppeal(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            {selectedAppeal && (
+              <>
+                <View style={styles.modalHeader}>
+                  <View>
+                    <Text style={styles.modalTitle}>
+                      Appeal {selectedAppeal.batch_code}
+                    </Text>
+                    <Text style={styles.modalSubtitle}>
+                      From {selectedAppeal.food_bank_name} • Status:{" "}
+                      {selectedAppeal.status}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.closeButton}
+                    onPress={() => setSelectedAppeal(null)}
+                  >
+                    <Ionicons name="close" size={20} color={Colors.primary2} />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={{ padding: 16, paddingBottom: 30 }}
+                >
+                  <View style={styles.contactCard}>
+                    <Text style={styles.sectionBlockTitle}>
+                      Food Bank Partner & Contact Information
+                    </Text>
+                    <DetailRow
+                      icon="business-outline"
+                      label="Organization Name"
+                      value={selectedAppeal.food_bank_name}
+                    />
+                    <DetailRow
+                      icon="person-outline"
+                      label="Coordinator / Contact Person"
+                      value={selectedAppeal.food_bank_contact_person}
+                    />
+                    <DetailRow
+                      icon="call-outline"
+                      label="Mobile / Contact Number"
+                      value={`${selectedAppeal.food_bank_phone} (Hotline: ${selectedAppeal.food_bank_hotline})`}
+                    />
+                    <DetailRow
+                      icon="mail-outline"
+                      label="Official Email"
+                      value={
+                        selectedAppeal.food_bank_email || "Verified Partner"
+                      }
+                    />
+                    <DetailRow
+                      icon="location-outline"
+                      label="Organization Address"
+                      value={selectedAppeal.food_bank_address}
+                    />
+
+                    {/\d/.test(selectedAppeal.food_bank_phone || "") && (
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          gap: 10,
+                          marginTop: 8,
+                        }}
+                      >
+                        <TouchableOpacity
+                          style={styles.callSmsBtn}
+                          onPress={() =>
+                            Linking.openURL(
+                              `tel:${selectedAppeal.food_bank_phone.replace(
+                                /\s/g,
+                                ""
+                              )}`
+                            )
+                          }
+                        >
+                          <Ionicons
+                            name="call"
+                            size={15}
+                            color={Colors.white}
+                          />
+                          <Text style={styles.callSmsBtnText}>
+                            Call Food Bank
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[
+                            styles.callSmsBtn,
+                            { backgroundColor: Colors.primary2 },
+                          ]}
+                          onPress={() =>
+                            Linking.openURL(
+                              `sms:${selectedAppeal.food_bank_phone.replace(
+                                /\s/g,
+                                ""
+                              )}`
+                            )
+                          }
+                        >
+                          <Ionicons
+                            name="chatbubble-ellipses"
+                            size={15}
+                            color={Colors.white}
+                          />
+                          <Text style={styles.callSmsBtnText}>
+                            Send Text (SMS)
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
                     )}
                   </View>
-                  <View>
-                    <Text style={styles.viewLabel}>Category</Text>
-                    <Text style={styles.viewValue}>{selectedPostedItem.category}</Text>
+
+                  <View style={styles.contactCard}>
+                    <Text style={styles.sectionBlockTitle}>
+                      Appeal Reason & Additional Notes
+                    </Text>
+                    <Text style={styles.reasonLabel}>Reason for Request:</Text>
+                    <Text style={styles.reasonValue}>
+                      {selectedAppeal.reason ||
+                        "Community food rescue distribution"}
+                    </Text>
+                    {selectedAppeal.additional_info ? (
+                      <>
+                        <Text style={[styles.reasonLabel, { marginTop: 8 }]}>
+                          Additional Pickup / Logistics Info:
+                        </Text>
+                        <Text style={styles.reasonValue}>
+                          {selectedAppeal.additional_info}
+                        </Text>
+                      </>
+                    ) : null}
                   </View>
-                  <View>
-                    <Text style={styles.viewLabel}>Status</Text>
-                    <Text style={styles.viewValue}>{selectedPostedItem.status}</Text>
+
+                  <View style={styles.contactCard}>
+                    <Text style={styles.sectionBlockTitle}>
+                      Requested Items & Editable Donation Quantity
+                    </Text>
+                    <Text
+                      style={{
+                        fontFamily: "PoppinsRegular",
+                        fontSize: 10.5,
+                        color: Colors.primary1,
+                        marginBottom: 10,
+                      }}
+                    >
+                      Adjust the quantity below based on how much you can donate
+                      before approving:
+                    </Text>
+
+                    {(Array.isArray(selectedAppeal.items_breakdown) &&
+                    selectedAppeal.items_breakdown.length > 0
+                      ? selectedAppeal.items_breakdown
+                      : [
+                          {
+                            donation_req_id: selectedAppeal.donation_req_id,
+                            food_name: selectedAppeal.food_name,
+                            food_type: selectedAppeal.food_type,
+                            qty_needed: selectedAppeal.qty_needed,
+                            qty_available: selectedAppeal.qty_needed,
+                            unit_name: selectedAppeal.unit_name,
+                            expiry_display: selectedAppeal.expiry_display,
+                            status: selectedAppeal.status,
+                          },
+                        ]
+                    ).map((line) => {
+                      const canEdit =
+                        selectedAppeal.status === "Pending" ||
+                        selectedAppeal.status === "Active";
+                      const curQty =
+                        editableAppealQtys[line.donation_req_id] ??
+                        line.qty_needed;
+
+                      return (
+                        <View
+                          key={line.donation_req_id}
+                          style={styles.lineItemRow}
+                        >
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.lineItemTitle}>
+                              {line.food_name}
+                            </Text>
+                            <Text style={styles.lineItemMeta}>
+                              Requested: {line.qty_needed} {line.unit_name} •
+                              Stock: {line.qty_available}
+                            </Text>
+                            <Text style={styles.explicitExpiry}>
+                              Exp: {line.expiry_display || "Standard Window"}
+                            </Text>
+                          </View>
+
+                          {canEdit ? (
+                            <View style={styles.stepperContainer}>
+                              <TouchableOpacity
+                                style={styles.stepperBtn}
+                                onPress={() =>
+                                  changeAppealLineQty(
+                                    line.donation_req_id,
+                                    line.qty_available,
+                                    -1
+                                  )
+                                }
+                              >
+                                <Ionicons
+                                  name="remove"
+                                  size={16}
+                                  color={Colors.primary}
+                                />
+                              </TouchableOpacity>
+                              <Text style={styles.stepperValue}>{curQty}</Text>
+                              <TouchableOpacity
+                                style={styles.stepperBtn}
+                                onPress={() =>
+                                  changeAppealLineQty(
+                                    line.donation_req_id,
+                                    line.qty_available,
+                                    1
+                                  )
+                                }
+                              >
+                                <Ionicons
+                                  name="add"
+                                  size={16}
+                                  color={Colors.primary}
+                                />
+                              </TouchableOpacity>
+                            </View>
+                          ) : (
+                            <Text style={styles.approvedQtyBadge}>
+                              {line.qty_needed} {line.unit_name}
+                            </Text>
+                          )}
+                        </View>
+                      );
+                    })}
                   </View>
-                </View>
 
-                <View style={styles.viewSection}>
-                  <Text style={styles.viewSectionTitle}>Item Information</Text>
-                  <DetailRow icon="cube-outline" label="Item Name" value={selectedPostedItem.name} />
-                  <DetailRow icon="calendar-outline" label="Date Posted" value={selectedPostedItem.datePosted} />
-                </View>
+                  {(selectedAppeal.status === "Pending" ||
+                    selectedAppeal.status === "Active") && (
+                    <View style={{ flexDirection: "row", gap: 10 }}>
+                      <TouchableOpacity
+                        style={styles.rejectActionBtn}
+                        onPress={() => handleAppealDecision("reject")}
+                        disabled={processingAppeal}
+                      >
+                        <Ionicons
+                          name="close-circle-outline"
+                          size={17}
+                          color="#B3261E"
+                        />
+                        <Text style={styles.rejectActionBtnText}>
+                          Reject Request
+                        </Text>
+                      </TouchableOpacity>
 
-                <View style={styles.viewActions}>
-                  {selectedPostedItem.status === "Available" && (
-                    <TouchableOpacity 
-                      style={[styles.viewCloseButton, { backgroundColor: '#FEE2E2', borderColor: '#FEE2E2' }]} 
-                      activeOpacity={0.8} 
-                      onPress={() => handleDeletePostedItem(selectedPostedItem.id)}
-                    >
-                      <Text style={[styles.viewCloseButtonText, { color: '#991B1B' }]}>Cancel</Text>
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.approveActionBtn}
+                        onPress={() => handleAppealDecision("approve")}
+                        disabled={processingAppeal}
+                      >
+                        <Ionicons
+                          name="checkmark-circle-outline"
+                          size={17}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.approveActionBtnText}>
+                          Approve Request
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
-                  
-                  {selectedPostedItem.status === "Available" && (
+
+                  {selectedAppeal.status === "Ongoing" && (
                     <TouchableOpacity
-                      style={styles.viewEditButton}
-                      activeOpacity={0.85}
-                      onPress={handleSaveEditPostedItem}
+                      style={[styles.approveActionBtn, { flex: 0 }]}
+                      onPress={() => handleAppealDecision("complete")}
+                      disabled={processingAppeal}
                     >
-                      <Text style={styles.viewEditButtonText}>Save changes</Text>
+                      <Ionicons
+                        name="checkmark-done-circle"
+                        size={18}
+                        color={Colors.white}
+                      />
+                      <Text style={styles.approveActionBtnText}>
+                        Handshake Done — Mark as Successful
+                      </Text>
                     </TouchableOpacity>
                   )}
-
-                  {(selectedPostedItem.status === "Claimed by Food Bank" || selectedPostedItem.status === "Claimed") && (
-                    <TouchableOpacity
-                      style={styles.viewEditButton}
-                      activeOpacity={0.85}
-                      onPress={() => handleApprovePostedClaim(selectedPostedItem)}
-                    >
-                      <Text style={styles.viewEditButtonText}>Approve Claim</Text>
-                    </TouchableOpacity>
-                  )}
-
-                  {selectedPostedItem.status !== "Available" && selectedPostedItem.status !== "Claimed by Food Bank" && selectedPostedItem.status !== "Claimed" && (
-                    <TouchableOpacity style={styles.viewCloseButton} activeOpacity={0.8} onPress={postedSheet.close}>
-                      <Text style={styles.viewCloseButtonText}>Close</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-                <View style={{ height: 20 }} />
-              </ScrollView>
+                </ScrollView>
+              </>
             )}
-          </Animated.View>
+          </View>
         </View>
       </Modal>
 
-    </SafeAreaView>
-  );
-}
+      {/* MODAL 2: VIEW / MANAGE POSTED DONATION */}
+      <Modal
+        visible={!!selectedPosted}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedPosted(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            {selectedPosted && (
+              <>
+                <View style={styles.modalHeader}>
+                  <View>
+                    <Text style={styles.modalTitle}>
+                      {selectedPosted.food_name}
+                    </Text>
+                    <Text style={styles.modalSubtitle}>
+                      Posted Donation • Status: {selectedPosted.status}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.closeButton}
+                    onPress={() => setSelectedPosted(null)}
+                  >
+                    <Ionicons name="close" size={20} color={Colors.primary2} />
+                  </TouchableOpacity>
+                </View>
 
-/* =====================================================
-   SUB-COMPONENTS
-===================================================== */
+                <ScrollView
+                  contentContainerStyle={{ padding: 16, paddingBottom: 30 }}
+                >
+                  <Image
+                    source={{
+                      uri:
+                        selectedPosted.image_path ||
+                        "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&q=80",
+                    }}
+                    style={styles.viewImage}
+                  />
 
-function DonationItemCard({ item, onView, onApprove, onRemove }: any) {
-  const isRequest = item.type !== undefined;
-  const [timeLeft, setTimeLeft] = useState("Calculating...");
-  const [isExpired, setIsExpired] = useState(false);
+                  <View style={styles.contactCard}>
+                    <DetailRow
+                      icon="cube-outline"
+                      label="Quantity Donated"
+                      value={`${selectedPosted.qty_donated} ${selectedPosted.unit_name}`}
+                    />
+                    <DetailRow
+                      icon="alarm-outline"
+                      label="Expiry Date & Time"
+                      value={selectedPosted.expiry_display}
+                    />
+                    {selectedPosted.food_bank_name && (
+                      <>
+                        <DetailRow
+                          icon="business-outline"
+                          label="Accepted by Food Bank"
+                          value={selectedPosted.food_bank_name}
+                        />
+                        <DetailRow
+                          icon="call-outline"
+                          label="Food Bank Contact"
+                          value={`${
+                            selectedPosted.food_bank_contact_person || ""
+                          } • ${selectedPosted.food_bank_phone || ""}`}
+                        />
+                      </>
+                    )}
+                  </View>
 
-  useEffect(() => {
-    if (isRequest || !item.expires_at) return;
-    
-    let endTime = parseSafeDate(item.expires_at);
-    if (!endTime || isNaN(endTime)) {
-        endTime = new Date(item.expires_at).getTime();
-    }
+                  {selectedPosted.status === "Available" && (
+                    <View style={{ flexDirection: "row", gap: 10 }}>
+                      <TouchableOpacity
+                        style={styles.rejectActionBtn}
+                        onPress={() =>
+                          handlePostedDonationAction(selectedPosted, "cancel")
+                        }
+                      >
+                        <Text style={styles.rejectActionBtnText}>
+                          Cancel Donation
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
 
-    const timer = setInterval(() => {
-      const now = Date.now();
-      const dist = endTime - now;
-      
-      if (dist <= 0) {
-        setTimeLeft("Expired");
-        setIsExpired(true);
-        clearInterval(timer);
-        return;
-      }
-      
-      const d = Math.floor(dist / (1000 * 60 * 60 * 24));
-      const h = Math.floor((dist % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      const m = Math.floor((dist % (1000 * 60 * 60)) / (1000 * 60));
-      const s = Math.floor((dist % (1000 * 60)) / 1000);
-      
-      if (d > 0) {
-        setTimeLeft(`${d}d ${h}h ${m}m ${s}s`);
-      } else {
-        setTimeLeft(`${h}h ${m}m ${s}s`);
-      }
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [item, isRequest]);
-
-  return (
-    <View style={styles.uiCard}>
-      <View style={styles.uiCardTop}>
-        {isRequest ? (
-          <View style={[styles.uiImage, styles.uiImagePlaceholder]}>
-            <Ionicons name="heart-outline" size={32} color={Colors.primary} />
-          </View>
-        ) : (
-          <Image source={{ uri: item.image }} style={styles.uiImage} resizeMode="cover" />
-        )}
-
-        <View style={styles.uiCardDetails}>
-          <View style={styles.uiCardHeaderRow}>
-            <Text style={styles.uiCardTitle} numberOfLines={1}>{isRequest ? item.type : item.name}</Text>
-            <StatusPill status={isRequest ? item.status : (item.status === "Available" ? "Available" : item.status)} />
-          </View>
-          
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
-            <Text style={[styles.uiCardSubtitle, { marginTop: 0, flex: 1 }]} numberOfLines={1}>
-              {isRequest 
-                ? `Req by: ${item.requester}` 
-                : (item.status === "Claimed by Food Bank" || item.status === "Claimed") 
-                  ? `Claimed by: ${item.claimedBy}` 
-                  : item.category}
-            </Text>
-            
-            {!isRequest && item.status === "Available" && (
-              <View style={[styles.expiryTag, isExpired && styles.expiryTagExpired]}>
-                <Ionicons name="time-outline" size={12} color={isExpired ? "#B3261E" : Colors.primary1} />
-                <Text style={[styles.expiryText, isExpired && styles.expiryTextExpired]}>{timeLeft}</Text>
-              </View>
+                  {(selectedPosted.status === "Ongoing" ||
+                    selectedPosted.status === "Claimed") && (
+                    <TouchableOpacity
+                      style={[styles.approveActionBtn, { flex: 0 }]}
+                      onPress={() =>
+                        handlePostedDonationAction(selectedPosted, "complete")
+                      }
+                    >
+                      <Ionicons
+                        name="checkmark-done-circle"
+                        size={18}
+                        color={Colors.white}
+                      />
+                      <Text style={styles.approveActionBtnText}>
+                        Handshake Done — Mark as Successful
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </ScrollView>
+              </>
             )}
           </View>
-          
-          <View style={styles.uiCardBottomRow}>
-            <Text style={styles.uiCardQty}>{item.quantity} {isRequest ? "requested" : "available"}</Text>
-          </View>
         </View>
-      </View>
+      </Modal>
 
-      <View style={styles.uiCardActions}>
-        <TouchableOpacity style={styles.uiActionBtn} onPress={onView}>
-          <Ionicons name="eye-outline" size={16} color={Colors.primary1} />
-          <Text style={styles.uiActionBtnText}>View</Text>
-        </TouchableOpacity>
+      <ReserveConfirmModal
+        visible={confirmState.visible}
+        title={confirmState.title}
+        message={confirmState.message}
+        confirmText={confirmState.confirmText}
+        isDestructive={confirmState.isDestructive}
+        onConfirm={confirmState.onConfirm}
+        onCancel={() => setConfirmState((p) => ({ ...p, visible: false }))}
+      />
 
-        {!isRequest && item.status === "Available" && (
-          <TouchableOpacity style={styles.uiActionBtn} onPress={onRemove}>
-            <Ionicons name="close-circle-outline" size={16} color="#B3261E" />
-            <Text style={[styles.uiActionBtnText, { color: "#B3261E" }]}>Cancel</Text>
-          </TouchableOpacity>
-        )}
-
-        {!isRequest && (item.status === "Claimed by Food Bank" || item.status === "Claimed") && (
-          <TouchableOpacity style={styles.uiActionBtn} onPress={onApprove}>
-            <Ionicons name="checkmark-circle-outline" size={16} color={Colors.primary} />
-            <Text style={[styles.uiActionBtnText, { color: Colors.primary }]}>Approve Claim</Text>
-          </TouchableOpacity>
-        )}
-
-        {isRequest && item.status === "Active" && (
-          <TouchableOpacity style={styles.uiActionBtn} onPress={onApprove}>
-            <Ionicons name="checkmark-circle-outline" size={16} color={Colors.primary} />
-            <Text style={[styles.uiActionBtnText, { color: Colors.primary }]}>Fulfill</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </View>
-  );
-}
-
-function TabButton({ title, isActive, count, onPress }: { title: string; isActive: boolean; count?: number; onPress: () => void }) {
-  return (
-    <TouchableOpacity style={[styles.tabBtn, isActive && styles.tabBtnActive]} onPress={onPress} activeOpacity={0.8}>
-      <Text style={[styles.tabBtnText, isActive && styles.tabBtnTextActive]}>{title}</Text>
-      {count !== undefined && count > 0 && (
-        <View style={[styles.tabBadge, isActive && styles.tabBadgeActive]}>
-          <Text style={[styles.tabBadgeText, isActive && styles.tabBadgeTextActive]}>{count}</Text>
-        </View>
-      )}
-    </TouchableOpacity>
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
+      />
+    </SafeAreaView>
   );
 }
 
 function StatusPill({ status }: { status: string }) {
   let bg = "#E4F0E8";
   let fg = "#1F6B52";
-  let label = "Available";
+  let label = status || "Available";
 
-  if (status === "Cancelled") { bg = "#FCEFD9"; fg = "#A94A3A"; label = "Cancelled"; }
-  else if (status === "Claimed by Food Bank" || status === "Claimed") { bg = "#FCEFD9"; fg = "#8A5A00"; label = "Claimed"; }
-  else if (status === "Fulfilled" || status === "Completed") { bg = "#EEF1EE"; fg = "#4F695D"; label = "Completed"; }
-  else if (status === "Flagged") { bg = "#FBE4E1"; fg = "#B3261E"; label = "Flagged"; }
-  else if (status !== "Available" && status !== "Active") { label = status; }
+  if (status === "Pending" || status === "Active") {
+    bg = "#FEF3C7";
+    fg = "#B45309";
+    label = "Pending";
+  } else if (status === "Ongoing" || status === "Claimed") {
+    bg = "#E1EEF8";
+    fg = "#2C5F8A";
+    label = "Ongoing";
+  } else if (
+    status === "Successful" ||
+    status === "Fulfilled" ||
+    status === "Completed"
+  ) {
+    bg = "#E4F0E8";
+    fg = "#1F6B52";
+    label = "Successful";
+  } else if (
+    status === "Rejected" ||
+    status === "Withdrawn" ||
+    status === "Cancelled"
+  ) {
+    bg = "#FBE4E1";
+    fg = "#B3261E";
+    label = status;
+  }
 
   return (
     <View style={[styles.statusPill, { backgroundColor: bg }]}>
@@ -1238,7 +1464,15 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-function DetailRow({ icon, label, value }: { icon: any; label: string; value: string }) {
+function DetailRow({
+  icon,
+  label,
+  value,
+}: {
+  icon: any;
+  label: string;
+  value: string;
+}) {
   return (
     <View style={styles.detailRow}>
       <View style={styles.detailIcon}>
@@ -1252,208 +1486,80 @@ function DetailRow({ icon, label, value }: { icon: any; label: string; value: st
   );
 }
 
-function BottomNavItem({ icon, label, active, onPress }: { icon: any; label: string; active?: boolean; onPress: () => void }) {
-  return (
-    <TouchableOpacity style={[styles.navItem, active && styles.navItemActive]} activeOpacity={active ? 1 : 0.7} onPress={active ? undefined : onPress}>
-      <Ionicons name={icon} size={24} color={active ? Colors.primary : Colors.icon} />
-      <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-/* =====================================================
-   STYLES
-===================================================== */
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { minHeight: 70, backgroundColor: Colors.background, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 18, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  logo: { fontFamily: "PoppinsBold", fontSize: 26, color: Colors.primary, letterSpacing: 0.7 },
-  headerSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: -2 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 15 },
-  headerIconButton: { position: "relative", padding: 4 },
-  notificationDot: { position: "absolute", width: 7, height: 7, borderRadius: 4, backgroundColor: "#A94A3A", right: 3, top: 2, borderWidth: 1.5, borderColor: Colors.background },
-  profileCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
-  
-  scrollContent: { paddingHorizontal: 17, paddingTop: 20, paddingBottom: 20 },
-  pageHeader: { marginBottom: 17 },
-  pageTitle: { fontFamily: "PoppinsBold", fontSize: 26, color: Colors.primary2 },
-  
-  createButton: { minHeight: 68, backgroundColor: Colors.primary, borderRadius: 10, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", marginBottom: 18 },
-  createIcon: { width: 39, height: 39, borderRadius: 20, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center", marginRight: 11 },
-  createTextContainer: { flex: 1 },
-  createTitle: { fontFamily: "PoppinsSemiBold", fontSize: 16, color: Colors.white },
-  createSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: "#D8E3DD", marginTop: 1 },
-
-  tabsContainer: { flexDirection: "row", backgroundColor: "#EBEFEB", borderRadius: 12, padding: 4, marginBottom: 14 },
-  tabBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", paddingVertical: 8, borderRadius: 10, gap: 5 },
-  tabBtnActive: { backgroundColor: Colors.white, shadowColor: "#000", shadowOpacity: 0.05, shadowRadius: 3, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  tabBtnText: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.primary1 },
-  tabBtnTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.primary2 },
-  tabBadge: { minWidth: 18, height: 18, borderRadius: 9, backgroundColor: "#D1D8D4", alignItems: "center", justifyContent: "center", paddingHorizontal: 5 },
-  tabBadgeActive: { backgroundColor: Colors.button },
-  tabBadgeText: { fontFamily: "PoppinsMedium", fontSize: 9.5, color: Colors.primary2 },
-  tabBadgeTextActive: { color: Colors.white },
-
-  searchContainer: { minHeight: 42, borderRadius: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, marginBottom: 12 },
-  searchInput: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary2, marginLeft: 8, paddingVertical: 9 },
-
-  historySubTabs: { flexDirection: "row", gap: 10, marginBottom: 16 },
-  historySubTab: { flex: 1, paddingVertical: 9, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.white, alignItems: "center" },
-  historySubTabActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  historySubTabText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary1 },
-  historySubTabTextActive: { color: Colors.white },
-
-  listingsWrapper: { gap: 12 },
-  uiCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, overflow: "hidden" },
-  uiCardTop: { flexDirection: "row", padding: 12, gap: 12 },
-  uiImage: { width: 80, height: 80, borderRadius: 10, backgroundColor: Colors.input },
+  scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 28 },
+  pageHeader: { marginBottom: 14 },
+  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
+  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2 },
+  primaryTabsRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
+  primaryTabBtn: { flex: 1, height: 46, borderRadius: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
+  primaryTabBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  primaryTabText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
+  primaryTabTextActive: { color: Colors.white },
+  searchContainer: { minHeight: 44, borderRadius: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, marginBottom: 12 },
+  searchInput: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary2, marginLeft: 8, paddingVertical: 8 },
+  filterChip: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border },
+  filterChipActive: { backgroundColor: Colors.button, borderColor: Colors.button },
+  filterChipText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary2 },
+  filterChipTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.white },
+  subTabsBar: { flexDirection: "row", backgroundColor: "#EBEFEB", borderRadius: 12, padding: 4, marginBottom: 12 },
+  subTabBtn: { flex: 1, paddingVertical: 8, borderRadius: 9, alignItems: "center" },
+  subTabBtnActive: { backgroundColor: Colors.white },
+  subTabText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary1 },
+  subTabTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.primary2 },
+  helperBanner: { flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: "#E8EFEA", padding: 12, borderRadius: 12, marginBottom: 12, borderWidth: 1, borderColor: Colors.border },
+  helperBannerText: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary2, lineHeight: 16 },
+  uiCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, overflow: "hidden", marginBottom: 12 },
+  uiCardTop: { flexDirection: "row", padding: 12, gap: 12, alignItems: "center" },
+  checkboxSquare: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: Colors.primary, alignItems: "center", justifyContent: "center", backgroundColor: Colors.white },
+  checkboxSquareActive: { backgroundColor: Colors.primary },
+  uiImage: { width: 76, height: 76, borderRadius: 10, backgroundColor: Colors.input },
   uiImagePlaceholder: { alignItems: "center", justifyContent: "center", backgroundColor: "#E9EFE9" },
-  uiCardDetails: { flex: 1, justifyContent: "space-between" },
-  uiCardHeaderRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  uiCardTitle: { flex: 1, fontFamily: "PoppinsSemiBold", fontSize: 16, color: Colors.primary2 },
-  uiCardSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 1 },
-  uiCardBottomRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 8 },
-  uiCardQty: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary2 },
-  
-  expiryTag: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#F3F5F4", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  expiryTagExpired: { backgroundColor: "#FBE4E1" },
-  expiryText: { fontFamily: "PoppinsMedium", fontSize: 10, color: Colors.primary1 },
-  expiryTextExpired: { color: "#B3261E" },
-
+  uiCardDetails: { flex: 1 },
+  uiCardHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
+  uiCardTitle: { flex: 1, fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2 },
+  uiCardSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2 },
+  explicitExpiry: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: "#A94A3A", marginTop: 3 },
   statusPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
   statusDot: { width: 5, height: 5, borderRadius: 2.5 },
-  statusPillText: { fontFamily: "PoppinsMedium", fontSize: 10 },
-
-  uiCardActions: { flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, padding: 10, gap: 16 },
+  statusPillText: { fontFamily: "PoppinsSemiBold", fontSize: 10 },
+  uiCardActions: { flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, padding: 10, justifyContent: "flex-end" },
   uiActionBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
   uiActionBtnText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary1 },
-
-  emptyCard: { backgroundColor: Colors.white, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingVertical: 35, paddingHorizontal: 20, alignItems: "center" },
-  emptyIcon: { width: 45, height: 45, borderRadius: 22, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginBottom: 8 },
-  emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
-  emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.primary1, textAlign: "center", marginTop: 3 },
-
-  bottomNav: { height: 90, paddingBottom: 25, backgroundColor: Colors.white, flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, elevation: 10, paddingHorizontal: 2 },
-  navItem: { flex: 1, alignItems: "center", justifyContent: "center", marginVertical: 5, marginHorizontal: 2, borderRadius: 7 },
-  navItemActive: { backgroundColor: "#E8EFEA" },
-  navText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.icon, marginTop: 4 },
-  navTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.primary },
-
-  modalOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.50)", justifyContent: "flex-end" },
-  viewModal: { width: "100%", maxHeight: "90%", backgroundColor: Colors.white, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: "hidden" },
-  sheetHeader: { backgroundColor: Colors.background, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  dragHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: "#C9CEC9", alignSelf: "center", marginTop: 10, marginBottom: 10 },
-  sheetHeaderText: { paddingHorizontal: 18 },
-  modalHeader: { paddingHorizontal: 18, paddingVertical: 15, backgroundColor: Colors.background, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  qtySelectFooter: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 14, paddingVertical: 10, borderTopWidth: 1, borderTopColor: Colors.border, backgroundColor: "#EFF6F2" },
+  stepperContainer: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.white, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 6, height: 34, gap: 10 },
+  stepperBtn: { padding: 4 },
+  stepperValue: { fontFamily: "PoppinsBold", fontSize: 13, color: Colors.primary2, minWidth: 22, textAlign: "center" },
+  postBatchBtn: { height: 50, borderRadius: 12, backgroundColor: Colors.button, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 6 },
+  postBatchBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.white },
+  emptyCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingVertical: 38, paddingHorizontal: 20, alignItems: "center" },
+  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
+  emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, textAlign: "center", marginTop: 3 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.5)", justifyContent: "flex-end" },
+  modalSheet: { width: "100%", maxHeight: "92%", backgroundColor: Colors.background, borderTopLeftRadius: 22, borderTopRightRadius: 22, overflow: "hidden" },
+  modalHeader: { paddingHorizontal: 18, paddingVertical: 14, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   modalTitle: { fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2 },
-  modalSubtitle: { fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.primary1, marginTop: 1 },
-  closeButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.border },
-  
-  viewModalContent: { paddingHorizontal: 17, paddingTop: 17 },
-  viewImage: { width: "100%", height: 190, borderRadius: 10, backgroundColor: Colors.input, marginBottom: 14 },
-  viewPriceBox: { flexDirection: "row", backgroundColor: "#E9EFE9", borderRadius: 9, padding: 12, justifyContent: "space-between", marginBottom: 17 },
-  viewLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginBottom: 2 },
-  viewPrice: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary },
-  viewValue: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
-  
-  viewSection: { marginBottom: 18, borderBottomWidth: 1, borderBottomColor: Colors.border, paddingBottom: 14 },
-  viewSectionTitle: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.primary2, marginBottom: 9 },
-  
+  modalSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
+  closeButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.background, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: Colors.border },
+  contactCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 14, marginBottom: 14 },
+  sectionBlockTitle: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2, marginBottom: 10 },
   detailRow: { flexDirection: "row", alignItems: "center", marginBottom: 9 },
-  detailIcon: { width: 31, height: 31, borderRadius: 16, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 9 },
+  detailIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 10 },
   detailLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
-  detailValue: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.primary2, marginTop: 1 },
-  
-  viewActions: { flexDirection: "row", gap: 9, marginTop: 2 },
-  viewCloseButton: { flex: 1, height: 48, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
-  viewCloseButtonText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary1 },
-  viewEditButton: { flex: 1, height: 48, borderRadius: 8, backgroundColor: Colors.button, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  viewEditButtonText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.white },
-
-  stepperContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.white, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 5, marginTop: 4, justifyContent: 'space-between', width: 85, borderWidth: 1, borderColor: Colors.border },
-  stepperBtn: { paddingHorizontal: 4 },
-  stepperBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 16, color: Colors.primary2 },
-  stepperValue: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.primary2 },
-
-  listingCardLegacy: { backgroundColor: Colors.white, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, padding: 10, flexDirection: "row" },
-  productInfoLegacy: { flex: 1, marginLeft: 11 },
-  productHeaderLegacy: { flexDirection: "row", alignItems: "flex-start" },
-  productNameLegacy: { fontFamily: "PoppinsSemiBold", fontSize: 16, color: Colors.primary2 },
-  productEstablishmentLegacy: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 1 },
-  productBottomLegacy: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-end", marginTop: 9 },
-  quantityTextLegacy: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 2 },
-  cardActionsLegacy: { flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, marginTop: 8, paddingTop: 7, gap: 15 },
-
-  modalButtons: { flexDirection: "row", gap: 9, marginTop: 2 },
-  cancelButton: { flex: 1, height: 48, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
-  cancelButtonText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary1 },
-  publishButton: { flex: 1, height: 48, borderRadius: 8, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center" },
-  publishButtonText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.white },
-  listingModal: { width: "100%", maxHeight: "94%", backgroundColor: Colors.white, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: "hidden" },
-  modalScroll: { paddingHorizontal: 17, paddingTop: 17 },
-
-  alertOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.65)", justifyContent: "center", alignItems: "center", padding: 24 },
-  alertCard: { width: "100%", maxWidth: 320, backgroundColor: Colors.white, borderRadius: 16, padding: 24, elevation: 10, shadowColor: "#000", shadowOpacity: 0.15, shadowRadius: 12, shadowOffset: { width: 0, height: 5 } },
-  alertTitle: { fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2, marginBottom: 8, textAlign: "left", width: "100%" },
-  alertMessage: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginBottom: 24, lineHeight: 18, textAlign: "left", width: "100%" },
-  alertButtonRow: { flexDirection: "row", gap: 12, width: "100%" },
-  alertCancelButton: { flex: 1, height: 44, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
-  alertCancelButtonText: { fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.primary1 },
-  alertConfirmButton: { flex: 1, height: 44, borderRadius: 8, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center" },
-  alertConfirmButtonText: { fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.white },
-
-  floatingDropdownContainer: {
-    position: "absolute",
-    top: 44,
-    left: 0,
-    right: 0,
-    backgroundColor: Colors.white,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    zIndex: 9999,
-    elevation: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 4 },
-  },
-  filterDropdownBtn: {
-    minHeight: 40,
-    borderRadius: 10,
-    backgroundColor: Colors.white,
-    paddingHorizontal: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  filterDropdownText: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 11,
-    color: Colors.primary2,
-  },
-  inlineDropdownItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  inlineDropdownItemActive: {
-    backgroundColor: "#E8EFEA",
-  },
-  inlineDropdownText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 12,
-    color: Colors.primary2,
-  },
-  inlineDropdownTextActive: {
-    fontFamily: "PoppinsSemiBold",
-    color: Colors.primary,
-  },
+  detailValue: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary2 },
+  callSmsBtn: { flex: 1, height: 40, borderRadius: 10, backgroundColor: Colors.primary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  callSmsBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 11.5, color: Colors.white },
+  reasonLabel: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary1 },
+  reasonValue: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary2, marginTop: 2, backgroundColor: Colors.input, padding: 10, borderRadius: 8 },
+  lineItemRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border, gap: 10 },
+  lineItemTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
+  lineItemMeta: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
+  approvedQtyBadge: { fontFamily: "PoppinsBold", fontSize: 13, color: Colors.primary },
+  rejectActionBtn: { flex: 1, height: 48, borderRadius: 12, borderWidth: 1, borderColor: "#E5B8B4", backgroundColor: "#FDF3F2", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  rejectActionBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: "#B3261E" },
+  approveActionBtn: { flex: 1.3, height: 48, borderRadius: 12, backgroundColor: Colors.button, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  approveActionBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.white },
+  viewImage: { width: "100%", height: 190, borderRadius: 12, backgroundColor: Colors.input, marginBottom: 14 },
 });

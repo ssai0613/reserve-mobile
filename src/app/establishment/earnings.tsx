@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import {
   Modal,
   Platform,
-  SafeAreaView,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +14,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -32,9 +33,11 @@ const getStorageItem = async (key: string): Promise<string | null> => {
 export default function EstablishmentEarnings() {
   const [merchantId, setMerchantId] = useState("1");
   const [planId, setPlanId] = useState<number>(1);
+  const [commissionPct, setCommissionPct] = useState<number>(10);
   const [defaultPhone, setDefaultPhone] = useState("");
   const [defaultContact, setDefaultContact] = useState("");
   const [search, setSearch] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   const [totalEarnings, setTotalEarnings] = useState("₱0.00");
   const [walletBalance, setWalletBalance] = useState("₱0.00");
@@ -47,7 +50,6 @@ export default function EstablishmentEarnings() {
   const [transactions, setTransactions] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]);
 
-  // Request Withdrawal Modal State
   const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
   const [withdrawChannel, setWithdrawChannel] = useState<"GCash" | "Maya">(
     "GCash"
@@ -57,7 +59,6 @@ export default function EstablishmentEarnings() {
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [submittingWithdraw, setSubmittingWithdraw] = useState(false);
 
-  // Clickable Row Detail Modals
   const [selectedWithdrawal, setSelectedWithdrawal] = useState<any | null>(
     null
   );
@@ -95,6 +96,8 @@ export default function EstablishmentEarnings() {
       const p = res.data.profile;
       const e = res.data.earnings;
       if (p) {
+        if (p.commission_pct !== undefined)
+          setCommissionPct(Number(p.commission_pct));
         setPlanId(Number(p.plan_id || 1));
         setDefaultPhone(p.phone !== "Not Provided" ? p.phone : "");
         setDefaultContact(p.contact_person || p.bus_name || "");
@@ -123,6 +126,12 @@ export default function EstablishmentEarnings() {
     } catch (err) {
       console.log("Earnings fetch error:", err);
     }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadEarnings();
+    setRefreshing(false);
   };
 
   const openWithdrawModal = () => {
@@ -205,11 +214,12 @@ export default function EstablishmentEarnings() {
   );
 
   const parsedWithdrawAmt = parseFloat(withdrawAmount || "0") || 0;
-  const withdrawFee = planId === 2 ? 0 : parsedWithdrawAmt * 0.1;
+  const withdrawFee =
+    planId === 2 ? 0 : parsedWithdrawAmt * (commissionPct / 100);
   const withdrawNet = Math.max(0, parsedWithdrawAmt - withdrawFee);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
       <EstablishmentHeader />
@@ -217,6 +227,14 @@ export default function EstablishmentEarnings() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
       >
         <View style={styles.pageHeader}>
           <Text style={styles.pageTitle}>My Earnings Analytics</Text>
@@ -355,7 +373,7 @@ export default function EstablishmentEarnings() {
               <Text style={styles.cardSubtitle}>
                 {planId === 2
                   ? "Pro Tier: 0% Commission on Withdrawals"
-                  : "Free Tier: 10% Platform Fee Deducted on Withdrawals"}
+                  : `Free Tier: ${commissionPct}% Platform Fee Deducted on Withdrawals`}
               </Text>
             </View>
             <View style={styles.walletIcon}>
@@ -523,10 +541,10 @@ export default function EstablishmentEarnings() {
           </ScrollView>
         </View>
 
-        <View style={{ height: 35 }} />
+        <View style={{ height: 24 }} />
       </ScrollView>
 
-      {/* REQUEST WITHDRAWAL MODAL (GCASH / MAYA + ACCOUNT NAME & NUMBER + AMOUNT + 10% FEE) */}
+      {/* REQUEST WITHDRAWAL MODAL */}
       <Modal
         visible={withdrawModalOpen}
         transparent
@@ -618,7 +636,7 @@ export default function EstablishmentEarnings() {
                 label={
                   planId === 2
                     ? "Pro Tier Platform Fee (0%)"
-                    : "Free Tier Deduction (10%)"
+                    : `Free Tier Deduction (${commissionPct}%)`
                 }
                 value={`-₱${withdrawFee.toFixed(2)}`}
                 valueColor="#B3261E"
@@ -672,7 +690,7 @@ export default function EstablishmentEarnings() {
                 <SummaryLine label="Account Name" value={selectedWithdrawal.account_name || defaultContact} />
                 <SummaryLine label="Account Number" value={selectedWithdrawal.account_number || defaultPhone} />
                 <SummaryLine label="Requested Gross Amount" value={selectedWithdrawal.amount} />
-                <SummaryLine label="Platform Fee Deducted" value={selectedWithdrawal.fee_deducted || "₱0.00"} valueColor="#B3261E" />
+                <SummaryLine label={`Platform Fee Deducted (${commissionPct}%)`} value={selectedWithdrawal.fee_deducted || "₱0.00"} valueColor="#B3261E" />
                 <SummaryLine label="Net Payout Amount" value={selectedWithdrawal.net_payout || selectedWithdrawal.amount} bold valueColor={Colors.primary} />
                 <SummaryLine
                   label="Official Transfer Ref #"
@@ -713,10 +731,10 @@ export default function EstablishmentEarnings() {
                 <SummaryLine label="Original Retail Value" value={selectedTransaction.original} />
                 <SummaryLine label="Discounted Sale Total" value={selectedTransaction.discounted} />
                 {selectedTransaction.deposit_paid && (
-                  <SummaryLine label="10% Online Deposit Credited" value={selectedTransaction.deposit_paid} />
+                  <SummaryLine label={`${commissionPct}% Online Deposit Credited`} value={selectedTransaction.deposit_paid} />
                 )}
                 {selectedTransaction.cash_collected && (
-                  <SummaryLine label="90% Cash Collected at Pickup" value={selectedTransaction.cash_collected} />
+                  <SummaryLine label={`${100 - commissionPct}% Cash Collected at Pickup`} value={selectedTransaction.cash_collected} />
                 )}
                 <View style={styles.breakdownDivider} />
                 <SummaryLine
@@ -783,7 +801,7 @@ function SummaryLine({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 90 },
+  scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 28 },
   pageHeader: { marginBottom: 16 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, lineHeight: 31, color: Colors.primary2 },
   pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 2 },

@@ -1,26 +1,21 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, Stack, useFocusEffect } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
-  Modal,
   Platform,
-  SafeAreaView,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
-import {
-  CebuAddressMapPicker,
-  ReserveAlertModal,
-  ReserveConfirmModal,
-  ReserveModalState,
-} from "../components/CebuRegistrationHelpers";
+import { ReserveConfirmModal } from "../components/CebuRegistrationHelpers";
+import { FoodBankBottomNav } from "../components/FoodBankNav";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -43,150 +38,74 @@ const clearFoodBankStorage = async () => {
   }
 };
 
+const maskPhoneNumber = (rawPhone: string): string => {
+  if (!rawPhone || rawPhone === "Not Provided") return "No phone linked";
+  let digits = rawPhone.replace(/\D/g, "");
+  if (digits.startsWith("63") && digits.length >= 11) {
+    digits = "0" + digits.slice(2);
+  } else if (digits.startsWith("9") && digits.length === 10) {
+    digits = "0" + digits;
+  }
+  if (digits.length >= 5) {
+    const lastThree = digits.slice(-3);
+    const middleLength = Math.max(6, digits.length - 5);
+    return `09${"x".repeat(middleLength)}${lastThree}`;
+  }
+  return rawPhone;
+};
+
 export default function FoodBankProfile() {
   const [orgId, setOrgId] = useState("1");
   const [orgName, setOrgName] = useState("Food Bank Partner");
   const [contactPerson, setContactPerson] = useState("Coordinator");
   const [email, setEmail] = useState("Loading...");
-  const [phone, setPhone] = useState("Not Provided");
+  const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("Cebu City");
-  const [latitude, setLatitude] = useState(10.3157);
-  const [longitude, setLongitude] = useState(123.8854);
+  const [status, setStatus] = useState("Active");
   const [totalReceived, setTotalReceived] = useState(0);
 
-  const [editModalVisible, setEditModalVisible] = useState(false);
-  const [editOrgName, setEditOrgName] = useState("");
-  const [editContact, setEditContact] = useState("");
-  const [editEmail, setEditEmail] = useState("");
-  const [editPhone, setEditPhone] = useState("");
-  const [editBarangay, setEditBarangay] = useState("");
-  const [editStreet, setEditStreet] = useState("");
-  const [editAddress, setEditAddress] = useState("");
-  const [editLat, setEditLat] = useState(10.3157);
-  const [editLng, setEditLng] = useState(123.8854);
-
-  const [pwModalVisible, setPwModalVisible] = useState(false);
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
 
-  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
-    visible: false,
-    title: "",
-    message: "",
-    type: "info",
-  });
-
-  const showModal = (
-    title: string,
-    message: string,
-    type: "success" | "error" | "info" | "warning" = "info"
-  ) => setModalAlert({ visible: true, title, message, type });
-
-  useEffect(() => {
-    loadProfile();
-  }, []);
-
-  const loadProfile = async () => {
+  const loadProfile = useCallback(async () => {
     try {
       const storedId = (await getStorageItem("profile_id")) || "1";
       const storedEmail = (await getStorageItem("user_email")) || "";
+      const storedName = (await getStorageItem("entity_name")) || "";
       setOrgId(storedId);
+      if (storedName) setOrgName(storedName);
+      if (storedEmail) setEmail(storedEmail);
 
       const res = await api.get(
-        `donations/profile/${storedId}/?email=${encodeURIComponent(storedEmail)}`
+        `donations/profile/${storedId}/?email=${encodeURIComponent(
+          storedEmail
+        )}`
       );
       if (res.data) {
-        setOrgId(String(res.data.org_id));
-        setOrgName(res.data.org_name);
-        setContactPerson(res.data.contact_person);
-        setEmail(res.data.email);
-        setPhone(res.data.phone);
-        setAddress(res.data.address);
+        setOrgId(String(res.data.org_id || storedId));
+        setOrgName(res.data.org_name || storedName || "Food Bank Partner");
+        setContactPerson(res.data.contact_person || "Coordinator");
+        setEmail(res.data.email || storedEmail);
+        setPhone(res.data.phone || "");
+        setAddress(res.data.address || "Cebu City");
+        setStatus(res.data.status || "Active");
         setTotalReceived(Number(res.data.total_food_received || 0));
-        if (res.data.latitude) setLatitude(Number(res.data.latitude));
-        if (res.data.longitude) setLongitude(Number(res.data.longitude));
       }
     } catch (e) {
       console.log("FoodBank profile error:", e);
     }
-  };
+  }, []);
 
-  const openEditModal = () => {
-    setEditOrgName(orgName);
-    setEditContact(contactPerson);
-    setEditEmail(email);
-    setEditPhone(phone);
-    setEditAddress(address);
-    setEditStreet(address.split(",")[0] || "");
-    setEditLat(latitude);
-    setEditLng(longitude);
-    setEditModalVisible(true);
-  };
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [loadProfile])
+  );
 
-  const handleSaveOrg = async () => {
-    try {
-      const res = await api.post(`donations/profile/${orgId}/`, {
-        action: "update_profile",
-        org_name: editOrgName,
-        contact_person: editContact,
-        email: editEmail,
-        phone: editPhone,
-        address: editAddress,
-        latitude: editLat,
-        longitude: editLng,
-      });
-      setOrgName(editOrgName);
-      setContactPerson(editContact);
-      setEmail(editEmail);
-      setPhone(editPhone);
-      setAddress(editAddress);
-      setLatitude(editLat);
-      setLongitude(editLng);
-      setEditModalVisible(false);
-      showModal(
-        "Organization Updated",
-        res.data.message || "Organization details & Cebu City pin updated!",
-        "success"
-      );
-    } catch (e) {
-      showModal("Update Failed", "Could not update organization details.", "error");
-    }
-  };
-
-  const handleChangePassword = async () => {
-    if (!newPassword || newPassword.length < 6) {
-      showModal(
-        "Weak Password",
-        "Password must be at least 6 characters.",
-        "warning"
-      );
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      showModal("Password Mismatch", "Passwords do not match.", "error");
-      return;
-    }
-    try {
-      const res = await api.post(`donations/profile/${orgId}/`, {
-        action: "change_password",
-        new_password: newPassword,
-      });
-      setPwModalVisible(false);
-      setNewPassword("");
-      setConfirmPassword("");
-      showModal(
-        "Password Updated",
-        res.data.message || "Password updated!",
-        "success"
-      );
-    } catch (e: any) {
-      showModal(
-        "Error",
-        e.response?.data?.error || "Could not update password.",
-        "error"
-      );
-    }
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadProfile();
+    setRefreshing(false);
   };
 
   const executeLogout = async () => {
@@ -196,210 +115,226 @@ export default function FoodBankProfile() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backBtn}
-          activeOpacity={0.7}
-          onPress={() => router.replace("/foodbank/dashboard")}
-        >
-          <Ionicons name="arrow-back" size={22} color={Colors.primary2} />
-        </TouchableOpacity>
-        <View>
-          <Text style={styles.headerTitle}>Food Bank Enterprise Settings</Text>
-          <Text style={styles.headerSubtitle}>
-            Manage organization details, Cebu City map pin & security
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
+
+      {/* FULL-SCREEN SCROLL CONTENT (NO TOP HEADER BAR) */}
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
+      >
+        <View style={styles.titleBlock}>
+          <Text style={styles.pageTitle}>Profile &amp; Settings</Text>
+          <Text style={styles.pageSubtitle}>
+            Manage your organization details, Cebu City rescue pin, and account
+            security
           </Text>
         </View>
-      </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {/* ORGANIZATION HERO CARD */}
         <View style={styles.profileCard}>
-          <View style={styles.largeProfileCircle}>
-            <Ionicons name="business" size={38} color={Colors.white} />
+          <View style={styles.profileCircle}>
+            <Ionicons name="business" size={34} color={Colors.primary} />
           </View>
-          <Text style={styles.profileName}>{orgName}</Text>
-          <Text style={styles.profileRole}>
-            Verified Food Bank • {totalReceived} Units Rescued
-          </Text>
-        </View>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Organization information</Text>
-          <View style={styles.infoCard}>
-            <ProfileInfo icon="business-outline" label="Organization name" value={orgName} />
-            <ProfileInfo icon="person-outline" label="Contact person" value={contactPerson} />
-            <ProfileInfo icon="mail-outline" label="Email address" value={email} />
-            <ProfileInfo icon="call-outline" label="Contact number (+63)" value={phone} />
-            <ProfileInfo icon="location-outline" label="Cebu City Address" value={address} />
-            <ProfileInfo
-              icon="navigate-outline"
-              label="Pinned Haversine GPS"
-              value={`${latitude.toFixed(5)}° N, ${longitude.toFixed(5)}° E`}
-              last
-            />
-          </View>
-        </View>
+          <View style={styles.profileDetails}>
+            <Text style={styles.profileName}>{orgName}</Text>
+            <Text style={styles.profileEmail}>{email}</Text>
+            <Text style={styles.profileLocation} numberOfLines={1}>
+              <Ionicons
+                name="location-outline"
+                size={11}
+                color={Colors.primary}
+              />{" "}
+              {address}
+            </Text>
 
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account settings & Support</Text>
-          <View style={styles.settingsCard}>
-            <TouchableOpacity style={styles.settingItem} activeOpacity={0.7} onPress={openEditModal}>
-              <View style={styles.settingIcon}>
-                <Ionicons name="create-outline" size={19} color={Colors.primary} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={styles.settingTitle}>Edit Organization & Cebu Map Pin</Text>
-                <Text style={styles.settingSubtitle}>
-                  Update organization details, barangay & GPS coordinates
+            <View style={styles.badgeRow}>
+              <View style={styles.fbBadge}>
+                <Text style={styles.fbBadgeText}>
+                  Food Bank • FB-{orgId} ({status})
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color={Colors.icon} />
-            </TouchableOpacity>
-
-            <View style={styles.settingDivider} />
-
-            <TouchableOpacity
-              style={styles.settingItem}
-              activeOpacity={0.7}
-              onPress={() => setPwModalVisible(true)}
-            >
-              <View style={styles.settingIcon}>
-                <Ionicons name="lock-closed-outline" size={18} color={Colors.primary} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={styles.settingTitle}>Change password</Text>
-                <Text style={styles.settingSubtitle}>Update your account password</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={Colors.icon} />
-            </TouchableOpacity>
-
-            <View style={styles.settingDivider} />
-
-            {/* HELP & SUPPORT OPTION */}
-            <TouchableOpacity
-              style={styles.settingItem}
-              activeOpacity={0.7}
-              onPress={() => router.push("/help-support?role=FoodBank" as any)}
-            >
-              <View style={styles.settingIcon}>
-                <Ionicons name="help-buoy-outline" size={18} color={Colors.primary} />
-              </View>
-              <View style={styles.settingContent}>
-                <Text style={styles.settingTitle}>Help & Support</Text>
-                <Text style={styles.settingSubtitle}>
-                  View Food Bank FAQs or send a report to ReServe Admin
+              <View style={styles.impactBadge}>
+                <Ionicons name="heart" size={11} color={Colors.primary} />
+                <Text style={styles.impactBadgeText}>
+                  {totalReceived} Units Rescued
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color={Colors.icon} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          style={styles.logoutButton}
-          activeOpacity={0.8}
-          onPress={() => setLogoutConfirmOpen(true)}
-        >
-          <Ionicons name="log-out-outline" size={20} color="#A94A3A" />
-          <Text style={styles.logoutText}>Log Out</Text>
-        </TouchableOpacity>
-      </ScrollView>
-
-      {/* EDIT ORGANIZATION + MAP MODAL */}
-      <Modal
-        visible={editModalVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setEditModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalCard, { maxHeight: "90%" }]}>
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalTitle}>Edit Organization & Location</Text>
-              <Text style={styles.inputLabel}>Organization Name</Text>
-              <TextInput style={styles.input} value={editOrgName} onChangeText={setEditOrgName} />
-              <Text style={styles.inputLabel}>Contact Person</Text>
-              <TextInput style={styles.input} value={editContact} onChangeText={setEditContact} />
-              <Text style={styles.inputLabel}>Official Email</Text>
-              <TextInput
-                style={styles.input}
-                value={editEmail}
-                onChangeText={setEditEmail}
-                autoCapitalize="none"
-              />
-              <Text style={styles.inputLabel}>Contact Number (+63)</Text>
-              <TextInput style={styles.input} value={editPhone} onChangeText={setEditPhone} />
-
-              <View style={{ marginTop: 10 }}>
-                <CebuAddressMapPicker
-                  selectedBarangay={editBarangay}
-                  onSelectBarangay={(brgy, fullAddr) => {
-                    setEditBarangay(brgy);
-                    setEditAddress(fullAddr);
-                  }}
-                  streetDetail={editStreet}
-                  onChangeStreetDetail={(st, fullAddr) => {
-                    setEditStreet(st);
-                    setEditAddress(fullAddr);
-                  }}
-                  latitude={editLat}
-                  longitude={editLng}
-                  onChangeCoords={(lat, lng) => {
-                    setEditLat(lat);
-                    setEditLng(lng);
-                  }}
-                />
-              </View>
-
-              <View style={styles.modalBtnRow}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setEditModalVisible(false)}>
-                  <Text style={styles.cancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveOrg}>
-                  <Text style={styles.saveBtnText}>Save Changes</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* PASSWORD MODAL */}
-      <Modal
-        visible={pwModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPwModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Change Password</Text>
-            <Text style={styles.inputLabel}>New Password</Text>
-            <TextInput
-              style={styles.input}
-              value={newPassword}
-              onChangeText={setNewPassword}
-              secureTextEntry
-            />
-            <Text style={styles.inputLabel}>Confirm Password</Text>
-            <TextInput
-              style={styles.input}
-              value={confirmPassword}
-              onChangeText={setConfirmPassword}
-              secureTextEntry
-            />
-            <View style={styles.modalBtnRow}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setPwModalVisible(false)}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.saveBtn} onPress={handleChangePassword}>
-                <Text style={styles.saveBtnText}>Update Password</Text>
-              </TouchableOpacity>
             </View>
           </View>
         </View>
-      </Modal>
+
+        {/* ============================================================
+            TWO MAIN ACCOUNT SETTINGS ROWS / CARDS (OPEN SEPARATE PAGES)
+        ============================================================ */}
+        <Text style={styles.sectionTitle}>Account Settings</Text>
+
+        {/* ROW 1: ORGANIZATION & PERSONAL INFORMATION */}
+        <TouchableOpacity
+          style={styles.featureRowCard}
+          activeOpacity={0.85}
+          onPress={() => router.push("/foodbank/personal-info" as any)}
+        >
+          <View style={styles.featureIconBox}>
+            <Ionicons
+              name="business-outline"
+              size={20}
+              color={Colors.primary}
+            />
+          </View>
+
+          <View style={styles.featureCardBody}>
+            <Text style={styles.featureCardTitle}>
+              Organization &amp; Personal Information
+            </Text>
+            <Text style={styles.featureCardDesc}>
+              Organization name, coordinator details, Cebu City Haversine
+              address pin, and alert preferences
+            </Text>
+            <View style={styles.featureMetaPills}>
+              <View style={styles.metaPill}>
+                <Ionicons
+                  name="person-circle-outline"
+                  size={12}
+                  color={Colors.primary}
+                />
+                <Text style={styles.metaPillText} numberOfLines={1}>
+                  {contactPerson}
+                </Text>
+              </View>
+              <View style={styles.metaPill}>
+                <Ionicons
+                  name="location-outline"
+                  size={12}
+                  color={Colors.primary}
+                />
+                <Text style={styles.metaPillText} numberOfLines={1}>
+                  {address}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <Ionicons name="chevron-forward" size={18} color={Colors.icon} />
+        </TouchableOpacity>
+
+        {/* ROW 2: PRIVACY & SECURITY */}
+        <TouchableOpacity
+          style={styles.featureRowCard}
+          activeOpacity={0.85}
+          onPress={() => router.push("/foodbank/privacy" as any)}
+        >
+          <View style={styles.featureIconBox}>
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={20}
+              color={Colors.primary}
+            />
+          </View>
+
+          <View style={styles.featureCardBody}>
+            <Text style={styles.featureCardTitle}>Privacy &amp; Security</Text>
+            <Text style={styles.featureCardDesc}>
+              Update official email, SMS-verified mobile number, password, and
+              account status
+            </Text>
+            <View style={styles.featureMetaPills}>
+              <View style={styles.metaPill}>
+                <Ionicons
+                  name="mail-outline"
+                  size={12}
+                  color={Colors.primary}
+                />
+                <Text style={styles.metaPillText} numberOfLines={1}>
+                  {email}
+                </Text>
+              </View>
+              <View style={styles.metaPill}>
+                <Ionicons
+                  name="call-outline"
+                  size={12}
+                  color={Colors.primary}
+                />
+                <Text style={styles.metaPillText}>
+                  {maskPhoneNumber(phone)}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          <Ionicons name="chevron-forward" size={18} color={Colors.icon} />
+        </TouchableOpacity>
+
+        {/* SUPPORT & INFORMATION */}
+        <Text style={styles.sectionTitle}>Support &amp; Information</Text>
+
+        <TouchableOpacity
+          style={styles.menuItem}
+          activeOpacity={0.85}
+          onPress={() => router.push("/help-support?role=FoodBank" as any)}
+        >
+          <View style={styles.menuLeft}>
+            <View style={styles.menuIcon}>
+              <Ionicons
+                name="help-buoy-outline"
+                size={18}
+                color={Colors.primary}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuText}>Help &amp; Support</Text>
+              <Text style={styles.menuSubtext}>
+                View Food Bank FAQs or send a report to ReServe Admin
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.menuItem}
+          activeOpacity={0.85}
+          onPress={() => router.push("/consumer/about" as any)}
+        >
+          <View style={styles.menuLeft}>
+            <View style={styles.menuIcon}>
+              <Ionicons
+                name="information-circle-outline"
+                size={18}
+                color={Colors.primary}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuText}>About RESERVE</Text>
+              <Text style={styles.menuSubtext}>
+                Learn more about the RESERVE platform &amp; team
+              </Text>
+            </View>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={Colors.icon} />
+        </TouchableOpacity>
+
+        {/* LOG OUT WITH CONFIRMATION MODAL */}
+        <TouchableOpacity
+          style={styles.logoutButton}
+          activeOpacity={0.85}
+          onPress={() => setLogoutConfirmOpen(true)}
+        >
+          <Ionicons name="log-out-outline" size={18} color="#B3261E" />
+          <Text style={styles.logoutText}>Log Out</Text>
+        </TouchableOpacity>
+
+        <View style={styles.bottomSpacing} />
+      </ScrollView>
 
       <ReserveConfirmModal
         visible={logoutConfirmOpen}
@@ -412,78 +347,212 @@ export default function FoodBankProfile() {
         onCancel={() => setLogoutConfirmOpen(false)}
       />
 
-      <ReserveAlertModal
-        visible={modalAlert.visible}
-        title={modalAlert.title}
-        message={modalAlert.message}
-        type={modalAlert.type}
-        onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
-      />
+      {/* FLUSH BOTTOM NAVIGATION BAR */}
+      <FoodBankBottomNav activeTab="Profile" />
     </SafeAreaView>
-  );
-}
-
-function ProfileInfo({
-  icon,
-  label,
-  value,
-  last = false,
-}: {
-  icon: any;
-  label: string;
-  value: string;
-  last?: boolean;
-}) {
-  return (
-    <View style={[styles.infoItem, !last && styles.infoItemBorder]}>
-      <View style={styles.infoIcon}>
-        <Ionicons name={icon} size={18} color={Colors.primary} />
-      </View>
-      <View style={styles.infoContent}>
-        <Text style={styles.infoLabel}>{label}</Text>
-        <Text style={styles.infoValue}>{value}</Text>
-      </View>
-    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { minHeight: 70, backgroundColor: Colors.background, flexDirection: "row", alignItems: "center", paddingHorizontal: 18, borderBottomWidth: 1, borderBottomColor: Colors.border, gap: 12 },
-  backBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
-  headerTitle: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary2 },
-  headerSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: -2 },
-  scrollContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 40 },
-  profileCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingVertical: 22, paddingHorizontal: 16, alignItems: "center", marginBottom: 20 },
-  largeProfileCircle: { width: 76, height: 76, borderRadius: 38, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center", marginBottom: 8 },
-  profileName: { fontFamily: "PoppinsSemiBold", fontSize: 18, color: Colors.primary2, textAlign: "center" },
-  profileRole: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary, marginTop: 4 },
-  section: { marginBottom: 20 },
-  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2, marginBottom: 8 },
-  infoCard: { backgroundColor: Colors.white, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 14 },
-  infoItem: { minHeight: 58, flexDirection: "row", alignItems: "center", paddingVertical: 8 },
-  infoItemBorder: { borderBottomWidth: 1, borderBottomColor: Colors.border },
-  infoIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginRight: 12 },
-  infoContent: { flex: 1 },
-  infoLabel: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1 },
-  infoValue: { fontFamily: "PoppinsMedium", fontSize: 12.5, color: Colors.primary2, marginTop: 1 },
-  settingsCard: { backgroundColor: Colors.white, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 14 },
-  settingItem: { minHeight: 62, flexDirection: "row", alignItems: "center" },
-  settingIcon: { width: 36, height: 36, borderRadius: 10, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginRight: 12 },
-  settingContent: { flex: 1 },
-  settingTitle: { fontFamily: "PoppinsMedium", fontSize: 12.5, color: Colors.primary2 },
-  settingSubtitle: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, marginTop: 1 },
-  settingDivider: { height: 1, backgroundColor: Colors.border },
-  logoutButton: { minHeight: 48, backgroundColor: Colors.white, borderRadius: 12, borderWidth: 1, borderColor: "#E1C8C3", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
-  logoutText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: "#A94A3A" },
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 18 },
-  modalCard: { width: "100%", maxWidth: 420, backgroundColor: Colors.white, borderRadius: 16, padding: 18 },
-  modalTitle: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary2, marginBottom: 10 },
-  inputLabel: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: Colors.primary1, marginTop: 8, marginBottom: 4 },
-  input: { height: 42, borderWidth: 1, borderColor: Colors.border, borderRadius: 8, paddingHorizontal: 12, fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary2, backgroundColor: Colors.input },
-  modalBtnRow: { flexDirection: "row", gap: 10, marginTop: 16 },
-  cancelBtn: { flex: 1, height: 42, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
-  cancelBtnText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary1 },
-  saveBtn: { flex: 1, height: 42, borderRadius: 8, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center" },
-  saveBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.white },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 28 },
+  titleBlock: { marginBottom: 16 },
+  pageTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 24,
+    color: Colors.primary2,
+  },
+  pageSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    color: Colors.primary1,
+    marginTop: 2,
+  },
+  profileCard: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 16,
+    padding: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  profileCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: "#E8EFEA",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  profileDetails: { flex: 1, marginLeft: 14 },
+  profileName: {
+    fontFamily: "PoppinsBold",
+    fontSize: 18,
+    color: Colors.primary2,
+  },
+  profileEmail: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    color: Colors.primary1,
+  },
+  profileLocation: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    color: Colors.placeholder,
+    marginTop: 2,
+  },
+  badgeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 8,
+  },
+  fbBadge: {
+    backgroundColor: "#E7F0E9",
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  fbBadgeText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 9,
+    color: Colors.primary,
+  },
+  impactBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#F2F7F4",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+  },
+  impactBadgeText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 9,
+    color: Colors.primary2,
+  },
+  sectionTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 15,
+    color: Colors.primary2,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  featureRowCard: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 14,
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  featureIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "#E8EFEA",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+  featureCardBody: {
+    flex: 1,
+    paddingRight: 8,
+  },
+  featureCardTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13.5,
+    color: Colors.primary2,
+  },
+  featureCardDesc: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    color: Colors.primary1,
+    lineHeight: 15,
+    marginTop: 2,
+  },
+  featureMetaPills: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  metaPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#F7F9F7",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    maxWidth: "100%",
+  },
+  metaPillText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 9.5,
+    color: Colors.primary2,
+    flexShrink: 1,
+  },
+  menuItem: {
+    height: 60,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
+  menuLeft: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
+  menuIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: "#E8EFEA",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  menuText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 12,
+    color: Colors.primary2,
+  },
+  menuSubtext: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10,
+    color: Colors.placeholder,
+    marginTop: 1,
+  },
+  logoutButton: {
+    height: 48,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: "#E5B8B4",
+    borderRadius: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 14,
+  },
+  logoutText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 12,
+    color: "#B3261E",
+  },
+  bottomSpacing: { height: 12 },
 });

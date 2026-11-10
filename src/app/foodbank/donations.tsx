@@ -1,7 +1,7 @@
+import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import DateTimePicker from "@react-native-community/datetimepicker";
-import { router, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { Stack, useFocusEffect } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -9,184 +9,111 @@ import {
   Linking,
   Modal,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from "react-native";
-
-import { Colors } from "@/constants/color";
-import {
-  ConfirmModal,
-  Countdown,
-  EmptyState,
-  ErrorBanner,
-  FilterChips,
-  Toast,
-} from "@/constants/FoodBankUI";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
+import {
+  ReserveAlertModal,
+  ReserveConfirmModal,
+  ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
+import {
+  FoodBankBottomNav,
+  FoodBankHeader,
+  FoodBankMapModal,
+  getFoodBankStorage,
+} from "../components/FoodBankNav";
 
 export type DonationOffer = {
   donation_id: number;
   food_name: string;
   food_type: string;
+  description?: string;
   qty_donated: number;
   unit_name?: string;
   status: string;
   expires_at?: string;
+  expiry_date?: string;
+  expiry_time?: string;
+  expiry_display?: string;
   created_at: string;
   merchant_name: string;
   merchant_address: string;
   merchant_contact: string;
   merchant_contact_name?: string;
+  merchant_email?: string;
+  merchant_lat?: number;
+  merchant_lng?: number;
+  distance?: string;
   image_path?: string | null;
   is_ttt?: boolean;
-  food_bank?: number | null;
 };
 
-const foodIcon = (type: string) => {
-  const t = (type || "").toLowerCase();
-  if (t.includes("bakery") || t.includes("bread")) return "basket-outline";
-  if (t.includes("produce") || t.includes("veg")) return "leaf-outline";
-  return "restaurant-outline";
-};
-
-const formatQty = (qty: number, unit?: string) => `${qty} ${unit || "items"}`;
-
-const imageUri = (path?: string | null) => (path ? path : null);
-
-const secondsLeft = (expiresAt?: string) => {
-  if (!expiresAt) return null;
-  const diff = Math.floor((new Date(expiresAt).getTime() - new Date().getTime()) / 1000);
-  return Math.max(0, diff);
-};
-
-const timeAgo = (dateStr: string) => {
-  if (!dateStr) return "Recently";
-  const dateObj = new Date(dateStr);
-  if (isNaN(dateObj.getTime())) return "Recently";
-
-  const now = new Date().getTime();
-  const diffMs = now - dateObj.getTime();
-  const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
-  const diffDays = Math.floor(diffHrs / 24);
-
-  // If under 24 hours, show relative hours/minutes
-  if (diffHrs < 1) {
-    const diffMins = Math.floor(diffMs / (1000 * 60));
-    return `${Math.max(1, diffMins)}m ago`;
-  }
-  if (diffHrs < 24) {
-    return `${diffHrs} hrs ago`;
-  }
-
-  // If 24 hours or older, format full date and relative days ago
-  const formattedDate = dateObj.toLocaleDateString("en-US", {
-    month: "long",
-    day: "2-digit",
-    year: "numeric",
-  });
-
-  return `${formattedDate} (${diffDays}d ago)`;
-};
-
-const formatDateTime = (dateStr?: string) => {
-  if (!dateStr) return "";
-  return new Date(dateStr).toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-};
-
-type Tab = "available" | "progress" | "history";
-type Action = "accept" | "decline" | "received";
-
-const TABS: { key: Tab; label: string }[] = [
-  { key: "available", label: "Available" },
-  { key: "progress", label: "In progress" },
-  { key: "history", label: "History" },
-];
-
-const tabOf = (status: string): Tab => {
-  if (status === "Active") return "available";
-  if (status === "Claimed" || status === "In-Transit") return "progress";
-  return "history";
-};
-
-const STATUS_STYLES: Record<string, { fg: string; bg: string; label: string }> = {
-  Active: { fg: "#1F6B52", bg: "#E4F0E8", label: "Available" },
-  Claimed: { fg: "#2C5F8A", bg: "#E1EEF8", label: "Accepted" },
-  "In-Transit": { fg: "#8A5A00", bg: "#FCEFD9", label: "On the way" },
-  Completed: { fg: "#4F695D", bg: "#EEF1EE", label: "Received" },
-  Declined: { fg: "#8C6D1F", bg: "#F6EED9", label: "Declined" },
-};
-
-const CONFIRM_COPY: Record<Action, { title: string; confirm: string; destructive?: boolean }> = {
-  accept: { title: "Accept this donation?", confirm: "Yes, accept" },
-  decline: { title: "Decline this donation?", confirm: "Yes, decline", destructive: true },
-  received: { title: "Mark as received?", confirm: "Yes, received" },
-};
-
-/* =====================================================
-   MAIN SCREEN
-===================================================== */
+type Tab = "available" | "ongoing" | "history";
 
 export default function FoodBankDonationsScreen() {
-  const { width } = useWindowDimensions();
-  const isTablet = width >= 700;
-
   const [offers, setOffers] = useState<DonationOffer[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState("");
 
   const [tab, setTab] = useState<Tab>("available");
-  const [selectedType, setSelectedType] = useState("All");
   const [search, setSearch] = useState("");
-
-  /* =====================================================
-            SORT & FILTER STATES
-  ===================================================== */
-  const [dateFilterMode, setDateFilterMode] = useState<"All" | "Today" | "Last 7 Days" | "Last 30 Days" | "Custom">("All");
-  const [showMainDatePicker, setShowMainDatePicker] = useState(false);
-  const [customMainDate, setCustomMainDate] = useState(new Date());
-
-  const [sortMode, setSortMode] = useState<"A-Z" | "Date Posted">("Date Posted");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
-
-  const [dateDropdownOpen, setDateDropdownOpen] = useState(false);
-  const [sortDropdownOpen, setSortDropdownOpen] = useState(false);
-
   const [detail, setDetail] = useState<DonationOffer | null>(null);
-  const [pending, setPending] = useState<{ offer: DonationOffer; action: Action } | null>(null);
-  const [working, setWorking] = useState(false);
-  const [hiddenIds, setHiddenIds] = useState<number[]>([]);
 
-  const [toast, setToast] = useState("");
-  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showToast = (message: string) => {
-    setToast(message);
-    if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(""), 2200);
-  };
+  const [mapTarget, setMapTarget] = useState<{
+    name: string;
+    address: string;
+    lat: number;
+    lng: number;
+  } | null>(null);
 
-  /* ---------- data ---------- */
+  const [confirmState, setConfirmState] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    confirmText: string;
+    isDestructive?: boolean;
+    onConfirm: () => void;
+  }>({
+    visible: false,
+    title: "",
+    message: "",
+    confirmText: "Confirm",
+    onConfirm: () => {},
+  });
 
-  const load = useCallback(async (isRefresh = false) => {
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => setModalAlert({ visible: true, title, message, type });
+
+  const loadOffers = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      const res = await api.get<DonationOffer[]>("/donations/available/");
-      setOffers(res.data);
-      setLoadError("");
-    } catch (e: any) {
-      setLoadError(e.message || "Failed to load available donations.");
+      const orgId = (await getFoodBankStorage("profile_id")) || "1";
+      const email = (await getFoodBankStorage("user_email")) || "";
+      const res = await api.get(
+        `donations/available/?org_id=${orgId}&email=${encodeURIComponent(
+          email
+        )}`
+      );
+      setOffers(Array.isArray(res.data) ? res.data : []);
+    } catch (e) {
+      console.log("Load offers error:", e);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -195,349 +122,150 @@ export default function FoodBankDonationsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load])
+      loadOffers();
+    }, [loadOffers])
   );
 
-  /* ---------- sorting handler ---------- */
-  const handleSortSelection = (mode: "A-Z" | "Date Posted") => {
-    if (sortMode === mode) {
-      setSortDirection(prev => (prev === "asc" ? "desc" : "asc"));
-    } else {
-      setSortMode(mode);
-      setSortDirection("asc");
-    }
-    setSortDropdownOpen(false);
+  const tabOf = (status: string): Tab => {
+    if (status === "Active" || status === "Available") return "available";
+    if (
+      status === "Claimed" ||
+      status === "Ongoing" ||
+      status === "In-Transit"
+    )
+      return "ongoing";
+    return "history";
   };
 
-  /* ---------- filtering logic ---------- */
-  const filterByDateRange = (item: DonationOffer) => {
-    if (dateFilterMode === "All") return true;
-
-    const dateStr = item.created_at;
-    if (!dateStr) return false;
-
-    const itemDate = new Date(dateStr);
-    if (isNaN(itemDate.getTime())) return false;
-
-    const now = new Date();
-    const diffDays = (now.getTime() - itemDate.getTime()) / (1000 * 60 * 60 * 24);
-
-    if (dateFilterMode === "Today") {
-      return (
-        itemDate.getFullYear() === now.getFullYear() &&
-        itemDate.getMonth() === now.getMonth() &&
-        itemDate.getDate() === now.getDate()
-      );
-    } else if (dateFilterMode === "Last 7 Days") {
-      return diffDays >= 0 && diffDays <= 7;
-    } else if (dateFilterMode === "Last 30 Days") {
-      return diffDays >= 0 && diffDays <= 30;
-    } else if (dateFilterMode === "Custom") {
-      return (
-        itemDate.getFullYear() === customMainDate.getFullYear() &&
-        itemDate.getMonth() === customMainDate.getMonth() &&
-        itemDate.getDate() === customMainDate.getDate()
-      );
-    }
-    return true;
-  };
-
-  /* ---------- filtering ---------- */
-
-  const inTab = useMemo(
-    () => offers.filter((o) => tabOf(o.status) === tab && !hiddenIds.includes(o.donation_id) && filterByDateRange(o)),
-    [offers, tab, hiddenIds, dateFilterMode, customMainDate]
-  );
-
-  const tabCounts = useMemo(() => {
-    const counts: Record<Tab, number> = { available: 0, progress: 0, history: 0 };
-    offers.forEach((o) => {
-      if (hiddenIds.includes(o.donation_id)) return;
-      if (o.status === "Active" && secondsLeft(o.expires_at) === 0) return;
-      if (!filterByDateRange(o)) return;
-      counts[tabOf(o.status)] += 1;
-    });
-    return counts;
-  }, [offers, hiddenIds, dateFilterMode, customMainDate]);
-
-  const chipOptions = useMemo(() => {
-    const counts: Record<string, number> = {};
-    inTab.forEach((o) => (counts[o.food_type] = (counts[o.food_type] || 0) + 1));
-    return [
-      { label: "All", count: inTab.length },
-      ...Object.keys(counts)
-        .sort()
-        .map((name) => ({ label: name, count: counts[name] })),
-    ];
-  }, [inTab]);
-
-  const visible = useMemo(() => {
+  const visibleOffers = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const list = inTab.filter((o) => {
-      const matchesType = selectedType === "All" || o.food_type === selectedType;
-      const matchesSearch =
+    return offers.filter((o) => {
+      if (tabOf(o.status) !== tab) return false;
+      return (
         !q ||
-        o.food_name.toLowerCase().includes(q) ||
-        o.merchant_name.toLowerCase().includes(q) ||
-        o.food_type.toLowerCase().includes(q);
-      return matchesType && matchesSearch;
-    });
-
-    return [...list].sort((a, b) => {
-      if (sortMode === "A-Z") {
-        const comp = a.food_name.localeCompare(b.food_name);
-        return sortDirection === "asc" ? comp : -comp;
-      } else {
-        const timeA = new Date(a.created_at).getTime() || 0;
-        const timeB = new Date(b.created_at).getTime() || 0;
-        if (tab === "available" && sortMode === "Date Posted" && sortDirection === "desc") {
-          const sA = secondsLeft(a.expires_at);
-          const sB = secondsLeft(b.expires_at);
-          if (sA !== null && sB !== null) return sA - sB;
-        }
-        return sortDirection === "asc" ? timeA - timeB : timeB - timeA;
-      }
-    });
-  }, [inTab, selectedType, search, tab, sortMode, sortDirection]);
-
-  const switchTab = (next: Tab) => {
-    setTab(next);
-    setSelectedType("All");
-  };
-
-  /* ---------- actions ---------- */
-
-  const runAction = async () => {
-    if (!pending) return;
-    const { offer, action } = pending;
-
-    if (action === "decline" && offer.food_bank === null) {
-      setHiddenIds((prev) => [...prev, offer.donation_id]);
-      setPending(null);
-      setDetail(null);
-      showToast("Offer removed from your list.");
-      return;
-    }
-
-    setWorking(true);
-    try {
-      await api.patch(`/donations/respond/${offer.donation_id}/`, { action });
-      setPending(null);
-      setDetail(null);
-      await load();
-      showToast(
-        action === "accept"
-          ? "Donation accepted! Head to the merchant to pick it up."
-          : action === "received"
-          ? "Marked as received. Thank you!"
-          : "Donation declined."
+        (o.food_name || "").toLowerCase().includes(q) ||
+        (o.merchant_name || "").toLowerCase().includes(q) ||
+        (o.food_type || "").toLowerCase().includes(q)
       );
-    } catch (e: any) {
-      setPending(null);
-      setDetail(null);
-      setLoadError(e.message);
-      load();
-    } finally {
-      setWorking(false);
-    }
-  };
+    });
+  }, [offers, tab, search]);
 
-  const emptyCopy: Record<Tab, { icon: any; title: string; message: string }> = {
-    available: {
-      icon: "gift-outline",
-      title: "No donations available right now",
-      message: "New surplus from merchants shows up here. Pull down to refresh.",
-    },
-    progress: {
-      icon: "bag-check-outline",
-      title: "Nothing in progress",
-      message: "Donations you accept will appear here until you receive them.",
-    },
-    history: {
-      icon: "time-outline",
-      title: "No history yet",
-      message: "Donations you've received or declined will be listed here.",
-    },
+  const promptOfferAction = (
+    offer: DonationOffer,
+    action: "accept" | "decline" | "received"
+  ) => {
+    setConfirmState({
+      visible: true,
+      title:
+        action === "accept"
+          ? "Appeal & Accept Donation?"
+          : action === "received"
+          ? "Mark Handshake as Successful?"
+          : "Decline Donation Offer?",
+      message:
+        action === "accept"
+          ? `Accept ${offer.qty_donated} ${offer.unit_name || "items"} of ${
+              offer.food_name
+            } from ${offer.merchant_name}? Status will move to Ongoing.`
+          : action === "received"
+          ? `Confirm that your organization has received ${offer.qty_donated} ${
+              offer.unit_name || "items"
+            } of ${offer.food_name}?`
+          : `Decline this donation offer from ${offer.merchant_name}?`,
+      confirmText:
+        action === "accept"
+          ? "Accept (Ongoing)"
+          : action === "received"
+          ? "Mark Successful"
+          : "Yes, Decline",
+      isDestructive: action === "decline",
+      onConfirm: async () => {
+        setConfirmState((p) => ({ ...p, visible: false }));
+        try {
+          const orgId = (await getFoodBankStorage("profile_id")) || "1";
+          const email = (await getFoodBankStorage("user_email")) || "";
+          await api.patch(`donations/respond/${offer.donation_id}/`, {
+            org_id: orgId,
+            email,
+            action,
+          });
+          setDetail(null);
+          await loadOffers();
+          showModal(
+            action === "accept"
+              ? "Donation Accepted (Ongoing)!"
+              : action === "received"
+              ? "Donation Completed!"
+              : "Donation Declined",
+            action === "accept"
+              ? `Coordinate pickup with ${offer.merchant_name} via phone/SMS before ${offer.expiry_display}.`
+              : "Your donation records have been updated.",
+            "success"
+          );
+        } catch (e: any) {
+          showModal(
+            "Action Failed",
+            "Could not update donation status.",
+            "error"
+          );
+        }
+      },
+    });
   };
-
-  //notifcations
-  const [unreadCount, setUnreadCount] = useState(0);
-  /* ---------- render ---------- */
 
   return (
-    <SafeAreaView style={styles.container}>
-      {/* EXACT ESTABLISHMENT HEADER STYLE */}
-      <View style={styles.header}>
-        <View>
-          <Text style={styles.logo}>RESERVE</Text>
-          <Text style={styles.headerSubtitle}>Food Bank Portal</Text>
-        </View>
-        <View style={styles.headerActions}>
-          <TouchableOpacity style={styles.headerIconButton} activeOpacity={0.7} onPress={() => router.push("/foodbank/activity")}>
-            <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
-            <View style={styles.notificationDot} />
-          </TouchableOpacity>
-          <TouchableOpacity activeOpacity={0.7} onPress={() => router.push("/foodbank/profile")}>
-            <View style={styles.profileCircle}>
-              <Ionicons name="person" size={16} color={Colors.white} />
-            </View>
-          </TouchableOpacity>
-        </View>
-      </View>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
-      <View style={[styles.top, isTablet && styles.padTablet]}>
-        <View>
-          <Text style={styles.pageTitle}>Donation Offers</Text>
-          <Text style={styles.pageSubtitle}>
-            Surplus food from merchants. Claim it before the timer runs out.
-          </Text>
-        </View>
+      <FoodBankHeader />
 
-        {/* SORT & FILTER ROW PLACED HERE ABOVE TABS */}
-        <View style={{ flexDirection: "row", gap: 8, zIndex: 30, position: "relative" }}>
-          
-          {/* SORT DROPDOWN */}
-          <View style={{ flex: 1, position: "relative" }}>
-            <TouchableOpacity 
-              style={styles.filterDropdownBtn} 
-              activeOpacity={0.7}
-              onPress={() => { setSortDropdownOpen(!sortDropdownOpen); setDateDropdownOpen(false); }}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1 }}>
-                <Ionicons name="swap-vertical-outline" size={15} color={Colors.primary} />
-                <Text style={styles.filterDropdownText} numberOfLines={1}>
-                  Sort: {sortMode} {sortDirection === "asc" ? "↑" : "↓"}
-                </Text>
-              </View>
-              <Ionicons name={sortDropdownOpen ? "chevron-up" : "chevron-down"} size={15} color={Colors.icon} />
-            </TouchableOpacity>
+      <View style={styles.topSection}>
+        <Text style={styles.pageTitle}>Posted Surplus Donations</Text>
+        <Text style={styles.pageSubtitle}>
+          Surplus food posted by merchants within 10km. Appeal to accept and coordinate pickup
+        </Text>
 
-            {sortDropdownOpen && (
-              <View style={styles.floatingDropdownContainer}>
-                <TouchableOpacity
-                  style={[styles.inlineDropdownItem, sortMode === "A-Z" && styles.inlineDropdownItemActive]}
-                  onPress={() => handleSortSelection("A-Z")}
-                >
-                  <Text style={[styles.inlineDropdownText, sortMode === "A-Z" && styles.inlineDropdownTextActive]}>
-                    A–Z {sortMode === "A-Z" ? (sortDirection === "asc" ? "(Asc)" : "(Desc)") : ""}
-                  </Text>
-                  {sortMode === "A-Z" && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.inlineDropdownItem, sortMode === "Date Posted" && styles.inlineDropdownItemActive]}
-                  onPress={() => handleSortSelection("Date Posted")}
-                >
-                  <Text style={[styles.inlineDropdownText, sortMode === "Date Posted" && styles.inlineDropdownTextActive]}>
-                    Date Posted {sortMode === "Date Posted" ? (sortDirection === "asc" ? "(Oldest)" : "(Newest)") : ""}
-                  </Text>
-                  {sortMode === "Date Posted" && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-
-          {/* FILTER BY DATE DROPDOWN */}
-          <View style={{ flex: 1, position: "relative" }}>
-            <TouchableOpacity 
-              style={styles.filterDropdownBtn} 
-              activeOpacity={0.7}
-              onPress={() => { setDateDropdownOpen(!dateDropdownOpen); setSortDropdownOpen(false); }}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 5, flex: 1 }}>
-                <Ionicons name="filter-outline" size={15} color={Colors.primary} />
-                <Text style={styles.filterDropdownText} numberOfLines={1}>
-                  Filter: {dateFilterMode === "Custom" ? customMainDate.toLocaleDateString() : dateFilterMode}
-                </Text>
-              </View>
-              <Ionicons name={dateDropdownOpen ? "chevron-up" : "chevron-down"} size={15} color={Colors.icon} />
-            </TouchableOpacity>
-
-            {dateDropdownOpen && (
-              <View style={styles.floatingDropdownContainer}>
-                {(["All", "Today", "Last 7 Days", "Last 30 Days", "Custom"] as const).map((mode) => (
-                  <TouchableOpacity
-                    key={mode}
-                    style={[styles.inlineDropdownItem, dateFilterMode === mode && styles.inlineDropdownItemActive]}
-                    onPress={() => {
-                      setDateDropdownOpen(false);
-                      if (mode === "Custom") {
-                        setShowMainDatePicker(true);
-                      } else {
-                        setDateFilterMode(mode);
-                      }
-                    }}
-                  >
-                    <Text style={[styles.inlineDropdownText, dateFilterMode === mode && styles.inlineDropdownTextActive]}>
-                      {mode}
-                    </Text>
-                    {dateFilterMode === mode && <Ionicons name="checkmark" size={16} color={Colors.primary} />}
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-
-            {showMainDatePicker && (
-              <DateTimePicker
-                value={customMainDate}
-                mode="date"
-                display="default"
-                onChange={(event: any, selectedDate?: Date) => {
-                  setShowMainDatePicker(false);
-                  if (event.type === "dismissed") return;
-                  if (selectedDate) {
-                    setCustomMainDate(selectedDate);
-                    setDateFilterMode("Custom");
-                  }
-                }}
-              />
-            )}
-          </View>
-        </View>
-
-        <View style={styles.tabs}>
-          {TABS.map((t) => {
+        <View style={styles.tabsBar}>
+          {(
+            [
+              { key: "available", label: "Available" },
+              { key: "ongoing", label: "Ongoing" },
+              { key: "history", label: "History" },
+            ] as const
+          ).map((t) => {
             const active = tab === t.key;
+            const count = offers.filter((o) => tabOf(o.status) === t.key).length;
             return (
               <TouchableOpacity
                 key={t.key}
-                style={[styles.tab, active && styles.tabActive]}
-                activeOpacity={0.85}
-                onPress={() => switchTab(t.key)}
+                style={[styles.tabBtn, active && styles.tabBtnActive]}
+                onPress={() => setTab(t.key)}
               >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
-                {tabCounts[t.key] > 0 && (
-                  <View style={[styles.tabBadge, active && styles.tabBadgeActive]}>
-                    <Text style={[styles.tabBadgeText, active && styles.tabBadgeTextActive]}>
-                      {tabCounts[t.key]}
-                    </Text>
-                  </View>
-                )}
+                <Text
+                  style={[styles.tabBtnText, active && styles.tabBtnTextActive]}
+                >
+                  {t.label} ({count})
+                </Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
-        <View style={styles.searchBox}>
-          <Ionicons name="search-outline" size={18} color={Colors.primary} />
+        <View style={styles.searchContainer}>
+          <Ionicons name="search-outline" size={18} color={Colors.icon} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search food or merchant..."
+            placeholder="Search food item, category, or merchant..."
             placeholderTextColor={Colors.placeholder}
             value={search}
             onChangeText={setSearch}
           />
           {search !== "" && (
-            <TouchableOpacity onPress={() => setSearch("")} activeOpacity={0.7}>
+            <TouchableOpacity onPress={() => setSearch("")}>
               <Ionicons name="close-circle" size={18} color={Colors.icon} />
             </TouchableOpacity>
           )}
         </View>
-
-        {chipOptions.length > 1 && (
-          <FilterChips options={chipOptions} selected={selectedType} onSelect={setSelectedType} />
-        )}
       </View>
 
       {loading ? (
@@ -546,549 +274,491 @@ export default function FoodBankDonationsScreen() {
         </View>
       ) : (
         <FlatList
-          data={visible}
+          style={{ flex: 1 }}
+          data={visibleOffers}
           keyExtractor={(item) => String(item.donation_id)}
-          contentContainerStyle={[styles.listContent, isTablet && styles.padTablet]}
+          contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
-              onRefresh={() => load(true)}
+              onRefresh={() => loadOffers(true)}
               tintColor={Colors.primary}
               colors={[Colors.primary]}
             />
           }
-          ListHeaderComponent={
-            loadError ? <ErrorBanner message={loadError} onRetry={() => load()} /> : undefined
-          }
           ListEmptyComponent={
-            <EmptyState
-              {...(inTab.length === 0
-                ? emptyCopy[tab]
-                : {
-                    icon: "search-outline" as any,
-                    title: "Nothing matches",
-                    message: "Try a different food type or clear your search.",
-                  })}
-              actionLabel={inTab.length > 0 ? "Clear filters" : undefined}
-              onAction={
-                inTab.length > 0
-                  ? () => {
-                      setSelectedType("All");
-                      setSearch("");
-                      setDateFilterMode("All");
-                    }
-                  : undefined
-              }
-            />
+            <View style={styles.emptyCard}>
+              <View style={styles.emptyIcon}>
+                <Ionicons
+                  name="gift-outline"
+                  size={25}
+                  color={Colors.primary}
+                />
+              </View>
+              <Text style={styles.emptyTitle}>No donations in this tab</Text>
+              <Text style={styles.emptyDescription}>
+                You can also browse active listings directly under the Merchants tab to request food!
+              </Text>
+            </View>
           }
           renderItem={({ item }) => (
-            <OfferCard
-              offer={item}
-              onView={() => setDetail(item)}
-              onAction={(action) => setPending({ offer: item, action })}
-            />
+            <View style={styles.uiCard}>
+              <TouchableOpacity
+                style={styles.uiCardTop}
+                activeOpacity={0.85}
+                onPress={() => setDetail(item)}
+              >
+                <Image
+                  source={{
+                    uri:
+                      item.image_path ||
+                      "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&q=80",
+                  }}
+                  style={styles.uiImage}
+                />
+                <View style={{ flex: 1 }}>
+                  <View style={styles.uiCardHeaderRow}>
+                    <Text style={styles.uiCardTitle} numberOfLines={1}>
+                      {item.food_name}
+                    </Text>
+                    <StatusPill status={item.status} />
+                  </View>
+
+                  <Text style={styles.uiCardSubtitle} numberOfLines={1}>
+                    {item.merchant_name} • {item.distance || "Within 10km"}
+                  </Text>
+
+                  <Text style={styles.qtyText}>
+                    Quantity: {item.qty_donated} {item.unit_name || "items"} (
+                    {item.food_type})
+                  </Text>
+
+                  <Text style={styles.explicitExpiry}>
+                    Exp: {item.expiry_display || "Standard Window"}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.uiCardActions}>
+                <TouchableOpacity
+                  style={styles.uiActionBtn}
+                  onPress={() => setDetail(item)}
+                >
+                  <Ionicons
+                    name="eye-outline"
+                    size={16}
+                    color={Colors.primary}
+                  />
+                  <Text
+                    style={[
+                      styles.uiActionBtnText,
+                      { color: Colors.primary, fontFamily: "PoppinsSemiBold" },
+                    ]}
+                  >
+                    View Full Details
+                  </Text>
+                </TouchableOpacity>
+
+                {(item.status === "Active" || item.status === "Available") && (
+                  <TouchableOpacity
+                    style={styles.uiActionBtn}
+                    onPress={() => promptOfferAction(item, "accept")}
+                  >
+                    <Ionicons
+                      name="checkmark-circle-outline"
+                      size={16}
+                      color={Colors.button}
+                    />
+                    <Text
+                      style={[
+                        styles.uiActionBtnText,
+                        { color: Colors.button, fontFamily: "PoppinsSemiBold" },
+                      ]}
+                    >
+                      Accept Donation
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {(item.status === "Ongoing" ||
+                  item.status === "Claimed" ||
+                  item.status === "In-Transit") && (
+                  <TouchableOpacity
+                    style={styles.uiActionBtn}
+                    onPress={() => promptOfferAction(item, "received")}
+                  >
+                    <Ionicons
+                      name="checkmark-done-circle-outline"
+                      size={16}
+                      color={Colors.button}
+                    />
+                    <Text
+                      style={[
+                        styles.uiActionBtnText,
+                        { color: Colors.button, fontFamily: "PoppinsSemiBold" },
+                      ]}
+                    >
+                      Mark Successful
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
           )}
         />
       )}
 
-      {/* ================= DETAIL MODAL ================= */}
+      {/* FULL DONATION DETAILS + MERCHANT CONTACT + MAP MODAL */}
       <Modal
         visible={!!detail}
         transparent
         animationType="slide"
         onRequestClose={() => setDetail(null)}
       >
-        <View style={styles.sheetOverlay}>
-          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setDetail(null)} />
-          {detail && (
-            <View style={styles.sheet}>
-              <View style={styles.sheetHandle} />
-
-              <ScrollView showsVerticalScrollIndicator={false}>
-                <OfferImage path={detail.image_path ?? null} foodType={detail.food_type} big />
-
-                <View style={styles.detailHeadRow}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalSheet}>
+            {detail && (
+              <>
+                <View style={styles.modalHeader}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.detailTitle}>{detail.food_name}</Text>
-                    <Text style={styles.detailMerchant}>{detail.merchant_name}</Text>
-                  </View>
-                  <StatusPill status={detail.status} />
-                </View>
-
-                {detail.status === "Active" && (
-                  <View style={{ marginTop: 10 }}>
-                    <Countdown expiresAt={detail.expires_at ?? ""} large />
-                  </View>
-                )}
-
-                {detail.is_ttt && (
-                  <View style={styles.tttBanner}>
-                    <Ionicons name="flash" size={18} color="#8A5A00" />
-                    <Text style={styles.tttBannerText}>
-                      Listed automatically by TTT because this food is close to its safe-to-consume
-                      limit. Please collect it before the timer ends.
+                    <Text style={styles.modalTitle} numberOfLines={1}>
+                      {detail.food_name}
+                    </Text>
+                    <Text style={styles.modalSubtitle}>
+                      Posted by {detail.merchant_name}
                     </Text>
                   </View>
-                )}
-
-                <View style={styles.infoBox}>
-                  <InfoRow icon="cube-outline" label="Quantity" value={formatQty(detail.qty_donated, detail.unit_name)} />
-                  <InfoRow icon={foodIcon(detail.food_type)} label="Food type" value={detail.food_type} />
-                  {detail.expires_at && (
-                    <InfoRow icon="alarm-outline" label="Best before" value={formatDateTime(detail.expires_at)} />
-                  )}
-                  <InfoRow icon="location-outline" label="Pick up at" value={detail.merchant_address} />
-                  <InfoRow
-                    icon="person-outline"
-                    label="Contact"
-                    value={
-                      detail.merchant_contact_name
-                        ? `${detail.merchant_contact_name} · ${detail.merchant_contact}`
-                        : detail.merchant_contact
-                    }
-                  />
-                  <InfoRow icon="time-outline" label="Listed" value={timeAgo(detail.created_at)} last />
+                  <TouchableOpacity
+                    style={styles.closeBtn}
+                    onPress={() => setDetail(null)}
+                  >
+                    <Ionicons name="close" size={20} color={Colors.primary2} />
+                  </TouchableOpacity>
                 </View>
 
-                {/\d/.test(detail.merchant_contact) && (
-                  <TouchableOpacity
-                    style={styles.callBtn}
-                    activeOpacity={0.85}
-                    onPress={() => Linking.openURL(`tel:${detail.merchant_contact.replace(/\s/g, "")}`)}
-                  >
-                    <Ionicons name="call-outline" size={18} color={Colors.primary} />
-                    <Text style={styles.callBtnText}>Call merchant</Text>
-                  </TouchableOpacity>
-                )}
+                <ScrollView
+                  contentContainerStyle={{ padding: 16, paddingBottom: 30 }}
+                >
+                  <Image
+                    source={{
+                      uri:
+                        detail.image_path ||
+                        "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&q=80",
+                    }}
+                    style={styles.viewImage}
+                  />
 
-                <DetailActions
-                  offer={detail}
-                  onAction={(action) => setPending({ offer: detail, action })}
-                />
+                  <View style={styles.infoBox}>
+                    <Text style={styles.boxHeading}>
+                      Food Listing & Expiry Information
+                    </Text>
+                    <DetailRow
+                      icon="cube-outline"
+                      label="Quantity Available"
+                      value={`${detail.qty_donated} ${
+                        detail.unit_name || "items"
+                      }`}
+                    />
+                    <DetailRow
+                      icon="restaurant-outline"
+                      label="Category"
+                      value={detail.food_type}
+                    />
+                    <DetailRow
+                      icon="alarm-outline"
+                      label="Expiry Date & Time"
+                      value={detail.expiry_display || "Standard Window"}
+                    />
+                    <DetailRow
+                      icon="document-text-outline"
+                      label="Description"
+                      value={
+                        detail.description ||
+                        "Surplus food item posted for community distribution."
+                      }
+                    />
+                  </View>
 
-                <TouchableOpacity style={styles.closeBtn} activeOpacity={0.8} onPress={() => setDetail(null)}>
-                  <Text style={styles.closeBtnText}>Close</Text>
-                </TouchableOpacity>
-              </ScrollView>
-            </View>
-          )}
+                  <View style={styles.infoBox}>
+                    <Text style={styles.boxHeading}>
+                      Donor Merchant & Contact Information
+                    </Text>
+                    <DetailRow
+                      icon="storefront-outline"
+                      label="Establishment"
+                      value={detail.merchant_name}
+                    />
+                    <DetailRow
+                      icon="person-outline"
+                      label="Contact Person"
+                      value={detail.merchant_contact_name || "Store Manager"}
+                    />
+                    <DetailRow
+                      icon="call-outline"
+                      label="Contact Number"
+                      value={detail.merchant_contact}
+                    />
+                    <DetailRow
+                      icon="location-outline"
+                      label="Pickup Location"
+                      value={detail.merchant_address}
+                    />
+
+                    <View
+                      style={{ flexDirection: "row", gap: 8, marginTop: 8 }}
+                    >
+                      <TouchableOpacity
+                        style={styles.actionPillBtn}
+                        onPress={() =>
+                          setMapTarget({
+                            name: detail.merchant_name,
+                            address: detail.merchant_address,
+                            lat: Number(detail.merchant_lat || 10.3157),
+                            lng: Number(detail.merchant_lng || 123.8854),
+                          })
+                        }
+                      >
+                        <Ionicons
+                          name="map-outline"
+                          size={15}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.actionPillBtnText}>
+                          Show Shop in Maps
+                        </Text>
+                      </TouchableOpacity>
+
+                      {/\d/.test(detail.merchant_contact || "") && (
+                        <>
+                          <TouchableOpacity
+                            style={[
+                              styles.actionPillBtn,
+                              { backgroundColor: Colors.button },
+                            ]}
+                            onPress={() =>
+                              Linking.openURL(
+                                `tel:${detail.merchant_contact.replace(
+                                  /\s/g,
+                                  ""
+                                )}`
+                              )
+                            }
+                          >
+                            <Ionicons
+                              name="call"
+                              size={14}
+                              color={Colors.white}
+                            />
+                            <Text style={styles.actionPillBtnText}>Call</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.actionPillBtn,
+                              { backgroundColor: Colors.primary2 },
+                            ]}
+                            onPress={() =>
+                              Linking.openURL(
+                                `sms:${detail.merchant_contact.replace(
+                                  /\s/g,
+                                  ""
+                                )}`
+                              )
+                            }
+                          >
+                            <Ionicons
+                              name="chatbubble-ellipses"
+                              size={14}
+                              color={Colors.white}
+                            />
+                            <Text style={styles.actionPillBtnText}>SMS</Text>
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
+                  </View>
+
+                  {(detail.status === "Active" ||
+                    detail.status === "Available") && (
+                    <View style={{ flexDirection: "row", gap: 10 }}>
+                      <TouchableOpacity
+                        style={styles.declineBtn}
+                        onPress={() => promptOfferAction(detail, "decline")}
+                      >
+                        <Text style={styles.declineBtnText}>Decline</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.acceptBtn}
+                        onPress={() => promptOfferAction(detail, "accept")}
+                      >
+                        <Ionicons
+                          name="checkmark-circle-outline"
+                          size={18}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.acceptBtnText}>
+                          Accept Donation
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+
+                  {(detail.status === "Ongoing" ||
+                    detail.status === "Claimed" ||
+                    detail.status === "In-Transit") && (
+                    <TouchableOpacity
+                      style={[styles.acceptBtn, { flex: 0 }]}
+                      onPress={() => promptOfferAction(detail, "received")}
+                    >
+                      <Ionicons
+                        name="checkmark-done-circle"
+                        size={18}
+                        color={Colors.white}
+                      />
+                      <Text style={styles.acceptBtnText}>
+                        Handshake Done — Mark as Successful
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </ScrollView>
+              </>
+            )}
+          </View>
         </View>
       </Modal>
 
-      <ConfirmModal
-        visible={!!pending}
-        title={pending ? CONFIRM_COPY[pending.action].title : ""}
-        message={
-          pending
-            ? `${formatQty(pending.offer.qty_donated, pending.offer.unit_name)} of ${pending.offer.food_name} from ${pending.offer.merchant_name}.`
-            : ""
-        }
-        confirmLabel={pending ? CONFIRM_COPY[pending.action].confirm : ""}
-        destructive={pending ? CONFIRM_COPY[pending.action].destructive : false}
-        loading={working}
-        onConfirm={runAction}
-        onCancel={() => setPending(null)}
+      <FoodBankMapModal
+        visible={!!mapTarget}
+        shopName={mapTarget?.name || ""}
+        address={mapTarget?.address || ""}
+        lat={mapTarget?.lat || 10.3157}
+        lng={mapTarget?.lng || 123.8854}
+        onClose={() => setMapTarget(null)}
       />
 
-      <Toast message={toast} />
+      <ReserveConfirmModal
+        visible={confirmState.visible}
+        title={confirmState.title}
+        message={confirmState.message}
+        confirmText={confirmState.confirmText}
+        isDestructive={confirmState.isDestructive}
+        onConfirm={confirmState.onConfirm}
+        onCancel={() => setConfirmState((p) => ({ ...p, visible: false }))}
+      />
 
-      {/* FOOD BANK BOTTOM NAVIGATION BAR */}
-      <View style={styles.bottomNav}>
-        <BottomNavItem icon="grid-outline" label="Home" onPress={() => router.replace("/foodbank/dashboard")} />
-        <BottomNavItem icon="document-text-outline" label="Requests" onPress={() => router.replace("/foodbank/requests")} />
-        <BottomNavItem icon="gift" label="Donations" active onPress={() => router.replace("/foodbank/donations")} />
-        <BottomNavItem icon="people-outline" label="Partners" onPress={() => router.replace("/foodbank/partners")} />
-        <BottomNavItem icon="time-outline" label="Activity" onPress={() => router.replace("/foodbank/activity")} />
-      </View>
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
+      />
+
+      <FoodBankBottomNav activeTab="Donations" />
     </SafeAreaView>
   );
 }
 
-/* =====================================================
-   OFFER CARD
-===================================================== */
+function StatusPill({ status }: { status: string }) {
+  let bg = "#E4F0E8";
+  let fg = "#1F6B52";
+  let label = "Available";
 
-function OfferCard({
-  offer,
-  onView,
-  onAction,
-}: {
-  offer: DonationOffer;
-  onView: () => void;
-  onAction: (a: Action) => void;
-}) {
-  const expired = offer.status === "Active" && secondsLeft(offer.expires_at) === 0;
+  if (status === "Ongoing" || status === "Claimed" || status === "In-Transit") {
+    bg = "#E1EEF8";
+    fg = "#2C5F8A";
+    label = "Ongoing";
+  } else if (status === "Successful" || status === "Completed") {
+    bg = "#E4F0E8";
+    fg = "#1F6B52";
+    label = "Successful";
+  } else if (status === "Declined" || status === "Cancelled") {
+    bg = "#FBE4E1";
+    fg = "#B3261E";
+    label = status;
+  }
 
   return (
-    <View style={[styles.card, expired && { opacity: 0.6 }]}>
-      <TouchableOpacity activeOpacity={0.9} onPress={onView} style={styles.cardMain}>
-        <OfferImage path={offer.image_path ?? null} foodType={offer.food_type} />
-
-        <View style={styles.cardBody}>
-          <View style={styles.cardTitleRow}>
-            <Text style={styles.cardTitle} numberOfLines={1}>{offer.food_name}</Text>
-            <StatusPill status={offer.status} />
-          </View>
-
-          <Text style={styles.cardMerchant} numberOfLines={1}>{offer.merchant_name}</Text>
-          <Text style={styles.cardMerchant} numberOfLines={1}>{offer.merchant_name}</Text>
-          {offer.expires_at && (
-            <Text style={{ fontFamily: "PoppinsMedium", fontSize: 10.5, color: "#A94A3A", marginTop: 2 }} numberOfLines={1}>
-              Expiry Date & Time: {formatDateTime(offer.expires_at)}
-            </Text>
-          )}
-
-          <View style={styles.cardBottomRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardQty}>{formatQty(offer.qty_donated, offer.unit_name)} available</Text>
-              {offer.is_ttt && (
-                <View style={styles.tttChip}>
-                  <Ionicons name="flash" size={11} color="#8A5A00" />
-                  <Text style={styles.tttChipText}>TTT</Text>
-                </View>
-              )}
-            </View>
-            <Countdown expiresAt={offer.expires_at ?? ""} />
-          </View>
-        </View>
-      </TouchableOpacity>
-
-      <View style={styles.cardActions}>
-        <ActionBtn icon="eye-outline" label="View" onPress={onView} />
-        {offer.status === "Active" && !expired && (
-          <>
-            <ActionBtn icon="checkmark-circle-outline" label="Accept" color={Colors.button} onPress={() => onAction("accept")} />
-            <ActionBtn icon="close-circle-outline" label="Decline" color="#B3261E" onPress={() => onAction("decline")} />
-          </>
-        )}
-        {(offer.status === "Claimed" || offer.status === "In-Transit") && (
-          <ActionBtn icon="checkmark-done-outline" label="Mark received" color={Colors.button} onPress={() => onAction("received")} />
-        )}
-      </View>
+    <View style={[styles.statusPill, { backgroundColor: bg }]}>
+      <View style={[styles.statusDot, { backgroundColor: fg }]} />
+      <Text style={[styles.statusPillText, { color: fg }]}>{label}</Text>
     </View>
   );
 }
 
-function ActionBtn({
+function DetailRow({
   icon,
   label,
-  color = Colors.primary1,
-  onPress,
+  value,
 }: {
   icon: any;
   label: string;
-  color?: string;
-  onPress: () => void;
+  value: string;
 }) {
   return (
-    <TouchableOpacity style={styles.actionBtn} activeOpacity={0.7} onPress={onPress}>
-      <Ionicons name={icon} size={18} color={color} />
-      <Text style={[styles.actionBtnText, { color }]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-function DetailActions({ offer, onAction }: { offer: DonationOffer; onAction: (a: Action) => void }) {
-  const expired = offer.status === "Active" && secondsLeft(offer.expires_at) === 0;
-
-  if (offer.status === "Active") {
-    if (expired) {
-      return <Text style={styles.expiredNote}>This offer has expired and can't be claimed anymore.</Text>;
-    }
-    return (
-      <View style={styles.detailActionRow}>
-        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: Colors.button }]} activeOpacity={0.85} onPress={() => onAction("accept")}>
-          <Ionicons name="checkmark-circle-outline" size={19} color={Colors.white} />
-          <Text style={styles.bigBtnText}>Accept</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.bigBtn, styles.bigBtnOutline]} activeOpacity={0.85} onPress={() => onAction("decline")}>
-          <Ionicons name="close-circle-outline" size={19} color="#B3261E" />
-          <Text style={[styles.bigBtnText, { color: "#B3261E" }]}>Decline</Text>
-        </TouchableOpacity>
+    <View style={styles.detailRow}>
+      <View style={styles.detailIcon}>
+        <Ionicons name={icon} size={15} color={Colors.primary} />
       </View>
-    );
-  }
-  if (offer.status === "Claimed" || offer.status === "In-Transit") {
-    return (
-      <View style={styles.detailActionRow}>
-        <TouchableOpacity style={[styles.bigBtn, { backgroundColor: Colors.button }]} activeOpacity={0.85} onPress={() => onAction("received")}>
-          <Ionicons name="checkmark-done-outline" size={19} color={Colors.white} />
-          <Text style={styles.bigBtnText}>Mark as received</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-  return null;
-}
-
-/* =====================================================
-   SMALL PIECES
-===================================================== */
-
-function OfferImage({ path, foodType, big }: { path: string | null; foodType: string; big?: boolean }) {
-  const uri = imageUri(path);
-  const box = big ? styles.imageBig : styles.image;
-  if (uri) {
-    return <Image source={{ uri }} style={box} resizeMode="cover" />;
-  }
-  return (
-    <View style={[box, styles.imagePlaceholder]}>
-      <Ionicons name={foodIcon(foodType)} size={big ? 54 : 34} color={Colors.primary1} />
-    </View>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const s = STATUS_STYLES[status] || STATUS_STYLES.Active;
-  return (
-    <View style={[styles.statusPill, { backgroundColor: s.bg }]}>
-      <View style={[styles.statusDot, { backgroundColor: s.fg }]} />
-      <Text style={[styles.statusPillText, { color: s.fg }]}>{s.label}</Text>
-    </View>
-  );
-}
-
-function InfoRow({ icon, label, value, last }: { icon: any; label: string; value: string; last?: boolean }) {
-  return (
-    <View style={[styles.infoRow, !last && styles.infoRowBorder]}>
-      <Ionicons name={icon} size={18} color={Colors.icon} />
       <View style={{ flex: 1 }}>
-        <Text style={styles.infoLabel}>{label}</Text>
-        <Text style={styles.infoValue}>{value}</Text>
+        <Text style={styles.detailLabel}>{label}</Text>
+        <Text style={styles.detailValue}>{value}</Text>
       </View>
     </View>
   );
 }
-
-function BottomNavItem({ icon, label, active, onPress }: { icon: any; label: string; active?: boolean; onPress: () => void; }) {
-  return (
-    <TouchableOpacity 
-      style={[styles.navItem, active && styles.navItemActive]} 
-      activeOpacity={active ? 1 : 0.7} 
-      onPress={active ? undefined : onPress} 
-    >
-      <Ionicons name={icon} size={24} color={active ? Colors.primary : Colors.icon} />
-      <Text style={[styles.navText, active && styles.navTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-/* =====================================================
-   STYLES
-===================================================== */
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-
-  header: {
-    minHeight: 70,
-    backgroundColor: Colors.background,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  logo: {
-    fontFamily: "PoppinsBold",
-    fontSize: 26,
-    color: Colors.primary,
-    letterSpacing: 0.7,
-  },
-  headerSubtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 12,
-    color: Colors.primary1,
-    marginTop: -2,
-  },
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 15,
-  },
-  headerIconButton: {
-    position: "relative",
-    padding: 4,
-  },
-  notificationDot: {
-    position: "absolute",
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#A94A3A",
-    right: 3,
-    top: 2,
-    borderWidth: 1.5,
-    borderColor: Colors.background,
-  },
-  profileCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: Colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  top: { paddingHorizontal: 17, paddingTop: 16, paddingBottom: 6, gap: 12, backgroundColor: Colors.background, zIndex: 10 },
-  padTablet: { paddingHorizontal: 28 },
-  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, lineHeight: 30, color: Colors.primary2 },
-  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, lineHeight: 16, color: Colors.primary1, marginTop: 1 },
-
-  tabs: { flexDirection: "row", backgroundColor: "#DDE2DC", borderRadius: 12, padding: 3 },
-  tab: { flex: 1, height: 38, borderRadius: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  tabActive: { backgroundColor: Colors.white, elevation: 1, shadowColor: "#000", shadowOpacity: 0.06, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
-  tabText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary1 },
-  tabTextActive: { color: Colors.primary2, fontFamily: "PoppinsSemiBold" },
-  tabBadge: { minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 5, backgroundColor: "#C9D3CC", alignItems: "center", justifyContent: "center" },
-  tabBadgeActive: { backgroundColor: Colors.button },
-  tabBadgeText: { fontFamily: "PoppinsMedium", fontSize: 9.5, color: Colors.primary2 },
-  tabBadgeTextActive: { color: Colors.white },
-
-  floatingDropdownContainer: {
-    position: "absolute",
-    top: 42,
-    left: 0,
-    right: 0,
-    backgroundColor: Colors.white,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    zIndex: 9999,
-    elevation: 10,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 4 },
-  },
-  filterDropdownBtn: {
-    minHeight: 40,
-    borderRadius: 10,
-    backgroundColor: Colors.white,
-    paddingHorizontal: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  filterDropdownText: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 11,
-    color: Colors.primary2,
-  },
-  inlineDropdownItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 12,
-    paddingHorizontal: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
-  },
-  inlineDropdownItemActive: {
-    backgroundColor: "#E8EFEA",
-  },
-  inlineDropdownText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 12,
-    color: Colors.primary2,
-  },
-  inlineDropdownTextActive: {
-    fontFamily: "PoppinsSemiBold",
-    color: Colors.primary,
-  },
-
-  searchBox: { height: 42, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, paddingHorizontal: 12 },
-  searchInput: { flex: 1, height: 42, fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.text, paddingVertical: 0 },
-
-  loadingWrap: { paddingVertical: 60, alignItems: "center" },
-  listContent: { paddingHorizontal: 17, paddingTop: 10, paddingBottom: 70 },
-
-  card: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 16, marginBottom: 12, overflow: "hidden" },
-  cardMain: { flexDirection: "row", gap: 12, padding: 12 },
-  image: { width: 92, height: 110, borderRadius: 12 },
-  imageBig: { width: "100%", height: 190, borderRadius: 16, marginBottom: 14 },
-  imagePlaceholder: { backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center" },
-  cardBody: { flex: 1, justifyContent: "space-between" },
-  cardTitleRow: { flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  cardTitle: { flex: 1, fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2 },
-  cardMerchant: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 1 },
-  cardBottomRow: { flexDirection: "row", alignItems: "flex-end", gap: 8, marginTop: 8 },
-  cardQty: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary2 },
-  tttChip: { flexDirection: "row", alignItems: "center", gap: 3, alignSelf: "flex-start", backgroundColor: "#FCEFD9", borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4 },
-  tttChipText: { fontFamily: "PoppinsSemiBold", fontSize: 9.5, color: "#8A5A00" },
-
-  cardActions: { flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, paddingHorizontal: 12, paddingVertical: 10, gap: 18 },
-  actionBtn: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 2 },
-  actionBtnText: { fontFamily: "PoppinsMedium", fontSize: 12.5 },
-
-  statusPill: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 12 },
-  statusDot: { width: 6, height: 6, borderRadius: 3 },
-  statusPillText: { fontFamily: "PoppinsMedium", fontSize: 10.5 },
-
-  sheetOverlay: { flex: 1, backgroundColor: "rgba(15,48,38,0.45)", justifyContent: "flex-end" },
-  sheet: { backgroundColor: Colors.background, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 18, paddingTop: 10, paddingBottom: 20, maxHeight: "92%" },
-  sheetHandle: { alignSelf: "center", width: 42, height: 4, borderRadius: 2, backgroundColor: Colors.border, marginBottom: 12 },
-  detailHeadRow: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
-  detailTitle: { fontFamily: "PoppinsBold", fontSize: 21, lineHeight: 27, color: Colors.primary2 },
-  detailMerchant: { fontFamily: "PoppinsRegular", fontSize: 13, color: Colors.primary1 },
-
-  tttBanner: { flexDirection: "row", gap: 10, backgroundColor: "#FCEFD9", borderRadius: 12, padding: 12, marginTop: 14 },
-  tttBannerText: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 11.5, lineHeight: 17, color: "#6B4500" },
-
-  infoBox: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, marginTop: 14, paddingHorizontal: 14 },
-  infoRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 11 },
-  infoRowBorder: { borderBottomWidth: 1, borderBottomColor: "#ECEFEC" },
-  infoLabel: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.placeholder },
-  infoValue: { fontFamily: "PoppinsMedium", fontSize: 12.5, lineHeight: 18, color: Colors.primary2 },
-
-  callBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 44, borderRadius: 12, borderWidth: 1, borderColor: Colors.primary, marginTop: 12 },
-  callBtnText: { fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.primary },
-
-  detailActionRow: { flexDirection: "row", gap: 10, marginTop: 12 },
-  bigBtn: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, height: 50, borderRadius: 14 },
-  bigBtnOutline: { backgroundColor: "#FDF3F2", borderWidth: 1, borderColor: "#E5B8B4" },
-  bigBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.white },
-  expiredNote: { fontFamily: "PoppinsMedium", fontSize: 12, color: "#7A807C", textAlign: "center", marginTop: 14 },
-  closeBtn: { alignItems: "center", paddingVertical: 14 },
-  closeBtnText: { fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.primary1 },
-
-  bottomNav: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 90,
-    paddingBottom: 25,
-    backgroundColor: Colors.white,
-    flexDirection: "row",
-    borderTopWidth: 1,
-    borderTopColor: Colors.border,
-    elevation: 10,
-    paddingHorizontal: 2,
-  },
-  navItem: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    marginVertical: 5,
-    marginHorizontal: 2,
-    borderRadius: 7,
-  },
-  navItemActive: {
-    backgroundColor: "#E8EFEA",
-  },
-  navText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    color: Colors.icon,
-    marginTop: 4,
-  },
-  navTextActive: {
-    fontFamily: "PoppinsSemiBold",
-    color: Colors.primary,
-  },
+  topSection: { paddingHorizontal: 17, paddingTop: 16, paddingBottom: 8 },
+  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
+  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2 },
+  tabsBar: { flexDirection: "row", backgroundColor: "#EBEFEB", borderRadius: 12, padding: 4, marginTop: 12 },
+  tabBtn: { flex: 1, paddingVertical: 8, borderRadius: 9, alignItems: "center" },
+  tabBtnActive: { backgroundColor: Colors.white },
+  tabBtnText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary1 },
+  tabBtnTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.primary2 },
+  searchContainer: { minHeight: 44, borderRadius: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, marginTop: 10 },
+  searchInput: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary2, marginLeft: 8, paddingVertical: 8 },
+  loadingWrap: { flex: 1, justifyContent: "center", alignItems: "center" },
+  listContent: { paddingHorizontal: 17, paddingTop: 8, paddingBottom: 28 },
+  uiCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, overflow: "hidden", marginBottom: 12 },
+  uiCardTop: { flexDirection: "row", padding: 12, gap: 12, alignItems: "center" },
+  uiImage: { width: 80, height: 80, borderRadius: 10, backgroundColor: Colors.input },
+  uiCardHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6 },
+  uiCardTitle: { flex: 1, fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2 },
+  uiCardSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2 },
+  qtyText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary2, marginTop: 2 },
+  explicitExpiry: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: "#A94A3A", marginTop: 2 },
+  statusPill: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10 },
+  statusDot: { width: 5, height: 5, borderRadius: 2.5 },
+  statusPillText: { fontFamily: "PoppinsSemiBold", fontSize: 10 },
+  uiCardActions: { flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, padding: 10, justifyContent: "space-between" },
+  uiActionBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
+  uiActionBtnText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary1 },
+  emptyCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingVertical: 38, paddingHorizontal: 20, alignItems: "center" },
+  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginBottom: 8 },
+  emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
+  emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, textAlign: "center", marginTop: 3 },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.5)", justifyContent: "flex-end" },
+  modalSheet: { width: "100%", maxHeight: "92%", backgroundColor: Colors.background, borderTopLeftRadius: 22, borderTopRightRadius: 22, overflow: "hidden" },
+  modalHeader: { paddingHorizontal: 18, paddingVertical: 14, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  modalTitle: { fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2 },
+  modalSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
+  closeBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
+  viewImage: { width: "100%", height: 190, borderRadius: 12, backgroundColor: Colors.input, marginBottom: 14 },
+  infoBox: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 14, marginBottom: 14 },
+  boxHeading: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2, marginBottom: 10 },
+  detailRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  detailIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 10 },
+  detailLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
+  detailValue: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary2 },
+  actionPillBtn: { flex: 1, height: 38, borderRadius: 9, backgroundColor: Colors.primary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
+  actionPillBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.white },
+  declineBtn: { flex: 1, height: 48, borderRadius: 12, borderWidth: 1, borderColor: "#E5B8B4", backgroundColor: "#FDF3F2", alignItems: "center", justifyContent: "center" },
+  declineBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: "#B3261E" },
+  acceptBtn: { flex: 1.4, height: 48, borderRadius: 12, backgroundColor: Colors.button, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  acceptBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.white },
 });

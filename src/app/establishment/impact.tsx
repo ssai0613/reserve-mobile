@@ -5,12 +5,13 @@ import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
 import {
   Platform,
-  SafeAreaView,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   EstablishmentBottomNav,
@@ -31,6 +32,7 @@ export default function EstablishmentImpact() {
   const [avgRating, setAvgRating] = useState<number>(0);
   const [reviewCount, setReviewCount] = useState<number>(0);
   const [reviews, setReviews] = useState<any[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   const [monthlyData, setMonthlyData] = useState<any[]>([
     { month: "Jun", rescued: 0 },
     { month: "Jul", rescued: 0 },
@@ -77,6 +79,12 @@ export default function EstablishmentImpact() {
     }
   };
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadImpact();
+    setRefreshing(false);
+  };
+
   const impactStats = [
     { icon: "leaf-outline", value: foodRescuedKg, label: "Food rescued", unit: "kg" },
     { icon: "people-outline", value: peopleHelped, label: "People helped", unit: "people" },
@@ -87,12 +95,23 @@ export default function EstablishmentImpact() {
   const maxBarVal = Math.max(100, ...monthlyData.map((d) => Number(d.rescued || 0)));
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
       <EstablishmentHeader />
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
+      >
         <View style={styles.pageHeader}>
           <Text style={styles.pageTitle}>Impact & Customer Reviews</Text>
           <Text style={styles.pageSubtitle}>
@@ -281,7 +300,7 @@ export default function EstablishmentImpact() {
           )}
         </View>
 
-        <View style={{ height: 35 }} />
+        <View style={{ height: 24 }} />
       </ScrollView>
 
       <EstablishmentBottomNav activeTab="Impact" />
@@ -319,7 +338,7 @@ function ImpactRow({ icon, title, value, description }: { icon: any; title: stri
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 90 },
+  scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 28 },
   pageHeader: { marginBottom: 16 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, lineHeight: 31, color: Colors.primary2 },
   pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 2 },

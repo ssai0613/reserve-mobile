@@ -16,6 +16,7 @@ import {
   PanResponder,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
@@ -26,8 +27,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
-import { EstablishmentBottomNav, EstablishmentHeader } from "../components/EstablishmentNav";
-
+import {
+  EstablishmentBottomNav,
+  EstablishmentHeader,
+} from "../components/EstablishmentNav";
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
 
@@ -37,10 +40,6 @@ const getStorageItem = async (key: string): Promise<string | null> => {
   }
   return await SecureStore.getItemAsync(key);
 };
-
-/* =====================================================
-   TYPES
-===================================================== */
 
 type FoodListing = {
   id: number;
@@ -73,20 +72,17 @@ type FoodListing = {
 
 const initialFoodListings: FoodListing[] = [];
 
-/* =====================================================
-   MAIN LISTING SCREEN
-===================================================== */
-
 export default function EstablishmentListing() {
   const [merchantId, setMerchantId] = useState<string>("1");
-  const [establishmentName, setEstablishmentName] = useState<string>("Establishment Portal");
-  const [foodListings, setFoodListings] = useState<FoodListing[]>(initialFoodListings);
+  const [establishmentName, setEstablishmentName] = useState<string>(
+    "Establishment Portal"
+  );
+  const [foodListings, setFoodListings] =
+    useState<FoodListing[]>(initialFoodListings);
   const [listingModalVisible, setListingModalVisible] = useState(false);
   const [viewModalVisible, setViewModalVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
-  /* =====================================================
-     VIEW MODAL: SLIDE-UP + PULL-DOWN-TO-CLOSE
-  ===================================================== */
   const viewTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
 
   useEffect(() => {
@@ -149,12 +145,13 @@ export default function EstablishmentListing() {
   const [activeTab, setActiveTab] = useState("Active");
   const [selectedCategory, setSelectedCategory] = useState("All");
 
-  const [selectedListing, setSelectedListing] = useState<FoodListing | null>(null);
-  const [editingListing, setEditingListing] = useState<FoodListing | null>(null);
+  const [selectedListing, setSelectedListing] = useState<FoodListing | null>(
+    null
+  );
+  const [editingListing, setEditingListing] = useState<FoodListing | null>(
+    null
+  );
 
-  /* =====================================================
-     ADD / EDIT LISTING MODAL: SLIDE-UP + PULL-DOWN-TO-CLOSE
-  ===================================================== */
   const listingTranslateY = useRef(new Animated.Value(SCREEN_HEIGHT)).current;
 
   useEffect(() => {
@@ -208,9 +205,6 @@ export default function EstablishmentListing() {
     })
   ).current;
 
-  /* =====================================================
-     FOR FILTER & SORT
-  ===================================================== */
   const [dateFilterMode, setDateFilterMode] = useState<
     "All" | "Today" | "Last 7 Days" | "Last 30 Days" | "Custom"
   >("All");
@@ -285,9 +279,6 @@ export default function EstablishmentListing() {
     setSortDropdownOpen(false);
   };
 
-  /* =====================================================
-     INLINE FORM ERROR STATES & ALERTS
-  ===================================================== */
   const [formErrors, setFormErrors] = useState<{ [key: string]: string }>({});
   const [alertConfig, setAlertConfig] = useState({
     visible: false,
@@ -319,9 +310,6 @@ export default function EstablishmentListing() {
     setAlertConfig((prev) => ({ ...prev, visible: false }));
   };
 
-  /* =====================================================
-     MODAL FORM STATES
-  ===================================================== */
   const [foodName, setFoodName] = useState("");
   const [imageUri, setImageUri] = useState<string | null>(null);
 
@@ -362,9 +350,6 @@ export default function EstablishmentListing() {
   const [rescueVoucher, setRescueVoucher] = useState(true);
   const [listingStatus, setListingStatus] = useState(true);
 
-  /* =====================================================
-     CALENDAR & TIME PICKER STATES
-  ===================================================== */
   const [showPicker, setShowPicker] = useState(false);
   const [pickerMode, setPickerMode] = useState<"date" | "time">("date");
   const [actualDate, setActualDate] = useState(now);
@@ -445,9 +430,6 @@ export default function EstablishmentListing() {
     }
   };
 
-  /* =====================================================
-     FETCH REAL LISTINGS & BACKGROUND POLL
-  ===================================================== */
   useEffect(() => {
     let interval: any;
     const setup = async () => {
@@ -552,9 +534,12 @@ export default function EstablishmentListing() {
     }
   };
 
-  /* =====================================================
-     TTT EXPIRY PREVIEW CALCULATOR (DATE & TIME)
-  ===================================================== */
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchListings(merchantId, establishmentName);
+    setRefreshing(false);
+  };
+
   useEffect(() => {
     if (!listingModalVisible) return;
     if (editingListing) return;
@@ -873,7 +858,11 @@ export default function EstablishmentListing() {
           ? imageUri
           : "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80";
 
-      if (imageUri && !imageUri.includes("unsplash") && !imageUri.startsWith("http")) {
+      if (
+        imageUri &&
+        !imageUri.includes("unsplash") &&
+        !imageUri.startsWith("http")
+      ) {
         const supabaseUrl = "https://pxyigbutwupyslndoplm.supabase.co";
         const supabaseKey =
           "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4eWlnYnV0d3VweXNsbmRvcGxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczOTEzNjcsImV4cCI6MjEwMjk2NzM2N30.r8UjIGq7SiVNPJ87zs_TnHBbRbaVfSk59gmY3jSrdrY";
@@ -933,8 +922,10 @@ export default function EstablishmentListing() {
       };
 
       const finalPrice = pricingMode === "fixed" ? normalPrice : discountedPrice;
-      const finalOrigPrice = pricingMode === "fixed" ? normalPrice : originalPrice;
-      const finalFloorPrice = pricingMode === "fixed" ? normalPrice : floorPrice;
+      const finalOrigPrice =
+        pricingMode === "fixed" ? normalPrice : originalPrice;
+      const finalFloorPrice =
+        pricingMode === "fixed" ? normalPrice : floorPrice;
 
       const payload = {
         prod_name: foodName,
@@ -1034,6 +1025,14 @@ export default function EstablishmentListing() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
       >
         <View style={styles.pageHeader}>
           <Text style={styles.pageTitle}>Food listings</Text>
@@ -1192,7 +1191,13 @@ export default function EstablishmentListing() {
             {dateDropdownOpen && (
               <View style={styles.floatingDropdownContainer}>
                 {(
-                  ["All", "Today", "Last 7 Days", "Last 30 Days", "Custom"] as const
+                  [
+                    "All",
+                    "Today",
+                    "Last 7 Days",
+                    "Last 30 Days",
+                    "Custom",
+                  ] as const
                 ).map((mode) => (
                   <TouchableOpacity
                     key={mode}
@@ -1303,7 +1308,9 @@ export default function EstablishmentListing() {
                 onView={() => openViewListing(item)}
                 onEdit={() => openEditListing(item)}
                 onRemove={() => confirmRemoveListing(item.id, item.name)}
-                onStatusChange={() => fetchListings(merchantId, establishmentName)}
+                onStatusChange={() =>
+                  fetchListings(merchantId, establishmentName)
+                }
               />
             ))
           ) : (
@@ -1322,10 +1329,9 @@ export default function EstablishmentListing() {
             </View>
           )}
         </View>
-        <View style={{ height: 30 }} />
+        <View style={{ height: 24 }} />
       </ScrollView>
 
-      {/* BOTTOM NAVIGATION */}
       <EstablishmentBottomNav activeTab="Listings" />
 
       {/* ALERT MODAL */}
@@ -1373,7 +1379,10 @@ export default function EstablishmentListing() {
         onRequestClose={closeListingModal}
       >
         <View style={styles.modalOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={closeListingModal} />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={closeListingModal}
+          />
 
           <Animated.View
             style={[
@@ -1385,11 +1394,16 @@ export default function EstablishmentListing() {
               behavior={Platform.OS === "ios" ? "padding" : "height"}
               style={{ flexShrink: 1 }}
             >
-              <View {...listingPanResponder.panHandlers} style={styles.sheetHeader}>
+              <View
+                {...listingPanResponder.panHandlers}
+                style={styles.sheetHeader}
+              >
                 <View style={styles.dragHandle} />
                 <View style={styles.sheetHeaderText}>
                   <Text style={styles.modalTitle}>
-                    {editingListing ? "Edit bakery listing" : "Add bakery listing"}
+                    {editingListing
+                      ? "Edit bakery listing"
+                      : "Add bakery listing"}
                   </Text>
                   <Text style={styles.modalSubtitle}>
                     Configure categories, composition, and pricing structure.
@@ -1433,7 +1447,9 @@ export default function EstablishmentListing() {
                     ) : (
                       <View style={styles.cameraPlaceholder}>
                         <Ionicons name="camera" size={32} color={Colors.icon} />
-                        <Text style={styles.cameraText}>Tap to select or take a photo</Text>
+                        <Text style={styles.cameraText}>
+                          Tap to select or take a photo
+                        </Text>
                       </View>
                     )}
                   </TouchableOpacity>
@@ -1442,11 +1458,15 @@ export default function EstablishmentListing() {
                   <TouchableOpacity
                     style={styles.selectInput}
                     activeOpacity={0.7}
-                    onPress={() => setCategoryDropdownOpen(!categoryDropdownOpen)}
+                    onPress={() =>
+                      setCategoryDropdownOpen(!categoryDropdownOpen)
+                    }
                   >
                     <Text style={styles.inputText}>{category}</Text>
                     <Ionicons
-                      name={categoryDropdownOpen ? "chevron-up" : "chevron-down"}
+                      name={
+                        categoryDropdownOpen ? "chevron-up" : "chevron-down"
+                      }
                       size={18}
                       color={Colors.icon}
                     />
@@ -1454,36 +1474,40 @@ export default function EstablishmentListing() {
 
                   {categoryDropdownOpen && (
                     <View style={styles.inlineDropdownContainer}>
-                      {["Bread", "Pastry", "Cake", "Custom/Others"].map((cat) => (
-                        <TouchableOpacity
-                          key={cat}
-                          style={[
-                            styles.inlineDropdownItem,
-                            category === cat && styles.inlineDropdownItemActive,
-                          ]}
-                          activeOpacity={0.7}
-                          onPress={() => {
-                            setCategory(cat);
-                            setCategoryDropdownOpen(false);
-                          }}
-                        >
-                          <Text
+                      {["Bread", "Pastry", "Cake", "Custom/Others"].map(
+                        (cat) => (
+                          <TouchableOpacity
+                            key={cat}
                             style={[
-                              styles.inlineDropdownText,
-                              category === cat && styles.inlineDropdownTextActive,
+                              styles.inlineDropdownItem,
+                              category === cat &&
+                                styles.inlineDropdownItemActive,
                             ]}
+                            activeOpacity={0.7}
+                            onPress={() => {
+                              setCategory(cat);
+                              setCategoryDropdownOpen(false);
+                            }}
                           >
-                            {cat}
-                          </Text>
-                          {category === cat && (
-                            <Ionicons
-                              name="checkmark"
-                              size={16}
-                              color={Colors.primary}
-                            />
-                          )}
-                        </TouchableOpacity>
-                      ))}
+                            <Text
+                              style={[
+                                styles.inlineDropdownText,
+                                category === cat &&
+                                  styles.inlineDropdownTextActive,
+                              ]}
+                            >
+                              {cat}
+                            </Text>
+                            {category === cat && (
+                              <Ionicons
+                                name="checkmark"
+                                size={16}
+                                color={Colors.primary}
+                              />
+                            )}
+                          </TouchableOpacity>
+                        )
+                      )}
                     </View>
                   )}
 
@@ -1633,7 +1657,10 @@ export default function EstablishmentListing() {
                         value={normalPrice}
                         onChangeText={(val) => {
                           setNormalPrice(val);
-                          setFormErrors((prev) => ({ ...prev, normalPrice: "" }));
+                          setFormErrors((prev) => ({
+                            ...prev,
+                            normalPrice: "",
+                          }));
                         }}
                         placeholder="e.g. 50.00"
                         keyboardType="numeric"
@@ -2032,9 +2059,6 @@ export default function EstablishmentListing() {
   );
 }
 
-/* =====================================================
-   SUB-COMPONENTS
-===================================================== */
 function TabButton({
   title,
   isActive,
@@ -2244,7 +2268,7 @@ function ListingCard({
           >
             Exp: {item.expiryDate} • {item.expiryTime}
           </Text>
-          
+
           <View style={styles.uiCardBottomRow}>
             <Text style={styles.uiCardQty}>
               {item.quantity} {item.unitLabel} available
@@ -2324,35 +2348,6 @@ function DetailRow({
         <Text style={styles.detailValue}>{value}</Text>
       </View>
     </View>
-  );
-}
-
-function BottomNavItem({
-  icon,
-  label,
-  active,
-  onPress,
-}: {
-  icon: any;
-  label: string;
-  active?: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <TouchableOpacity
-      style={[styles.navItem, active && styles.navItemActive]}
-      activeOpacity={active ? 1 : 0.7}
-      onPress={active ? undefined : onPress}
-    >
-      <Ionicons
-        name={icon}
-        size={24}
-        color={active ? Colors.primary : Colors.icon}
-      />
-      <Text style={[styles.navText, active && styles.navTextActive]}>
-        {label}
-      </Text>
-    </TouchableOpacity>
   );
 }
 
@@ -2515,7 +2510,16 @@ function LivePricingCard({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [itemId, itemStatus, prepDate, expDate, expTime, initialPrice, minPrice, onStatusChange]);
+  }, [
+    itemId,
+    itemStatus,
+    prepDate,
+    expDate,
+    expTime,
+    initialPrice,
+    minPrice,
+    onStatusChange,
+  ]);
 
   return (
     <View style={styles.liveContainer}>
@@ -2537,19 +2541,9 @@ function LivePricingCard({
   );
 }
 
-/* =====================================================
-   STYLES
-===================================================== */
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { minHeight: 70, backgroundColor: Colors.background, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 18, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  logo: { fontFamily: "PoppinsBold", fontSize: 26, color: Colors.primary, letterSpacing: 0.7 },
-  headerSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: -2 },
-  headerActions: { flexDirection: "row", alignItems: "center", gap: 15 },
-  headerIconButton: { position: "relative", padding: 4 },
-  notificationDot: { position: "absolute", width: 7, height: 7, borderRadius: 4, backgroundColor: "#A94A3A", right: 3, top: 2, borderWidth: 1.5, borderColor: Colors.background },
-  profileCircle: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
-  scrollContent: { paddingHorizontal: 17, paddingTop: 20, paddingBottom: 20 },
+  scrollContent: { paddingHorizontal: 17, paddingTop: 20, paddingBottom: 24 },
   pageHeader: { marginBottom: 17 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 26, color: Colors.primary2 },
   createButton: { minHeight: 68, backgroundColor: Colors.primary, borderRadius: 10, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", marginBottom: 18 },
@@ -2594,11 +2588,6 @@ const styles = StyleSheet.create({
   emptyIcon: { width: 50, height: 50, borderRadius: 25, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginBottom: 9 },
   emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
   emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.primary1, textAlign: "center", marginTop: 3 },
-  bottomNav: { height: 90, paddingBottom: 25, backgroundColor: Colors.white, flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, elevation: 10, paddingHorizontal: 2 },
-  navItem: { flex: 1, alignItems: "center", justifyContent: "center", marginVertical: 5, marginHorizontal: 2, borderRadius: 7 },
-  navItemActive: { backgroundColor: "#E8EFEA" },
-  navText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.icon, marginTop: 4 },
-  navTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.primary },
   modalOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.50)", justifyContent: "flex-end" },
   listingModal: { width: "100%", maxHeight: "94%", backgroundColor: Colors.white, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: "hidden" },
   viewModal: { width: "100%", maxHeight: "90%", backgroundColor: Colors.white, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: "hidden" },

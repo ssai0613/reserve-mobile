@@ -1,59 +1,22 @@
-import { Tabs } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
-import { Colors } from "@/constants/color";
+import { Stack } from "expo-router";
 
-export default function FoodBankTabLayout() {
+export default function FoodBankLayout() {
   return (
-    <Tabs
+    <Stack
       screenOptions={{
         headerShown: false,
-        tabBarStyle: { display: "none" }, // Hides the bottom navigation bar completely
+        animation: "none",
       }}
     >
-      <Tabs.Screen
-        name="dashboard"
-        options={{
-          title: "Home",
-        }}
-      />
-      <Tabs.Screen
-        name="requests"
-        options={{
-          title: "Requests",
-        }}
-      />
-      <Tabs.Screen
-        name="donations"
-        options={{
-          title: "Donations",
-        }}
-      />
-      <Tabs.Screen
-        name="partners"
-        options={{
-          title: "Partners",
-        }}
-      />
-      <Tabs.Screen
-        name="activity"
-        options={{
-          title: "Activity",
-        }}
-      />
-
-      {/* Hidden Screens */}
-      <Tabs.Screen
-        name="signup"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          href: null,
-        }}
-      />
-    </Tabs>
+      <Stack.Screen name="dashboard" />
+      <Stack.Screen name="requests" />
+      <Stack.Screen name="donations" />
+      <Stack.Screen name="partners" />
+      <Stack.Screen name="notifications" />
+      <Stack.Screen name="profile" />
+      <Stack.Screen name="personal-info" />
+      <Stack.Screen name="privacy" />
+      <Stack.Screen name="signup" />
+    </Stack>
   );
 }

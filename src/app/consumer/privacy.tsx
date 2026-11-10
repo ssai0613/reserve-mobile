@@ -1,473 +1,821 @@
-import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import {
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TouchableOpacity,
-  View,
-} from "react-native";
-
 import { Colors } from "@/constants/color";
+import { Ionicons } from "@expo/vector-icons";
+import { router, Stack } from "expo-router";
+import * as SecureStore from "expo-secure-store";
+import { useEffect, useState } from "react";
+import {
+    KeyboardAvoidingView,
+    Platform,
+    RefreshControl,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { api } from "../../../services/api";
+import {
+    PhoneOtpVerifier,
+    ReserveAlertModal,
+    ReserveConfirmModal,
+    ReserveModalState,
+} from "../components/CebuRegistrationHelpers";
+
+const getStorageItem = async (key: string) => {
+  if (Platform.OS === "web") return localStorage.getItem(key);
+  return await SecureStore.getItemAsync(key);
+};
+
+const setStorageItem = async (key: string, value: string) => {
+  if (Platform.OS === "web") {
+    localStorage.setItem(key, value);
+  } else {
+    await SecureStore.setItemAsync(key, value);
+  }
+};
+
+const clearConsumerStorage = async () => {
+  const keys = [
+    "access",
+    "refresh",
+    "user_role",
+    "user_email",
+    "profile_id",
+    "entity_name",
+    "account_status",
+  ];
+  for (const k of keys) {
+    if (Platform.OS === "web") localStorage.removeItem(k);
+    else await SecureStore.deleteItemAsync(k);
+  }
+};
+
+const maskPhoneNumber = (rawPhone: string): string => {
+  if (!rawPhone) return "09xxxxxxxxx";
+  let digits = rawPhone.replace(/\D/g, "");
+  if (digits.startsWith("63") && digits.length >= 11) {
+    digits = "0" + digits.slice(2);
+  } else if (digits.startsWith("9") && digits.length === 10) {
+    digits = "0" + digits;
+  }
+  if (digits.length >= 5) {
+    const lastThree = digits.slice(-3);
+    const middleLength = Math.max(6, digits.length - 5);
+    return `09${"x".repeat(middleLength)}${lastThree}`;
+  }
+  return "09xxxxxx000";
+};
 
 export default function PrivacySecurity() {
-  return (
-    <SafeAreaView style={styles.container}>
+  const [consumerId, setConsumerId] = useState("1");
+  const [refreshing, setRefreshing] = useState(false);
 
-      {/* HEADER — SAME AS CART STYLE */}
+  // 1. Email Update State
+  const [currentEmail, setCurrentEmail] = useState("user@email.com");
+  const [newEmail, setNewEmail] = useState("");
+  const [savingEmail, setSavingEmail] = useState(false);
+
+  // 2. Phone Update State (SMS OTP)
+  const [currentPhone, setCurrentPhone] = useState("09xxxxxxxxx");
+  const [newPhone, setNewPhone] = useState("");
+  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
+  const [savingPhone, setSavingPhone] = useState(false);
+
+  // 3. Password Change State
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  // 4. Soft Delete / Deactivate Account Modal State
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+
+  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
+    visible: false,
+    title: "",
+    message: "",
+    type: "info",
+  });
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: "success" | "error" | "info" | "warning" = "info"
+  ) => setModalAlert({ visible: true, title, message, type });
+
+  useEffect(() => {
+    loadSecurityData();
+  }, []);
+
+  const loadSecurityData = async () => {
+    try {
+      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedEmail =
+        (await getStorageItem("user_email")) || "user@email.com";
+      setConsumerId(storedId);
+      setCurrentEmail(storedEmail);
+
+      const res = await api.get(
+        `listings/consumer-portal/${storedId}/?email=${encodeURIComponent(
+          storedEmail
+        )}`
+      );
+      if (res.data?.profile) {
+        if (res.data.profile.email) setCurrentEmail(res.data.profile.email);
+        if (res.data.profile.phone) setCurrentPhone(res.data.profile.phone);
+      }
+    } catch (e) {
+      console.log("Error loading privacy data:", e);
+    }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadSecurityData();
+    setRefreshing(false);
+  };
+
+  const handleUpdateEmail = async () => {
+    const cleanEmail = newEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes("@")) {
+      showModal(
+        "Invalid Email",
+        "Please enter a valid email address.",
+        "warning"
+      );
+      return;
+    }
+    if (cleanEmail === currentEmail.toLowerCase()) {
+      showModal(
+        "Same Email",
+        "The new email address is the same as your current email.",
+        "warning"
+      );
+      return;
+    }
+
+    setSavingEmail(true);
+    try {
+      const res = await api.post(`listings/consumer-portal/${consumerId}/`, {
+        action: "update_profile",
+        email: currentEmail,
+        new_email: cleanEmail,
+      });
+
+      await setStorageItem("user_email", cleanEmail);
+      setCurrentEmail(cleanEmail);
+      setNewEmail("");
+      showModal(
+        "Email Updated",
+        res.data?.message ||
+          "Your email address has been updated successfully.",
+        "success"
+      );
+    } catch (err: any) {
+      showModal(
+        "Update Failed",
+        err.response?.data?.error ||
+          "Could not update email address. Please try again.",
+        "error"
+      );
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
+  const handleUpdatePhone = async () => {
+    if (!isPhoneVerified) {
+      showModal(
+        "Phone Verification Required",
+        "Please enter your new phone number and verify it via SMS OTP first.",
+        "warning"
+      );
+      return;
+    }
+
+    setSavingPhone(true);
+    try {
+      const res = await api.post(`listings/consumer-portal/${consumerId}/`, {
+        action: "update_profile",
+        email: currentEmail,
+        phone: newPhone.trim(),
+      });
+
+      setCurrentPhone(newPhone.trim());
+      setNewPhone("");
+      setIsPhoneVerified(false);
+      showModal(
+        "Phone Number Updated",
+        res.data?.message ||
+          "Your phone number has been updated successfully.",
+        "success"
+      );
+    } catch (err: any) {
+      showModal(
+        "Update Failed",
+        err.response?.data?.error || "Could not update phone number.",
+        "error"
+      );
+    } finally {
+      setSavingPhone(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      showModal(
+        "Missing Fields",
+        "Please fill in all password fields.",
+        "warning"
+      );
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      showModal(
+        "Password Mismatch",
+        "New passwords do not match. Please check again.",
+        "warning"
+      );
+      return;
+    }
+    if (newPassword.length < 6) {
+      showModal(
+        "Weak Password",
+        "New password must be at least 6 characters long.",
+        "warning"
+      );
+      return;
+    }
+
+    setSavingPassword(true);
+    try {
+      const res = await api.post(`listings/consumer-portal/${consumerId}/`, {
+        action: "change_password",
+        email: currentEmail,
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+
+      showModal(
+        "Password Updated",
+        res.data?.message || "Your password has been changed successfully.",
+        "success"
+      );
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (err: any) {
+      showModal(
+        "Update Failed",
+        err.response?.data?.error ||
+          "Could not update password. Verify your current password.",
+        "error"
+      );
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  const executeSoftDeleteAccount = async () => {
+    setDeleteConfirmVisible(false);
+    try {
+      await api.post(`listings/consumer-portal/${consumerId}/`, {
+        action: "deactivate_account",
+        email: currentEmail,
+      });
+    } catch (e) {}
+    await clearConsumerStorage();
+    router.replace("/consumer");
+  };
+
+  return (
+    <SafeAreaView
+      style={styles.container}
+      edges={["top", "left", "right", "bottom"]}
+    >
+      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
+
+      {/* STATUS-BAR-SAFE HEADER */}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backButton}
           activeOpacity={0.7}
-          onPress={() => router.back()}
+          onPress={() => {
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace("/consumer/profile" as any);
+            }
+          }}
         >
-          <Ionicons
-            name="arrow-back"
-            size={21}
-            color={Colors.primary}
-          />
+          <Ionicons name="arrow-back" size={20} color={Colors.primary} />
         </TouchableOpacity>
 
         <View style={styles.headerTextContainer}>
-          <Text style={styles.headerTitle}>
-            Privacy & Security
-          </Text>
-
+          <Text style={styles.headerTitle}>Privacy &amp; Security</Text>
           <Text style={styles.headerSubtitle}>
-            Manage your privacy and account security
+            Update your email, mobile number, password, and account status
           </Text>
         </View>
       </View>
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.content}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-
-        {/* ACCOUNT SECURITY */}
-        <Text style={styles.sectionTitle}>
-          Account Security
-        </Text>
-
-        {/* CHANGE PASSWORD */}
-        <TouchableOpacity
-          style={styles.menuItem}
-          activeOpacity={0.7}
-          onPress={() => router.push("/consumer/change-pass")}
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.primary}
+              colors={[Colors.primary]}
+            />
+          }
         >
-          <View style={styles.menuLeft}>
-            <View style={styles.iconCircle}>
-              <Ionicons
-                name="lock-closed-outline"
-                size={20}
-                color={Colors.primary}
-              />
+          {/* ============================================================
+              1. UPDATE EMAIL ADDRESS SECTION
+          ============================================================ */}
+          <View style={styles.sectionCard}>
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.iconCircle}>
+                <Ionicons
+                  name="mail-outline"
+                  size={19}
+                  color={Colors.primary}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Email Address</Text>
+                <Text style={styles.cardSubtitle}>
+                  Used for login and official rescue voucher notifications
+                </Text>
+              </View>
             </View>
 
-            <Text style={styles.menuText}>
-              Change Password
-            </Text>
-          </View>
-
-          <Ionicons
-            name="chevron-forward"
-            size={18}
-            color={Colors.icon}
-          />
-        </TouchableOpacity>
-
-        {/* PHONE NUMBER */}
-        <TouchableOpacity
-          style={styles.menuItem}
-          activeOpacity={0.7}
-          onPress={() => router.push("/consumer/phone-num")}
-        >
-          <View style={styles.menuLeft}>
-            <View style={styles.iconCircle}>
-              <Ionicons
-                name="call-outline"
-                size={20}
-                color={Colors.primary}
-              />
+            <View style={styles.currentContainer}>
+              <Text style={styles.currentLabel}>Current Email Address</Text>
+              <View style={styles.currentRow}>
+                <Ionicons
+                  name="checkmark-circle"
+                  size={15}
+                  color={Colors.primary}
+                />
+                <Text style={styles.currentValueText}>{currentEmail}</Text>
+              </View>
             </View>
 
-            <Text style={styles.menuText}>
-              Phone Number
-            </Text>
-          </View>
-
-          <Ionicons
-            name="chevron-forward"
-            size={18}
-            color={Colors.icon}
-          />
-        </TouchableOpacity>
-
-        {/* EMAIL */}
-        <TouchableOpacity
-          style={styles.menuItem}
-          activeOpacity={0.7}
-          onPress={() => router.push("/consumer/email-add")}
-        >
-          <View style={styles.menuLeft}>
-            <View style={styles.iconCircle}>
+            <Text style={styles.label}>New Email Address *</Text>
+            <View style={styles.inputContainer}>
               <Ionicons
                 name="mail-outline"
-                size={20}
+                size={18}
                 color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. new@email.com"
+                placeholderTextColor={Colors.placeholder}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                value={newEmail}
+                onChangeText={setNewEmail}
               />
             </View>
 
-            <Text style={styles.menuText}>
-              Email Address
-            </Text>
-          </View>
-
-          <Ionicons
-            name="chevron-forward"
-            size={18}
-            color={Colors.icon}
-          />
-        </TouchableOpacity>
-
-        {/* PRIVACY */}
-        <Text style={styles.sectionTitle}>
-          Privacy
-        </Text>
-
-        {/* PROFILE VISIBILITY */}
-        <View style={styles.menuItem}>
-          <View style={styles.menuLeft}>
-            <View style={styles.iconCircle}>
-              <Ionicons
-                name="eye-outline"
-                size={20}
-                color={Colors.primary}
-              />
-            </View>
-
-            <View style={styles.textContainer}>
-              <Text style={styles.menuText}>
-                Profile Visibility
-              </Text>
-
-              <Text style={styles.description}>
-                Control who can see your profile
-              </Text>
-            </View>
-          </View>
-
-          <Switch
-            value={true}
-            trackColor={{
-              false: Colors.border,
-              true: "#B8CFC2",
-            }}
-            thumbColor={Colors.primary}
-          />
-        </View>
-
-        {/* LOCATION */}
-        <View style={styles.menuItem}>
-          <View style={styles.menuLeft}>
-            <View style={styles.iconCircle}>
-              <Ionicons
-                name="location-outline"
-                size={20}
-                color={Colors.primary}
-              />
-            </View>
-
-            <View style={styles.textContainer}>
-              <Text style={styles.menuText}>
-                Location Permissions
-              </Text>
-
-              <Text style={styles.description}>
-                Allow RESERVE to access your location
-              </Text>
-            </View>
-          </View>
-
-          <Switch
-            value={true}
-            trackColor={{
-              false: Colors.border,
-              true: "#B8CFC2",
-            }}
-            thumbColor={Colors.primary}
-          />
-        </View>
-
-        {/* NOTIFICATIONS */}
-        <View style={styles.menuItem}>
-          <View style={styles.menuLeft}>
-            <View style={styles.iconCircle}>
-              <Ionicons
-                name="notifications-outline"
-                size={20}
-                color={Colors.primary}
-              />
-            </View>
-
-            <View style={styles.textContainer}>
-              <Text style={styles.menuText}>
-                Notification Permissions
-              </Text>
-
-              <Text style={styles.description}>
-                Allow notifications from RESERVE
-              </Text>
-            </View>
-          </View>
-
-          <Switch
-            value={true}
-            trackColor={{
-              false: Colors.border,
-              true: "#B8CFC2",
-            }}
-            thumbColor={Colors.primary}
-          />
-        </View>
-
-        {/* ACCOUNT */}
-        <Text style={styles.sectionTitle}>
-          Account
-        </Text>
-
-        {/* LOG OUT */}
-        <TouchableOpacity
-          style={styles.menuItem}
-          activeOpacity={0.7}
-          onPress={() => router.replace("/consumer")}
-        >
-          <View style={styles.menuLeft}>
-            <View
-              style={[
-                styles.iconCircle,
-                styles.dangerIconCircle,
-              ]}
+            <TouchableOpacity
+              style={styles.button}
+              activeOpacity={0.85}
+              onPress={handleUpdateEmail}
+              disabled={savingEmail}
             >
               <Ionicons
-                name="log-out-outline"
-                size={20}
-                color="#B23A3A"
+                name="checkmark-circle-outline"
+                size={17}
+                color={Colors.white}
               />
+              <Text style={styles.buttonText}>
+                {savingEmail ? "UPDATING EMAIL..." : "Update Email Address"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ============================================================
+              2. UPDATE PHONE NUMBER SECTION (WITH SMS OTP VERIFIER)
+          ============================================================ */}
+          <View style={styles.sectionCard}>
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.iconCircle}>
+                <Ionicons
+                  name="call-outline"
+                  size={19}
+                  color={Colors.primary}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Phone Number</Text>
+                <Text style={styles.cardSubtitle}>
+                  Verified Philippine mobile number for pickup coordination
+                </Text>
+              </View>
             </View>
 
-            <Text
-              style={[
-                styles.menuText,
-                styles.dangerText,
-              ]}
-            >
-              Log Out
-            </Text>
-          </View>
-        </TouchableOpacity>
+            <View style={styles.currentContainer}>
+              <Text style={styles.currentLabel}>Current Phone Number</Text>
+              <View style={styles.currentRow}>
+                <Ionicons
+                  name="call-outline"
+                  size={15}
+                  color={Colors.primary}
+                />
+                <Text style={styles.currentValueText}>
+                  {maskPhoneNumber(currentPhone)}
+                </Text>
+              </View>
+            </View>
 
-        {/* DELETE ACCOUNT */}
-        <TouchableOpacity
-          style={styles.menuItem}
-          activeOpacity={0.7}
-        >
-          <View style={styles.menuLeft}>
-            <View
-              style={[
-                styles.iconCircle,
-                styles.dangerIconCircle,
-              ]}
+            <PhoneOtpVerifier
+              label="New Phone Number (SMS OTP Verified) *"
+              phone={newPhone}
+              onChangePhone={setNewPhone}
+              isVerified={isPhoneVerified}
+              onVerifiedChange={setIsPhoneVerified}
+              iconName="call-outline"
+            />
+
+            <TouchableOpacity
+              style={[styles.button, !isPhoneVerified && { opacity: 0.65 }]}
+              activeOpacity={0.85}
+              onPress={handleUpdatePhone}
+              disabled={savingPhone || !isPhoneVerified}
             >
               <Ionicons
-                name="trash-outline"
-                size={20}
-                color="#B23A3A"
+                name="checkmark-circle-outline"
+                size={17}
+                color={Colors.white}
               />
+              <Text style={styles.buttonText}>
+                {savingPhone ? "UPDATING NUMBER..." : "Update Phone Number"}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ============================================================
+              3. CHANGE PASSWORD SECTION
+          ============================================================ */}
+          <View style={styles.sectionCard}>
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.iconCircle}>
+                <Ionicons
+                  name="lock-closed-outline"
+                  size={19}
+                  color={Colors.primary}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>Change Password</Text>
+                <Text style={styles.cardSubtitle}>
+                  Enter your current password and choose a secure new password
+                </Text>
+              </View>
             </View>
 
-            <Text
-              style={[
-                styles.menuText,
-                styles.dangerText,
-              ]}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Current Password *</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons
+                  name="lock-closed-outline"
+                  size={18}
+                  color={Colors.primary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter current password"
+                  placeholderTextColor={Colors.placeholder}
+                  secureTextEntry={!showCurrent}
+                  value={currentPassword}
+                  onChangeText={setCurrentPassword}
+                />
+                <TouchableOpacity onPress={() => setShowCurrent(!showCurrent)}>
+                  <Ionicons
+                    name={showCurrent ? "eye-outline" : "eye-off-outline"}
+                    size={18}
+                    color={Colors.icon}
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>New Password *</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons
+                  name="key-outline"
+                  size={18}
+                  color={Colors.primary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter new password (min. 6 chars)"
+                  placeholderTextColor={Colors.placeholder}
+                  secureTextEntry={!showNew}
+                  value={newPassword}
+                  onChangeText={setNewPassword}
+                />
+                <TouchableOpacity onPress={() => setShowNew(!showNew)}>
+                  <Ionicons
+                    name={showNew ? "eye-outline" : "eye-off-outline"}
+                    size={18}
+                    color={Colors.icon}
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Confirm New Password *</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons
+                  name="key-outline"
+                  size={18}
+                  color={Colors.primary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Re-enter new password"
+                  placeholderTextColor={Colors.placeholder}
+                  secureTextEntry={!showConfirm}
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                />
+                <TouchableOpacity onPress={() => setShowConfirm(!showConfirm)}>
+                  <Ionicons
+                    name={showConfirm ? "eye-outline" : "eye-off-outline"}
+                    size={18}
+                    color={Colors.icon}
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.button}
+              activeOpacity={0.85}
+              onPress={handleChangePassword}
+              disabled={savingPassword}
             >
-              Delete Account
-            </Text>
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={17}
+                color={Colors.white}
+              />
+              <Text style={styles.buttonText}>
+                {savingPassword ? "UPDATING PASSWORD..." : "Update Password"}
+              </Text>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
 
-        {/* FOOTER */}
-        <Text style={styles.footerText}>
-          Your privacy and security are important to us.
-        </Text>
+          {/* ============================================================
+              4. ACCOUNT DEACTIVATION / SOFT DELETE SECTION
+          ============================================================ */}
+          <View style={[styles.sectionCard, styles.dangerSectionCard]}>
+            <View style={styles.cardHeaderRow}>
+              <View style={[styles.iconCircle, styles.dangerIconCircle]}>
+                <Ionicons name="trash-outline" size={19} color="#B3261E" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.cardTitle, { color: "#B3261E" }]}>
+                  Delete Account
+                </Text>
+                <Text style={styles.cardSubtitle}>
+                  Sets your account status to Inactive while preserving audit
+                  history
+                </Text>
+              </View>
+            </View>
 
-      </ScrollView>
+            <TouchableOpacity
+              style={styles.deleteButton}
+              activeOpacity={0.85}
+              onPress={() => setDeleteConfirmVisible(true)}
+            >
+              <Ionicons name="trash-outline" size={17} color="#B3261E" />
+              <Text style={styles.deleteButtonText}>Delete Account</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.footerText}>
+            Your privacy and account security are protected by RESERVE.
+          </Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <ReserveConfirmModal
+        visible={deleteConfirmVisible}
+        title="Delete / Deactivate Account?"
+        message="Confirming this action will set your Consumer account status to Inactive/Deleted. Your account record is retained in inactive status for audit compliance, and you will be signed out immediately."
+        confirmText="Yes, Delete Account"
+        cancelText="Cancel"
+        isDestructive
+        onConfirm={executeSoftDeleteAccount}
+        onCancel={() => setDeleteConfirmVisible(false)}
+      />
+
+      <ReserveAlertModal
+        visible={modalAlert.visible}
+        title={modalAlert.title}
+        message={modalAlert.message}
+        type={modalAlert.type}
+        onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-
-  /* =========================
-     HEADER — CART STYLE
-  ========================= */
-
+  container: { flex: 1, backgroundColor: Colors.background },
   header: {
-    height: 70,
-    paddingHorizontal: 18,
+    height: 60,
+    paddingHorizontal: 16,
     backgroundColor: Colors.background,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
   },
-
   backButton: {
     width: 34,
     height: 34,
-    borderRadius: 8,
+    borderRadius: 10,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
     alignItems: "center",
     justifyContent: "center",
   },
-
-  headerTextContainer: {
-    marginLeft: 11,
-  },
-
+  headerTextContainer: { marginLeft: 11, flex: 1 },
   headerTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 16,
-    lineHeight: 21,
+    fontSize: 15,
     color: Colors.primary2,
   },
-
   headerSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
-    lineHeight: 12,
+    fontSize: 9.5,
     color: Colors.primary1,
-    marginTop: 1,
+    marginTop: -1,
   },
-
-  /* =========================
-     CONTENT
-  ========================= */
-
   content: {
-    paddingHorizontal: 18,
-    paddingTop: 22,
-    paddingBottom: 35,
-  },
-
-  sectionTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 15,
-    lineHeight: 20,
-    color: Colors.primary2,
-    marginBottom: 10,
-    marginTop: 4,
-  },
-
-  /* =========================
-     MENU ITEMS
-  ========================= */
-
-  menuItem: {
+    paddingHorizontal: 16,
+    paddingTop: 18,
+    paddingBottom: 40,
+    maxWidth: 600,
     width: "100%",
-    minHeight: 62,
-
+    alignSelf: "center",
+  },
+  sectionCard: {
     backgroundColor: Colors.white,
-
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 10,
-
+    borderRadius: 14,
+    padding: 15,
+    marginBottom: 16,
+  },
+  dangerSectionCard: {
+    borderColor: "#E8CACA",
+    backgroundColor: "#FFFBFB",
+  },
+  cardHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-
-    marginBottom: 10,
+    marginBottom: 12,
   },
-
-  menuLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    flex: 1,
-  },
-
   iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: "#E8EFEA",
-
     borderWidth: 1,
     borderColor: Colors.border,
-
     alignItems: "center",
     justifyContent: "center",
-
     marginRight: 11,
   },
-
-  textContainer: {
-    flex: 1,
-    paddingRight: 5,
-  },
-
-  menuText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    lineHeight: 15,
-    color: Colors.primary2,
-  },
-
-  description: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 8,
-    lineHeight: 12,
-    color: Colors.primary1,
-    marginTop: 2,
-  },
-
-  /* =========================
-     DANGER
-  ========================= */
-
   dangerIconCircle: {
     backgroundColor: "#FBEDED",
     borderColor: "#E8CACA",
   },
-
-  dangerText: {
-    color: "#B23A3A",
+  cardTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13.5,
+    color: Colors.primary2,
   },
-
-  /* =========================
-     FOOTER
-  ========================= */
-
+  cardSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10,
+    color: Colors.primary1,
+    marginTop: 1,
+  },
+  currentContainer: {
+    backgroundColor: "#F7F9F7",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
+  currentLabel: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 9.5,
+    color: Colors.primary1,
+    marginBottom: 3,
+  },
+  currentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  currentValueText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11.5,
+    color: Colors.primary2,
+  },
+  fieldGroup: {
+    marginBottom: 12,
+  },
+  label: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10.5,
+    color: Colors.primary2,
+    marginBottom: 6,
+  },
+  inputContainer: {
+    height: 44,
+    backgroundColor: Colors.input,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  inputIcon: { marginRight: 8 },
+  input: {
+    flex: 1,
+    fontFamily: "PoppinsRegular",
+    fontSize: 11.5,
+    color: Colors.primary2,
+    paddingVertical: 0,
+  },
+  button: {
+    height: 44,
+    backgroundColor: Colors.button,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    marginTop: 12,
+  },
+  buttonText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11.5,
+    color: Colors.white,
+  },
+  deleteButton: {
+    height: 44,
+    backgroundColor: "#FBEDED",
+    borderWidth: 1,
+    borderColor: "#E5B8B4",
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  deleteButtonText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11.5,
+    color: "#B3261E",
+  },
   footerText: {
     fontFamily: "PoppinsRegular",
-    fontSize: 8,
-    lineHeight: 13,
+    fontSize: 9.5,
     color: Colors.placeholder,
     textAlign: "center",
-    marginTop: 10,
-    paddingHorizontal: 20,
+    marginTop: 4,
   },
 });

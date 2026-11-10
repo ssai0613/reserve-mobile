@@ -9,6 +9,7 @@ import {
   Linking,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,6 +23,7 @@ import {
   ReserveAlertModal,
   ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
+import { ConsumerBottomNav, ConsumerHeader } from "../components/ConsumerNav";
 
 const CART_STORAGE_KEY = "@reserve_cart";
 
@@ -34,8 +36,8 @@ export default function CartScreen() {
   const [cartItems, setCartItems] = useState<any[]>([]);
   const [selectedMerchantName, setSelectedMerchantName] = useState<string | null>(null);
   const [paymentMethod, setPaymentMethod] = useState<"GCash" | "Maya">("GCash");
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Xendit Live Checkout + Simulator Modal
   const [gatewayModalVisible, setGatewayModalVisible] = useState(false);
   const [walletPhone, setWalletPhone] = useState("09171234567");
   const [walletMpin, setWalletMpin] = useState("1234");
@@ -67,10 +69,18 @@ export default function CartScreen() {
         if (parsed.length > 0 && !selectedMerchantName) {
           setSelectedMerchantName(parsed[0].establishment || "Partner Merchant");
         }
+      } else {
+        setCartItems([]);
       }
     } catch (e) {
       console.log("Cart load error:", e);
     }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadCart();
+    setRefreshing(false);
   };
 
   const updateCartStorage = async (updated: any[]) => {
@@ -109,7 +119,6 @@ export default function CartScreen() {
     updateCartStorage(updated);
   };
 
-  // Group Cart Items by Food Merchant
   const merchantGroups: { [merchantName: string]: any[] } = {};
   cartItems.forEach((item) => {
     const mName = item.establishment || "Partner Establishment";
@@ -201,7 +210,6 @@ export default function CartScreen() {
         items: activeMerchantItems,
       });
 
-      // Clear all checked-out items for this merchant from storage & state
       const checkedOutIds = new Set(
         activeMerchantItems.map((i: any) => String(i.id))
       );
@@ -243,38 +251,29 @@ export default function CartScreen() {
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
-      {/* HEADER */}
-      <View style={styles.header}>
-        <View style={styles.logoContainer}>
-          <Text style={styles.logo}>RESERVE</Text>
-          <Text style={styles.logoSubtitle}>Consumer Portal</Text>
-        </View>
-
-        <View style={styles.locationPill}>
-          <Ionicons name="location-outline" size={13} color={Colors.primary} />
-          <Text style={styles.locationText}>Cebu City</Text>
-        </View>
-      </View>
+      {/* STATUS-BAR-SAFE HEADER */}
+      <ConsumerHeader />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
       >
         <View style={styles.titleSection}>
           <Text style={styles.pageTitle}>My Rescue Cart</Text>
-          <Text style={styles.pageSubtitle}>
-            Items are separated by Food Merchant for distinct pickups. Tap a merchant below to view its items, payment, and order summary.
-          </Text>
         </View>
 
         {merchantNames.length > 0 ? (
           merchantNames.map((mName) => {
             const mItems = merchantGroups[mName];
             const isSelected = selectedMerchantName === mName;
-            const mSubtotal = mItems.reduce(
-              (sum, it) => sum + Number(it.price || 0) * Number(it.quantity || 1),
-              0
-            );
 
             return (
               <View
@@ -284,7 +283,6 @@ export default function CartScreen() {
                   isSelected && styles.merchantGroupCardActive,
                 ]}
               >
-                {/* CLICKABLE MERCHANT HEADER */}
                 <TouchableOpacity
                   style={styles.merchantHeaderBar}
                   activeOpacity={0.85}
@@ -311,8 +309,7 @@ export default function CartScreen() {
                         {mName}
                       </Text>
                       <Text style={styles.merchantSubText}>
-                        {mItems.length} listing{mItems.length > 1 ? "s" : ""} •
-                        Subtotal: ₱{mSubtotal.toFixed(2)}
+                        {mItems.length} listing{mItems.length > 1 ? "s" : ""}
                       </Text>
                     </View>
                   </View>
@@ -323,7 +320,6 @@ export default function CartScreen() {
                   </View>
                 </TouchableOpacity>
 
-                {/* ALL LISTINGS ADDED UNDER THIS MERCHANT */}
                 <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
                   {mItems.map((item) => (
                     <View key={item.id} style={styles.cartCard}>
@@ -337,12 +333,6 @@ export default function CartScreen() {
                           <View style={styles.productNameContainer}>
                             <Text style={styles.productName} numberOfLines={1}>
                               {item.name}
-                            </Text>
-                            <Text
-                              style={styles.establishmentName}
-                              numberOfLines={1}
-                            >
-                              {item.establishment}
                             </Text>
                           </View>
 
@@ -450,7 +440,6 @@ export default function CartScreen() {
           <Text style={styles.addMoreText}>Add more items</Text>
         </TouchableOpacity>
 
-        {/* PAYMENT & ORDER SUMMARY FOR THE SELECTED MERCHANT */}
         {selectedMerchantName && activeMerchantItems.length > 0 && (
           <>
             <View style={styles.noticeCard}>
@@ -481,12 +470,10 @@ export default function CartScreen() {
               </View>
             </View>
 
-            {/* PAYMENT METHOD — STRICTLY GCASH & MAYA VIA XENDIT */}
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>
                 Xendit Online Payment Method (10%)
               </Text>
-              <Text style={styles.requiredText}>GCash / Maya Only</Text>
             </View>
 
             <View style={styles.paymentCard}>
@@ -538,10 +525,7 @@ export default function CartScreen() {
               })}
             </View>
 
-            {/* ORDER SUMMARY FOR SELECTED MERCHANT */}
-            <Text style={styles.sectionTitle}>
-              Order Summary — {selectedMerchantName}
-            </Text>
+            <Text style={styles.sectionTitle}>Order Summary</Text>
             <View style={styles.summaryCard}>
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Original Retail Value</Text>
@@ -597,7 +581,10 @@ export default function CartScreen() {
             </View>
 
             <TouchableOpacity
-              style={styles.checkoutButton}
+              style={[
+                styles.checkoutButton,
+                { height: "auto", paddingVertical: 10, paddingHorizontal: 12 },
+              ]}
               activeOpacity={0.88}
               onPress={handleOpenGateway}
             >
@@ -606,7 +593,13 @@ export default function CartScreen() {
                 size={16}
                 color={Colors.white}
               />
-              <Text style={styles.checkoutText}>
+              <Text
+                style={[
+                  styles.checkoutText,
+                  { flex: 1, textAlign: "center", marginHorizontal: 6 },
+                ]}
+                numberOfLines={2}
+              >
                 Pay ₱{downpaymentFee.toFixed(2)} Deposit for{" "}
                 {selectedMerchantName}
               </Text>
@@ -623,14 +616,19 @@ export default function CartScreen() {
         <View style={styles.bottomSpace} />
       </ScrollView>
 
-      {/* XENDIT CHECKOUT MODAL (GCASH / MAYA) */}
+      {/* XENDIT CHECKOUT MODAL */}
       <Modal
         visible={gatewayModalVisible}
         transparent
-        animationType="fade"
+        animationType="slide"
         onRequestClose={() => setGatewayModalVisible(false)}
       >
         <View style={styles.gatewayOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setGatewayModalVisible(false)}
+          />
           <View style={styles.gatewayCard}>
             <View style={styles.gatewayHeader}>
               <View
@@ -650,7 +648,7 @@ export default function CartScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={{ padding: 18 }}>
+            <View style={{ padding: 18, paddingBottom: 28 }}>
               <View style={styles.gatewayAmountBox}>
                 <Text style={styles.gatewayAmountLabel}>
                   10% RESERVATION DEPOSIT DUE NOW ({selectedMerchantName})
@@ -726,59 +724,17 @@ export default function CartScreen() {
         onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
       />
 
-      {/* BOTTOM NAVIGATION */}
-      <View style={styles.bottomNav}>
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.replace("/consumer/homepage")}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="home-outline" size={22} color={Colors.icon} />
-          <Text style={styles.navText}>Home</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.navItem, styles.navItemActive]}
-          activeOpacity={1}
-        >
-          <Ionicons name="cart" size={22} color={Colors.primary} />
-          <Text style={[styles.navText, styles.navTextActive]}>My Cart</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.replace("/consumer/claims")}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="receipt-outline" size={22} color={Colors.icon} />
-          <Text style={styles.navText}>Claims</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          onPress={() => router.replace("/consumer/profile")}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="person-outline" size={22} color={Colors.icon} />
-          <Text style={styles.navText}>Profile</Text>
-        </TouchableOpacity>
-      </View>
+      {/* FLUSH BOTTOM NAVIGATION BAR */}
+      <ConsumerBottomNav activeTab="Cart" />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { height: 64, paddingHorizontal: 16, backgroundColor: Colors.background, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  logoContainer: { justifyContent: "center" },
-  logo: { fontFamily: "PoppinsBold", fontSize: 22, color: Colors.primary, letterSpacing: 0.5 },
-  logoSubtitle: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: -3 },
-  locationPill: { height: 32, paddingHorizontal: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 16, flexDirection: "row", alignItems: "center", gap: 4 },
-  locationText: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.primary2 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 },
   titleSection: { marginBottom: 16 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
-  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2, lineHeight: 17 },
   merchantGroupCard: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.border, marginBottom: 16, overflow: "hidden" },
   merchantGroupCardActive: { borderColor: Colors.primary, backgroundColor: "#F9FCFA" },
   merchantHeaderBar: { backgroundColor: "#E8EFEA", paddingHorizontal: 14, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
@@ -798,7 +754,7 @@ const styles = StyleSheet.create({
   productName: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
   establishmentName: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: 1 },
   deleteButton: { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
-  productDetail: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 3 },
+  productDetail: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: -15 },
   productDetailText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon },
   productBottomRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 8 },
   currentPrice: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.primary },
@@ -815,8 +771,7 @@ const styles = StyleSheet.create({
   noticeText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 16 },
   noticeBold: { fontFamily: "PoppinsSemiBold", color: Colors.primary2 },
   sectionHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
-  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2, marginBottom: 6 },
-  requiredText: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
+  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2, marginBottom: 6 },
   paymentCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, overflow: "hidden", marginBottom: 16 },
   paymentOption: { height: 54, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", borderBottomWidth: 1, borderBottomColor: Colors.border },
   paymentOptionLast: { borderBottomWidth: 0 },
@@ -846,13 +801,8 @@ const styles = StyleSheet.create({
   checkoutText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.white },
   secureText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.placeholder, textAlign: "center", marginTop: 8 },
   bottomSpace: { height: 16 },
-  bottomNav: { height: 84, paddingBottom: 20, backgroundColor: Colors.white, flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, elevation: 8, paddingHorizontal: 2 },
-  navItem: { flex: 1, alignItems: "center", justifyContent: "center", marginVertical: 4, borderRadius: 8 },
-  navItemActive: { backgroundColor: "#E8EFEA" },
-  navText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon, marginTop: 2 },
-  navTextActive: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
-  gatewayOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "center", alignItems: "center", padding: 20 },
-  gatewayCard: { width: "100%", maxWidth: 380, backgroundColor: Colors.white, borderRadius: 18, overflow: "hidden" },
+  gatewayOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  gatewayCard: { width: "100%", backgroundColor: Colors.white, borderTopLeftRadius: 22, borderTopRightRadius: 22, overflow: "hidden" },
   gatewayHeader: { backgroundColor: Colors.primary, paddingHorizontal: 18, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   gatewayHeaderTitle: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.white },
   gatewayAmountBox: { backgroundColor: "#F3F6F4", borderRadius: 12, padding: 14, alignItems: "center", marginBottom: 14, borderWidth: 1, borderColor: Colors.border },

@@ -7,6 +7,8 @@ import {
   Image,
   Modal,
   Platform,
+  Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,6 +22,7 @@ import {
   ReserveAlertModal,
   ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
+import { ConsumerBottomNav, ConsumerHeader } from "../components/ConsumerNav";
 import { ShopLocationMapModal } from "./homepage";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
@@ -33,13 +36,12 @@ export default function RescueConfirmed() {
   const [claims, setClaims] = useState<any[]>([]);
   const [statusFilter, setStatusFilter] = useState<"All" | "Pending" | "Completed">("All");
   const [selectedClaim, setSelectedClaim] = useState<any | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  // Rating & Review Form State
   const [ratingScore, setRatingScore] = useState<number>(5);
   const [reviewComment, setReviewComment] = useState<string>("");
   const [submittingReview, setSubmittingReview] = useState(false);
 
-  // Map Modal Target
   const [mapTarget, setMapTarget] = useState<{
     name: string;
     address: string;
@@ -85,6 +87,12 @@ export default function RescueConfirmed() {
     } catch (e) {
       console.log("Error loading claims:", e);
     }
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadClaims();
+    setRefreshing(false);
   };
 
   const openClaimModal = (claim: any) => {
@@ -143,35 +151,38 @@ export default function RescueConfirmed() {
     return c.status === "Completed";
   });
 
+  const getPurchasedItemsSummary = (claim: any) => {
+    if (Array.isArray(claim.items_breakdown) && claim.items_breakdown.length > 0) {
+      return claim.items_breakdown
+        .map((it: any) => `${it.qty}x ${it.food_name}`)
+        .join(", ");
+    }
+    return `${claim.qty || 1}x ${claim.food_name || "Surplus Food"}`;
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
-      {/* HEADER */}
-      <View style={styles.header}>
-        <View style={styles.logoContainer}>
-          <Text style={styles.logo}>RESERVE</Text>
-          <Text style={styles.logoSubtitle}>Consumer Portal</Text>
-        </View>
-
-        <View style={styles.locationPill}>
-          <Ionicons name="location-outline" size={13} color={Colors.primary} />
-          <Text style={styles.locationText}>Cebu City</Text>
-        </View>
-      </View>
+      {/* STATUS-BAR-SAFE HEADER */}
+      <ConsumerHeader />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
       >
         <View style={styles.titleSection}>
           <Text style={styles.pageTitle}>My Rescue Claims</Text>
-          <Text style={styles.pageSubtitle}>
-            Tap any claim row below to view your QR Voucher, see the shop location on the map, or rate completed pickups.
-          </Text>
         </View>
 
-        {/* STATUS FILTER TABS */}
         <View style={styles.filterTabsRow}>
           {(
             [
@@ -206,80 +217,106 @@ export default function RescueConfirmed() {
           })}
         </View>
 
-        {/* CLICKABLE CONSOLIDATED CLAIMS LIST */}
         {filteredClaims.length > 0 ? (
-          filteredClaims.map((claim) => {
+          filteredClaims.map((claim, idx) => {
             const isCompleted = claim.status === "Completed";
-            const itemCount = Array.isArray(claim.items_breakdown)
-              ? claim.items_breakdown.length
-              : 1;
+            const purchasedItemsText = getPurchasedItemsSummary(claim);
+
             return (
               <TouchableOpacity
-                key={claim.voucher_code || claim.order_id}
-                style={styles.claimRowCard}
-                activeOpacity={0.85}
+                key={claim.voucher_code || claim.order_id || idx}
+                style={styles.claimCardContainer}
+                activeOpacity={0.88}
                 onPress={() => openClaimModal(claim)}
               >
-                <Image
-                  source={{ uri: claim.image }}
-                  style={styles.claimThumb}
-                />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <Text style={styles.claimVoucherCode}>
-                      {claim.voucher_code} ({itemCount} {itemCount > 1 ? "items" : "item"})
-                    </Text>
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        isCompleted
-                          ? styles.statusCompletedBg
-                          : styles.statusPendingBg,
-                      ]}
-                    >
-                      <Text
+                <View style={styles.claimTopRow}>
+                  <Image source={{ uri: claim.image }} style={styles.claimThumbLarge} />
+
+                  <View style={styles.claimMainInfo}>
+                    <View style={styles.claimHeaderLine}>
+                      <Text style={styles.claimVoucherTitle} numberOfLines={1}>
+                        {claim.establishment || "Partner Establishment"}
+                      </Text>
+
+                      <View
                         style={[
-                          styles.statusBadgeText,
-                          isCompleted
-                            ? styles.statusCompletedText
-                            : styles.statusPendingText,
+                          styles.statusPillBadge,
+                          isCompleted ? styles.statusCompletedBg : styles.statusPendingBg,
                         ]}
                       >
-                        {isCompleted ? "Completed" : "Pending for Pickup"}
+                        <Ionicons
+                          name={isCompleted ? "checkmark-circle" : "time-outline"}
+                          size={12}
+                          color={isCompleted ? "#15803D" : "#C2410C"}
+                          style={{ marginRight: 3 }}
+                        />
+                        <Text
+                          style={[
+                            styles.statusPillText,
+                            isCompleted ? styles.statusCompletedText : styles.statusPendingText,
+                          ]}
+                        >
+                          {isCompleted ? "Completed" : "Pending for Pickup"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.claimMetaRow}>
+                      <Ionicons name="fast-food-outline" size={13} color={Colors.primary} />
+                      <Text style={styles.claimMerchantLabel} numberOfLines={2}>
+                        {purchasedItemsText}
+                      </Text>
+                    </View>
+
+                    <View style={styles.claimMetaRow}>
+                      <Ionicons name="location-outline" size={13} color={Colors.primary} />
+                      <Text style={styles.claimAddressLabel} numberOfLines={1}>
+                        {claim.address || "Cebu City, Cebu"}
+                      </Text>
+                    </View>
+
+                    <View style={styles.claimMetaRow}>
+                      <Ionicons name="calendar-outline" size={13} color="#B91C1C" />
+                      <Text style={styles.claimDeadlineLabel} numberOfLines={1}>
+                        Pick up before: {claim.pickup_deadline}
                       </Text>
                     </View>
                   </View>
+                </View>
 
-                  <Text style={styles.claimFoodTitle} numberOfLines={1}>
-                    {itemCount === 1
-                      ? `${claim.qty}x ${claim.food_name}`
-                      : claim.food_name}
-                  </Text>
-                  <Text style={styles.claimMerchantText} numberOfLines={1}>
-                    {claim.establishment} • {claim.address}
-                  </Text>
-                  <Text style={styles.claimExpiryText}>
-                    Pickup before: {claim.pickup_deadline}
-                  </Text>
+                <View style={styles.claimCardDivider} />
 
-                  <View style={styles.claimBottomActionRow}>
-                    <Text style={styles.claimPriceInfo}>
-                      Total: ₱{claim.total_value} (Paid 10%: ₱{claim.paid_today})
+                <View style={styles.claimBottomRow}>
+                  <View>
+                    <Text style={styles.claimTotalText}>
+                      Total: ₱{Number(claim.total_value || 0).toFixed(2)}
                     </Text>
-                    <Text style={styles.tapToViewHint}>
-                      {isCompleted
-                        ? claim.is_reviewed
-                          ? `Rated ${"⭐".repeat(claim.rating_score)}`
-                          : "Tap to Rate ⭐"
-                        : "View QR & Summary →"}
+                    <Text style={styles.claimDepositSubtext}>
+                      (Paid 10%: ₱{Number(claim.paid_today || 0).toFixed(2)})
                     </Text>
                   </View>
+
+                  {isCompleted ? (
+                    <View style={styles.actionButtonRated}>
+                      <Ionicons name="star" size={15} color="#EAB308" />
+                      <Text style={styles.actionButtonRatedText}>Rated</Text>
+                      <View style={{ flexDirection: "row", gap: 1, marginLeft: 4 }}>
+                        {[1, 2, 3, 4, 5].map((s) => (
+                          <Ionicons
+                            key={s}
+                            name={s <= (claim.rating_score || 5) ? "star" : "star-outline"}
+                            size={12}
+                            color="#EAB308"
+                          />
+                        ))}
+                      </View>
+                    </View>
+                  ) : (
+                    <View style={styles.actionButtonQR}>
+                      <Ionicons name="qr-code-outline" size={15} color={Colors.primary} />
+                      <Text style={styles.actionButtonQRText}>View QR &amp; Summary</Text>
+                    </View>
+                  )}
                 </View>
               </TouchableOpacity>
             );
@@ -318,13 +355,17 @@ export default function RescueConfirmed() {
         onRequestClose={() => setSelectedClaim(null)}
       >
         <View style={styles.modalOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSelectedClaim(null)}
+          />
           <View style={styles.modalSheet}>
             {selectedClaim && (
               <>
                 <View style={styles.modalHeader}>
-                  <View>
-                    <Text style={styles.modalTitle}>
-                      Order {selectedClaim.voucher_code}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.modalTitle} numberOfLines={1}>
+                      {selectedClaim.establishment || "Rescue Claim Details"}
                     </Text>
                     <Text style={styles.logoSubtitle}>
                       {selectedClaim.status === "Completed"
@@ -344,7 +385,6 @@ export default function RescueConfirmed() {
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={{ padding: 16, paddingBottom: 30 }}
                 >
-                  {/* QR VOUCHER PROOF */}
                   <View style={styles.proofCard}>
                     <Text style={styles.proofTitle}>
                       Official QR Rescue Voucher
@@ -356,68 +396,19 @@ export default function RescueConfirmed() {
                         resizeMode="contain"
                       />
                     </View>
+                    <Text style={styles.referenceNumber}>
+                      {selectedClaim.voucher_code}
+                    </Text>
                     <Text style={styles.voucherText}>
                       Status:{" "}
                       {selectedClaim.status === "Completed"
                         ? "Completed"
                         : "Pending for Pickup"}
                     </Text>
-                    <Text style={styles.referenceNumber}>
-                      {selectedClaim.voucher_code}
-                    </Text>
                   </View>
 
-                  {/* PICKUP SHOP LOCATION & SHOW SHOP IN MAPS BUTTON */}
-                  <View style={styles.noticeCard}>
-                    <View style={styles.noticeIconContainer}>
-                      <Ionicons
-                        name="location"
-                        size={18}
-                        color={Colors.primary}
-                      />
-                    </View>
-                    <View style={styles.noticeContent}>
-                      <Text style={styles.noticeTitle}>
-                        Pickup Store Location & Deadline
-                      </Text>
-                      <Text style={styles.noticeText}>
-                        Store:{" "}
-                        <Text style={styles.noticeBold}>
-                          {selectedClaim.establishment}
-                        </Text>
-                        {"\n"}Address: {selectedClaim.address}
-                        {"\n"}Pickup Before:{" "}
-                        <Text style={styles.noticeBold}>
-                          {selectedClaim.pickup_deadline}
-                        </Text>
-                      </Text>
-
-                      <TouchableOpacity
-                        style={styles.mapActionBtn}
-                        onPress={() =>
-                          setMapTarget({
-                            name: selectedClaim.establishment,
-                            address: selectedClaim.address,
-                            lat: Number(selectedClaim.merchant_lat || 10.3157),
-                            lng: Number(selectedClaim.merchant_lng || 123.8854),
-                          })
-                        }
-                      >
-                        <Ionicons
-                          name="map-outline"
-                          size={15}
-                          color={Colors.white}
-                        />
-                        <Text style={styles.mapActionBtnText}>
-                          Show Shop in Maps
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-
-                  {/* ITEMIZED ORDER & PAYMENT BREAKDOWN */}
                   <Text style={styles.sectionTitle}>
-                    Order & Payment Summary ({selectedClaim.voucher_code})
+                    Order &amp; Payment Summary
                   </Text>
                   <View style={styles.summaryCard}>
                     {Array.isArray(selectedClaim.items_breakdown) &&
@@ -455,7 +446,7 @@ export default function RescueConfirmed() {
                       ))
                     ) : (
                       <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Food Item & Qty</Text>
+                        <Text style={styles.summaryLabel}>Food Item &amp; Qty</Text>
                         <Text style={styles.summaryValue}>
                           {selectedClaim.qty}x {selectedClaim.food_name}
                         </Text>
@@ -499,11 +490,68 @@ export default function RescueConfirmed() {
                     </View>
                   </View>
 
-                  {/* RATE & REVIEW SECTION FOR COMPLETED TRANSACTIONS */}
+                  <View style={styles.noticeCard}>
+                    <View style={styles.noticeIconContainer}>
+                      <Ionicons
+                        name="bag-handle"
+                        size={18}
+                        color={Colors.primary}
+                      />
+                    </View>
+                    <View style={styles.noticeContent}>
+                      <Text style={styles.noticeTitle}>
+                        Pickup Store Location &amp; Deadline
+                      </Text>
+                      <Text style={styles.noticeText}>
+                        <Ionicons
+                          name="storefront-outline"
+                          size={15}
+                          color={Colors.primary}
+                        />
+                        {` ${selectedClaim.establishment}`}
+                        {"\n"}
+                        <Ionicons
+                          name="location-outline"
+                          size={15}
+                          color={Colors.primary}
+                        />
+                        {` ${selectedClaim.address}`}
+                        {"\n"}
+                        <Ionicons
+                          name="time-outline"
+                          size={15}
+                          color={Colors.primary}
+                        />
+                        {` Pick up before: ${selectedClaim.pickup_deadline}`}
+                      </Text>
+
+                      <TouchableOpacity
+                        style={styles.mapActionBtn}
+                        onPress={() =>
+                          setMapTarget({
+                            name: selectedClaim.establishment,
+                            address: selectedClaim.address,
+                            lat: Number(selectedClaim.merchant_lat || 10.3157),
+                            lng: Number(selectedClaim.merchant_lng || 123.8854),
+                          })
+                        }
+                      >
+                        <Ionicons
+                          name="map-outline"
+                          size={15}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.mapActionBtnText}>
+                          Show Shop in Maps
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
                   {selectedClaim.status === "Completed" && (
                     <View style={styles.reviewBox}>
                       <Text style={styles.sectionTitle}>
-                        Rate & Review Your Food Rescue
+                        Rate &amp; Review Your Food Rescue
                       </Text>
                       <Text
                         style={{
@@ -572,7 +620,6 @@ export default function RescueConfirmed() {
         </View>
       </Modal>
 
-      {/* SHOP LOCATION MAP MODAL */}
       <ShopLocationMapModal
         visible={!!mapTarget}
         shopName={mapTarget?.name || ""}
@@ -590,92 +637,59 @@ export default function RescueConfirmed() {
         onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
       />
 
-      {/* BOTTOM NAV */}
-      <View style={styles.bottomNav}>
-        <TouchableOpacity
-          style={styles.navItem}
-          activeOpacity={0.7}
-          onPress={() => router.replace("/consumer/homepage")}
-        >
-          <Ionicons name="home-outline" size={22} color={Colors.icon} />
-          <Text style={styles.navText}>Home</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          activeOpacity={0.7}
-          onPress={() => router.replace("/consumer/cart")}
-        >
-          <Ionicons name="cart-outline" size={22} color={Colors.icon} />
-          <Text style={styles.navText}>My Cart</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.navItem, styles.navItemActive]}
-          activeOpacity={1}
-        >
-          <Ionicons name="receipt" size={22} color={Colors.primary} />
-          <Text style={[styles.navText, styles.navTextActive]}>My Claims</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.navItem}
-          activeOpacity={0.7}
-          onPress={() => router.replace("/consumer/profile")}
-        >
-          <Ionicons name="person-outline" size={22} color={Colors.icon} />
-          <Text style={styles.navText}>Profile</Text>
-        </TouchableOpacity>
-      </View>
+      {/* FLUSH BOTTOM NAVIGATION BAR */}
+      <ConsumerBottomNav activeTab="Claims" />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  actionButtonQR: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: Colors.primary, backgroundColor: Colors.white },
+  actionButtonQRText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary },
+  actionButtonRated: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.input },
+  actionButtonRatedText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2 },
   container: { flex: 1, backgroundColor: Colors.background },
-  header: { height: 64, paddingHorizontal: 16, backgroundColor: Colors.background, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  logoContainer: { justifyContent: "center" },
-  logo: { fontFamily: "PoppinsBold", fontSize: 22, color: Colors.primary, letterSpacing: 0.5 },
   logoSubtitle: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: -3 },
-  locationPill: { height: 32, paddingHorizontal: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 16, flexDirection: "row", alignItems: "center", gap: 4 },
-  locationText: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.primary2 },
   scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 },
   titleSection: { marginBottom: 14 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
-  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2 },
   filterTabsRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
   filterTabBtn: { flex: 1, paddingVertical: 9, borderRadius: 10, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, alignItems: "center" },
   filterTabBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
   filterTabText: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: Colors.primary2 },
   filterTabTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.white },
-  claimRowCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 12, flexDirection: "row", marginBottom: 12 },
-  claimThumb: { width: 78, height: 88, borderRadius: 10, backgroundColor: Colors.input },
-  claimVoucherCode: { fontFamily: "PoppinsBold", fontSize: 12, color: Colors.primary },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  statusPendingBg: { backgroundColor: "#FEF3C7" },
-  statusCompletedBg: { backgroundColor: "#E4F0E8" },
-  statusBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 9.5 },
-  statusPendingText: { color: "#B45309" },
-  statusCompletedText: { color: "#1F6B52" },
-  claimFoodTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13.5, color: Colors.primary2, marginTop: 2 },
-  claimMerchantText: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1 },
-  claimExpiryText: { fontFamily: "PoppinsMedium", fontSize: 10, color: "#A94A3A", marginTop: 2 },
-  claimBottomActionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: "#F0F2F1" },
-  claimPriceInfo: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: Colors.primary2 },
-  tapToViewHint: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.primary },
+  claimCardContainer: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 16, padding: 14, marginBottom: 14, elevation: 2, shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 3 },
+  claimTopRow: { flexDirection: "row", alignItems: "flex-start" },
+  claimThumbLarge: { width: 82, height: 82, borderRadius: 12, backgroundColor: Colors.input, resizeMode: "cover" },
+  claimMainInfo: { flex: 1, marginLeft: 12 },
+  claimHeaderLine: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 4 },
+  claimVoucherTitle: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2, flex: 1, marginRight: 6 },
+  statusPillBadge: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 12 },
+  statusCompletedBg: { backgroundColor: "#DCFCE7" },
+  statusPendingBg: { backgroundColor: "#FFEDD5" },
+  statusPillText: { fontFamily: "PoppinsSemiBold", fontSize: 9.5 },
+  statusCompletedText: { color: "#15803D" },
+  statusPendingText: { color: "#C2410C" },
+  claimMetaRow: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 2 },
+  claimMerchantLabel: { fontFamily: "PoppinsSemiBold", fontSize: 11.5, color: Colors.primary2, flex: 1 },
+  claimAddressLabel: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, flex: 1 },
+  claimDeadlineLabel: { fontFamily: "PoppinsMedium", fontSize: 10, color: "#B91C1C", flex: 1 },
+  claimCardDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 12 },
+  claimBottomRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  claimTotalText: { fontFamily: "PoppinsBold", fontSize: 13, color: Colors.primary2 },
+  claimDepositSubtext: { fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.placeholder },
   proofCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 16, alignItems: "center", marginBottom: 14 },
   proofTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2, marginBottom: 8 },
   qrContainer: { width: 145, height: 145, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
   qrImage: { width: 135, height: 135 },
-  voucherText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, marginTop: 4 },
-  referenceNumber: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary, marginTop: 2, letterSpacing: 0.5 },
+  voucherText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, marginTop: 2 },
+  referenceNumber: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary, marginTop: 6, letterSpacing: 0.5 },
   successSubtext: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, textAlign: "center", marginTop: 2 },
   noticeCard: { backgroundColor: "#E8EFEA", borderWidth: 1, borderColor: Colors.border, borderRadius: 12, padding: 12, flexDirection: "row", gap: 10, marginBottom: 16 },
   noticeIconContainer: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
   noticeContent: { flex: 1 },
   noticeTitle: { fontFamily: "PoppinsSemiBold", fontSize: 11.5, color: Colors.primary2, marginBottom: 2 },
-  noticeText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 16 },
-  noticeBold: { fontFamily: "PoppinsSemiBold", color: Colors.primary2 },
+  noticeText: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 20 },
   mapActionBtn: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: Colors.primary, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8, marginTop: 8 },
   mapActionBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.white },
   sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2, marginBottom: 6 },
@@ -693,10 +707,5 @@ const styles = StyleSheet.create({
   modalSheet: { backgroundColor: Colors.background, borderTopLeftRadius: 22, borderTopRightRadius: 22, maxHeight: "92%", overflow: "hidden" },
   modalHeader: { height: 60, paddingHorizontal: 16, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   modalTitle: { fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2 },
-  modalCloseButton: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
-  bottomNav: { height: 84, paddingBottom: 20, backgroundColor: Colors.white, flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, elevation: 8, paddingHorizontal: 2 },
-  navItem: { flex: 1, alignItems: "center", justifyContent: "center", marginVertical: 4, borderRadius: 8 },
-  navItemActive: { backgroundColor: "#E8EFEA" },
-  navText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon, marginTop: 2 },
-  navTextActive: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
+  modalCloseButton: { width: 32, height: 32, alignItems: "center", justifyContent: "center" },
 });
