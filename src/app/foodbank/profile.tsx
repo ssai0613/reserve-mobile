@@ -1,9 +1,10 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router, Stack, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  DeviceEventEmitter,
   Platform,
   RefreshControl,
   ScrollView,
@@ -12,10 +13,23 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import { ReserveConfirmModal } from "../components/CebuRegistrationHelpers";
-import { FoodBankBottomNav } from "../components/FoodBankNav";
+import {
+  FoodBankBottomNav,
+  useIsInsideFoodBankShell,
+} from "../components/FoodBankNav";
+
+let cachedFbProfileMemory = {
+  orgId: "1",
+  orgName: "Food Bank Partner",
+  contactPerson: "Coordinator",
+  email: "Loading...",
+  phone: "",
+  address: "Cebu City",
+  status: "Active",
+  totalReceived: 0,
+};
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -55,14 +69,21 @@ const maskPhoneNumber = (rawPhone: string): string => {
 };
 
 export default function FoodBankProfile() {
-  const [orgId, setOrgId] = useState("1");
-  const [orgName, setOrgName] = useState("Food Bank Partner");
-  const [contactPerson, setContactPerson] = useState("Coordinator");
-  const [email, setEmail] = useState("Loading...");
-  const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("Cebu City");
-  const [status, setStatus] = useState("Active");
-  const [totalReceived, setTotalReceived] = useState(0);
+  const isInsideShell = useIsInsideFoodBankShell();
+  if (!isInsideShell) return null;
+
+  const [orgId, setOrgId] = useState(cachedFbProfileMemory.orgId);
+  const [orgName, setOrgName] = useState(cachedFbProfileMemory.orgName);
+  const [contactPerson, setContactPerson] = useState(
+    cachedFbProfileMemory.contactPerson
+  );
+  const [email, setEmail] = useState(cachedFbProfileMemory.email);
+  const [phone, setPhone] = useState(cachedFbProfileMemory.phone);
+  const [address, setAddress] = useState(cachedFbProfileMemory.address);
+  const [status, setStatus] = useState(cachedFbProfileMemory.status);
+  const [totalReceived, setTotalReceived] = useState(
+    cachedFbProfileMemory.totalReceived
+  );
 
   const [refreshing, setRefreshing] = useState(false);
   const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
@@ -82,25 +103,54 @@ export default function FoodBankProfile() {
         )}`
       );
       if (res.data) {
-        setOrgId(String(res.data.org_id || storedId));
-        setOrgName(res.data.org_name || storedName || "Food Bank Partner");
-        setContactPerson(res.data.contact_person || "Coordinator");
-        setEmail(res.data.email || storedEmail);
-        setPhone(res.data.phone || "");
-        setAddress(res.data.address || "Cebu City");
-        setStatus(res.data.status || "Active");
-        setTotalReceived(Number(res.data.total_food_received || 0));
+        const nextProfile = {
+          orgId: String(res.data.org_id || storedId),
+          orgName: res.data.org_name || storedName || "Food Bank Partner",
+          contactPerson: res.data.contact_person || "Coordinator",
+          email: res.data.email || storedEmail,
+          phone: res.data.phone || "",
+          address: res.data.address || "Cebu City",
+          status: res.data.status || "Active",
+          totalReceived: Number(res.data.total_food_received || 0),
+        };
+        cachedFbProfileMemory = nextProfile;
+
+        setOrgId(nextProfile.orgId);
+        setOrgName(nextProfile.orgName);
+        setContactPerson(nextProfile.contactPerson);
+        setEmail(nextProfile.email);
+        setPhone(nextProfile.phone);
+        setAddress(nextProfile.address);
+        setStatus(nextProfile.status);
+        setTotalReceived(nextProfile.totalReceived);
       }
     } catch (e) {
       console.log("FoodBank profile error:", e);
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
+  useEffect(() => {
+    loadProfile();
+
+    const profSub = DeviceEventEmitter.addListener("fb_profile_updated", () => {
       loadProfile();
-    }, [loadProfile])
-  );
+    });
+    const reqSub = DeviceEventEmitter.addListener("fb_requests_updated", () => {
+      loadProfile();
+    });
+    const donSub = DeviceEventEmitter.addListener(
+      "fb_donations_updated",
+      () => {
+        loadProfile();
+      }
+    );
+
+    return () => {
+      profSub.remove();
+      reqSub.remove();
+      donSub.remove();
+    };
+  }, [loadProfile]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -115,9 +165,7 @@ export default function FoodBankProfile() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       {/* FULL-SCREEN SCROLL CONTENT (NO TOP HEADER BAR) */}
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -173,9 +221,7 @@ export default function FoodBankProfile() {
           </View>
         </View>
 
-        {/* ============================================================
-            TWO MAIN ACCOUNT SETTINGS ROWS / CARDS (OPEN SEPARATE PAGES)
-        ============================================================ */}
+        {/* TWO MAIN ACCOUNT SETTINGS ROWS / CARDS (OPEN SEPARATE PAGES) */}
         <Text style={styles.sectionTitle}>Account Settings</Text>
 
         {/* ROW 1: ORGANIZATION & PERSONAL INFORMATION */}
@@ -347,9 +393,8 @@ export default function FoodBankProfile() {
         onCancel={() => setLogoutConfirmOpen(false)}
       />
 
-      {/* FLUSH BOTTOM NAVIGATION BAR */}
       <FoodBankBottomNav activeTab="Profile" />
-    </SafeAreaView>
+    </View>
   );
 }
 

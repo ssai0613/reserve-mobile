@@ -1,9 +1,10 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { Stack } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  DeviceEventEmitter,
   Platform,
   RefreshControl,
   ScrollView,
@@ -11,12 +12,60 @@ import {
   Text,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   EstablishmentBottomNav,
   EstablishmentHeader,
+  useIsInsideMerchantShell,
 } from "../components/EstablishmentNav";
+
+type MonthlyImpactItem = {
+  month: string;
+  rescued: number;
+};
+
+type ImpactActivity = {
+  id: string;
+  icon: string;
+  title: string;
+  description: string;
+  date: string;
+};
+
+type ReviewItem = {
+  id: number;
+  consumer: string;
+  item: string;
+  score: number;
+  comment: string;
+  date: string;
+};
+
+const getRollingSixImpactMonths = (): MonthlyImpactItem[] => {
+  const result: MonthlyImpactItem[] = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    result.push({
+      month: d.toLocaleDateString("en-US", { month: "short" }),
+      rescued: 0,
+    });
+  }
+  return result;
+};
+
+let cachedImpactMemory = {
+  foodRescuedKg: "0.0",
+  peopleHelped: "0",
+  successfulRescues: "0",
+  co2AvoidedKg: "0.0",
+  portionsRescued: "0",
+  monthlyData: getRollingSixImpactMonths(),
+  recentImpact: [] as ImpactActivity[],
+  avgRating: 0,
+  reviewCount: 0,
+  reviews: [] as ReviewItem[],
+};
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -24,80 +73,138 @@ const getStorageItem = async (key: string): Promise<string | null> => {
 };
 
 export default function EstablishmentImpact() {
-  const [foodRescuedKg, setFoodRescuedKg] = useState("0");
-  const [peopleHelped, setPeopleHelped] = useState("0");
-  const [successfulRescues, setSuccessfulRescues] = useState("0");
-  const [co2AvoidedKg, setCo2AvoidedKg] = useState("0");
-  const [portionsRescued, setPortionsRescued] = useState("0");
-  const [avgRating, setAvgRating] = useState<number>(0);
-  const [reviewCount, setReviewCount] = useState<number>(0);
-  const [reviews, setReviews] = useState<any[]>([]);
+  const isInsideShell = useIsInsideMerchantShell();
+  if (!isInsideShell) return null;
+
+  const [foodRescuedKg, setFoodRescuedKg] = useState(
+    cachedImpactMemory.foodRescuedKg
+  );
+  const [peopleHelped, setPeopleHelped] = useState(
+    cachedImpactMemory.peopleHelped
+  );
+  const [successfulRescues, setSuccessfulRescues] = useState(
+    cachedImpactMemory.successfulRescues
+  );
+  const [co2AvoidedKg, setCo2AvoidedKg] = useState(
+    cachedImpactMemory.co2AvoidedKg
+  );
+  const [portionsRescued, setPortionsRescued] = useState(
+    cachedImpactMemory.portionsRescued
+  );
+  const [monthlyData, setMonthlyData] = useState<MonthlyImpactItem[]>(
+    cachedImpactMemory.monthlyData
+  );
+  const [recentImpact, setRecentImpact] = useState<ImpactActivity[]>(
+    cachedImpactMemory.recentImpact
+  );
+  const [avgRating, setAvgRating] = useState(cachedImpactMemory.avgRating);
+  const [reviewCount, setReviewCount] = useState(
+    cachedImpactMemory.reviewCount
+  );
+  const [reviews, setReviews] = useState<ReviewItem[]>(
+    cachedImpactMemory.reviews
+  );
   const [refreshing, setRefreshing] = useState(false);
-  const [monthlyData, setMonthlyData] = useState<any[]>([
-    { month: "Jun", rescued: 0 },
-    { month: "Jul", rescued: 0 },
-    { month: "Aug", rescued: 0 },
-    { month: "Sep", rescued: 0 },
-    { month: "Oct", rescued: 0 },
-    { month: "Nov", rescued: 0 },
-  ]);
-  const [recentImpact, setRecentImpact] = useState<any[]>([]);
 
-  useEffect(() => {
-    loadImpact();
-  }, []);
-
-  const loadImpact = async () => {
+  const loadImpactData = useCallback(async () => {
     try {
-      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedId = await getStorageItem("profile_id");
       const storedEmail = (await getStorageItem("user_email")) || "";
+
+      if (!storedId && !storedEmail) {
+        router.replace("/consumer");
+        return;
+      }
+
+      const resolvedId = storedId || "0";
       const res = await api.get(
-        `listings/merchant-portal/${storedId}/?email=${encodeURIComponent(
+        `listings/merchant-portal/${resolvedId}/?email=${encodeURIComponent(
           storedEmail
         )}`
       );
-      const p = res.data.profile;
-      const imp = res.data.impact;
-      if (p) {
-        setAvgRating(Number(p.avg_rating || 0));
-        setReviewCount(Number(p.review_count || 0));
-        setReviews(Array.isArray(p.reviews) ? p.reviews : []);
-      }
+
+      const imp = res.data?.impact;
+      const prof = res.data?.profile;
+
       if (imp) {
-        setFoodRescuedKg(imp.food_rescued_kg || "0");
-        setPeopleHelped(imp.people_helped || "0");
-        setSuccessfulRescues(imp.successful_rescues || "0");
-        setCo2AvoidedKg(imp.co2_avoided_kg || "0");
-        setPortionsRescued(imp.portions_rescued || "0");
-        if (Array.isArray(imp.monthly_data) && imp.monthly_data.length > 0) {
-          setMonthlyData(imp.monthly_data);
-        }
-        setRecentImpact(imp.recent_impact || []);
+        const nextMonthly =
+          Array.isArray(imp.monthly_data) && imp.monthly_data.length > 0
+            ? imp.monthly_data.slice(-6)
+            : getRollingSixImpactMonths();
+
+        cachedImpactMemory = {
+          foodRescuedKg: String(imp.food_rescued_kg || "0.0"),
+          peopleHelped: String(imp.people_helped || "0"),
+          successfulRescues: String(imp.successful_rescues || "0"),
+          co2AvoidedKg: String(imp.co2_avoided_kg || "0.0"),
+          portionsRescued: String(imp.portions_rescued || "0"),
+          monthlyData: nextMonthly,
+          recentImpact: Array.isArray(imp.recent_impact)
+            ? imp.recent_impact
+            : [],
+          avgRating: Number(prof?.avg_rating || 0),
+          reviewCount: Number(prof?.review_count || 0),
+          reviews: Array.isArray(prof?.reviews) ? prof.reviews : [],
+        };
+
+        setFoodRescuedKg(cachedImpactMemory.foodRescuedKg);
+        setPeopleHelped(cachedImpactMemory.peopleHelped);
+        setSuccessfulRescues(cachedImpactMemory.successfulRescues);
+        setCo2AvoidedKg(cachedImpactMemory.co2AvoidedKg);
+        setPortionsRescued(cachedImpactMemory.portionsRescued);
+        setMonthlyData(cachedImpactMemory.monthlyData);
+        setRecentImpact(cachedImpactMemory.recentImpact);
+        setAvgRating(cachedImpactMemory.avgRating);
+        setReviewCount(cachedImpactMemory.reviewCount);
+        setReviews(cachedImpactMemory.reviews);
       }
     } catch (e) {
-      console.log("Impact fetch error:", e);
+      console.log("Error loading merchant impact:", e);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadImpactData();
+
+    const ordSub = DeviceEventEmitter.addListener(
+      "merchant_orders_updated",
+      () => {
+        loadImpactData();
+      }
+    );
+    const donSub = DeviceEventEmitter.addListener(
+      "merchant_donations_updated",
+      () => {
+        loadImpactData();
+      }
+    );
+    const listSub = DeviceEventEmitter.addListener(
+      "merchant_listings_updated",
+      () => {
+        loadImpactData();
+      }
+    );
+
+    return () => {
+      ordSub.remove();
+      donSub.remove();
+      listSub.remove();
+    };
+  }, [loadImpactData]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadImpact();
+    await loadImpactData();
     setRefreshing(false);
   };
 
-  const impactStats = [
-    { icon: "leaf-outline", value: foodRescuedKg, label: "Food rescued", unit: "kg" },
-    { icon: "people-outline", value: peopleHelped, label: "People helped", unit: "people" },
-    { icon: "heart-outline", value: successfulRescues, label: "Successful rescues", unit: "rescues" },
-    { icon: "cloud-outline", value: co2AvoidedKg, label: "CO₂ avoided", unit: "kg" },
-  ];
-
-  const maxBarVal = Math.max(100, ...monthlyData.map((d) => Number(d.rescued || 0)));
+  const maxRescuedVal = Math.max(
+    ...monthlyData.map((d) => Number(d.rescued || 0)),
+    5
+  );
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <EstablishmentHeader />
 
       <ScrollView
@@ -113,189 +220,221 @@ export default function EstablishmentImpact() {
         }
       >
         <View style={styles.pageHeader}>
-          <Text style={styles.pageTitle}>Impact & Customer Reviews</Text>
-          <Text style={styles.pageSubtitle}>
-            Monitor your environmental contributions and consumer ratings
+          <Text style={styles.pageTitle}>Sustainability &amp; Impact</Text>
+          <Text style={styles.pageSubTitle}>
+            Real-time environmental metrics, community rescues, and verified
+            customer reviews
           </Text>
         </View>
 
-        {/* CUSTOMER RATINGS & REVIEWS SECTION */}
-        <View style={styles.ratingHeroCard}>
-          <View style={styles.ratingHeroTop}>
+        {/* ENVIRONMENTAL HERO CARD */}
+        <View style={styles.heroCard}>
+          <View style={styles.heroTopRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.heroBadgeText}>
+                CEBU CITY RESOURCE RECOVERY
+              </Text>
+              <Text style={styles.heroBigValue}>{foodRescuedKg} kg</Text>
+              <Text style={styles.heroSubLabel}>
+                Total Surplus Food Diverted from Landfill
+              </Text>
+            </View>
+            <View style={styles.heroIconCircle}>
+              <Ionicons name="leaf" size={28} color={Colors.white} />
+            </View>
+          </View>
+
+          <View style={styles.heroDivider} />
+
+          <View style={styles.heroMetricsRow}>
+            <View style={styles.heroMetricItem}>
+              <Text style={styles.heroMetricNumber}>{co2AvoidedKg} kg</Text>
+              <Text style={styles.heroMetricLabel}>CO₂e Avoided</Text>
+            </View>
+            <View style={styles.heroMetricItem}>
+              <Text style={styles.heroMetricNumber}>{portionsRescued}</Text>
+              <Text style={styles.heroMetricLabel}>Meal Portions</Text>
+            </View>
+            <View style={styles.heroMetricItem}>
+              <Text style={styles.heroMetricNumber}>{peopleHelped}</Text>
+              <Text style={styles.heroMetricLabel}>Rescues Fulfilled</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* SECONDARY STATS ROW */}
+        <View style={styles.statsRow}>
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Ionicons name="star" size={18} color="#D97706" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.statNumber}>
+                {reviewCount > 0 ? avgRating.toFixed(1) : "5.0"} ★
+              </Text>
+              <Text style={styles.statLabel}>
+                Store Rating ({reviewCount} review
+                {reviewCount === 1 ? "" : "s"})
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Ionicons
+                name="heart-outline"
+                size={18}
+                color={Colors.primary}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.statNumber}>{successfulRescues}</Text>
+              <Text style={styles.statLabel}>Total Units Rescued</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ROLLING 6-MONTH FOOD RESCUED CHART */}
+        <View style={styles.sectionCard}>
+          <View style={styles.cardHeaderRow}>
             <View>
-              <Text style={styles.ratingHeroLabel}>Overall Storefront Rating</Text>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 4 }}>
-                <Text style={styles.ratingHeroScore}>
-                  {reviewCount > 0 ? avgRating.toFixed(1) : "5.0"}
-                </Text>
-                <View>
-                  <Text style={{ fontSize: 13 }}>
-                    {"⭐".repeat(reviewCount > 0 ? Math.max(1, Math.round(avgRating)) : 5)}
-                  </Text>
-                  <Text style={styles.ratingHeroCount}>
-                    Based on {reviewCount} verified consumer {reviewCount === 1 ? "review" : "reviews"}
+              <Text style={styles.sectionTitle}>
+                Monthly Food Rescued (kg)
+              </Text>
+              <Text style={styles.sectionSubtitle}>
+                Rolling 6-month surplus recovery volume
+              </Text>
+            </View>
+            <View style={styles.pillBadge}>
+              <Text style={styles.pillBadgeText}>Last 6 Months</Text>
+            </View>
+          </View>
+
+          <View style={styles.barChartRow}>
+            {monthlyData.map((item, idx) => {
+              const val = Number(item.rescued || 0);
+              const barHeight = Math.max(
+                8,
+                Math.round((val / maxRescuedVal) * 110)
+              );
+              const isLatest = idx === monthlyData.length - 1;
+              return (
+                <View key={item.month + idx} style={styles.barCol}>
+                  <Text style={styles.barValText}>{val.toFixed(1)}kg</Text>
+                  <View style={styles.barTrack}>
+                    <View
+                      style={[
+                        styles.barFill,
+                        {
+                          height: barHeight,
+                          backgroundColor: isLatest
+                            ? Colors.primary
+                            : "#9BB9A9",
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text
+                    style={[
+                      styles.barMonthText,
+                      isLatest && {
+                        fontFamily: "PoppinsBold",
+                        color: Colors.primary2,
+                      },
+                    ]}
+                  >
+                    {item.month}
                   </Text>
                 </View>
-              </View>
+              );
+            })}
+          </View>
+        </View>
+
+        {/* CUSTOMER RATINGS & REVIEWS */}
+        <View style={styles.sectionCard}>
+          <View style={styles.cardHeaderRow}>
+            <View>
+              <Text style={styles.sectionTitle}>
+                Verified Customer Reviews ({reviewCount})
+              </Text>
+              <Text style={styles.sectionSubtitle}>
+                Feedback submitted by consumers after claiming rescues
+              </Text>
             </View>
           </View>
 
           {reviews.length > 0 ? (
-            <View style={{ marginTop: 14, gap: 10 }}>
-              {reviews.map((rev) => (
-                <View key={rev.id} style={styles.reviewItemCard}>
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                    <Text style={styles.reviewConsumerName}>
-                      {rev.consumer} • {"⭐".repeat(rev.score)} ({rev.score}/5)
-                    </Text>
-                    <Text style={styles.reviewDateText}>{rev.date}</Text>
-                  </View>
-                  <Text style={styles.reviewItemBadge}>Item: {rev.item}</Text>
-                  {rev.comment ? (
-                    <Text style={styles.reviewCommentText}>"{rev.comment}"</Text>
-                  ) : null}
+            reviews.map((rev) => (
+              <View key={rev.id} style={styles.reviewItem}>
+                <View style={styles.reviewHeader}>
+                  <Text style={styles.reviewAuthor}>{rev.consumer}</Text>
+                  <Text style={styles.reviewStars}>
+                    {"★".repeat(Math.max(1, Math.min(5, rev.score || 5)))}
+                  </Text>
                 </View>
-              ))}
-            </View>
-          ) : (
-            <Text style={[styles.ratingHeroCount, { marginTop: 10 }]}>
-              No customer reviews submitted yet. Reviews will appear here as consumers complete pickups!
-            </Text>
-          )}
-        </View>
-
-        <View style={styles.impactHero}>
-          <View style={styles.heroIcon}>
-            <Ionicons name="leaf" size={28} color={Colors.white} />
-          </View>
-          <Text style={styles.heroTitle}>Making a difference</Text>
-          <View style={styles.heroDivider} />
-          <View style={styles.heroBottom}>
-            <View>
-              <Text style={styles.heroNumber}>{foodRescuedKg} kg</Text>
-              <Text style={styles.heroLabel}>total food rescued</Text>
-            </View>
-            <View style={styles.heroLeafIcon}>
-              <Ionicons name="trending-up-outline" size={19} color={Colors.button} />
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Impact overview</Text>
-          <Text style={styles.sectionSubtitle}>Your contribution so far</Text>
-        </View>
-
-        <View style={styles.statsGrid}>
-          {impactStats.map((stat) => (
-            <ImpactStatCard
-              key={stat.label}
-              icon={stat.icon}
-              value={stat.value}
-              label={stat.label}
-              unit={stat.unit}
-            />
-          ))}
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Monthly food rescue</Text>
-          <Text style={styles.sectionSubtitle}>Food rescued over the last 6 months</Text>
-        </View>
-
-        <View style={styles.chartCard}>
-          <View style={styles.chartTop}>
-            <View>
-              <Text style={styles.chartTotal}>{foodRescuedKg} kg</Text>
-              <Text style={styles.chartLabel}>Total rescued</Text>
-            </View>
-            <View style={styles.growthBadge}>
-              <Ionicons name="trending-up-outline" size={13} color={Colors.button} />
-              <Text style={styles.growthText}>Live</Text>
-            </View>
-          </View>
-
-          <View style={styles.chart}>
-            <View style={styles.chartYAxis}>
-              <Text style={styles.axisText}>{maxBarVal}</Text>
-              <Text style={styles.axisText}>{Math.round(maxBarVal * 0.66)}</Text>
-              <Text style={styles.axisText}>{Math.round(maxBarVal * 0.33)}</Text>
-              <Text style={styles.axisText}>0</Text>
-            </View>
-
-            <View style={styles.chartArea}>
-              <View style={styles.gridLine} />
-              <View style={styles.gridLine} />
-              <View style={styles.gridLine} />
-
-              <View style={styles.barsRow}>
-                {monthlyData.map((item) => {
-                  const height = Math.max(8, (Number(item.rescued || 0) / maxBarVal) * 125);
-                  return (
-                    <View key={item.month} style={styles.barColumn}>
-                      <View style={[styles.bar, { height }]} />
-                      <Text style={styles.barLabel}>{item.month}</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Community impact</Text>
-          <Text style={styles.sectionSubtitle}>How your food rescue helps people</Text>
-        </View>
-
-        <View style={styles.communityCard}>
-          <ImpactRow
-            icon="people-outline"
-            title="People supported"
-            value={peopleHelped}
-            description="Consumers and community members benefited from your listings."
-          />
-          <View style={styles.impactDivider} />
-          <ImpactRow
-            icon="restaurant-outline"
-            title="Food portions rescued"
-            value={portionsRescued}
-            description="Estimated portions saved from going to waste."
-          />
-          <View style={styles.impactDivider} />
-          <ImpactRow
-            icon="leaf-outline"
-            title="Waste prevented"
-            value={`${foodRescuedKg} kg`}
-            description="Surplus food redirected to consumers and food banks."
-          />
-        </View>
-
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Recent impact</Text>
-          <Text style={styles.sectionSubtitle}>Your latest contributions</Text>
-        </View>
-
-        <View style={styles.recentCard}>
-          {recentImpact.length > 0 ? (
-            recentImpact.map((impact, index) => (
-              <View
-                key={impact.id}
-                style={[styles.recentRow, index === recentImpact.length - 1 && styles.recentRowLast]}
-              >
-                <View style={styles.recentIcon}>
-                  <Ionicons name={impact.icon} size={18} color={Colors.primary} />
-                </View>
-                <View style={styles.recentContent}>
-                  <Text style={styles.recentTitle}>{impact.title}</Text>
-                  <Text style={styles.recentDescription}>{impact.description}</Text>
-                </View>
-                <Text style={styles.recentDate}>{impact.date}</Text>
+                <Text style={styles.reviewProduct}>Item: {rev.item}</Text>
+                {rev.comment ? (
+                  <Text style={styles.reviewComment}>"{rev.comment}"</Text>
+                ) : null}
+                <Text style={styles.reviewDate}>{rev.date}</Text>
               </View>
             ))
           ) : (
-            <View style={{ paddingVertical: 24, alignItems: "center" }}>
-              <Text style={styles.recentDescription}>Completed rescues and donations will appear here.</Text>
+            <View style={styles.emptyBox}>
+              <Ionicons
+                name="chatbubble-ellipses-outline"
+                size={24}
+                color={Colors.primary}
+              />
+              <Text style={styles.emptyTitle}>No customer reviews yet</Text>
+              <Text style={styles.emptyDescription}>
+                Completed pickups rated by consumers will appear here.
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* RECENT IMPACT LOG */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Recent Recovery Milestones</Text>
+          <Text style={[styles.sectionSubtitle, { marginBottom: 10 }]}>
+            Completed consumer rescues and Food Bank handoffs
+          </Text>
+
+          {recentImpact.length > 0 ? (
+            recentImpact.map((act, index) => (
+              <View
+                key={act.id || index}
+                style={[
+                  styles.impactRow,
+                  index === recentImpact.length - 1 && {
+                    borderBottomWidth: 0,
+                  },
+                ]}
+              >
+                <View style={styles.impactIcon}>
+                  <Ionicons
+                    name={(act.icon || "leaf-outline") as any}
+                    size={17}
+                    color={Colors.primary}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.impactTitle}>{act.title}</Text>
+                  <Text style={styles.impactDesc}>{act.description}</Text>
+                </View>
+                <Text style={styles.impactDate}>{act.date}</Text>
+              </View>
+            ))
+          ) : (
+            <View style={styles.emptyBox}>
+              <Ionicons name="leaf-outline" size={24} color={Colors.primary} />
+              <Text style={styles.emptyTitle}>No recovery milestones yet</Text>
+              <Text style={styles.emptyDescription}>
+                Confirm customer pickups or fulfill Food Bank donations to build
+                your store&apos;s sustainability log.
+              </Text>
             </View>
           )}
         </View>
@@ -304,34 +443,6 @@ export default function EstablishmentImpact() {
       </ScrollView>
 
       <EstablishmentBottomNav activeTab="Impact" />
-    </SafeAreaView>
-  );
-}
-
-function ImpactStatCard({ icon, value, label, unit }: { icon: any; value: string; label: string; unit: string }) {
-  return (
-    <View style={styles.statCard}>
-      <View style={styles.statIcon}>
-        <Ionicons name={icon} size={20} color={Colors.primary} />
-      </View>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-      <Text style={styles.statUnit}>{unit}</Text>
-    </View>
-  );
-}
-
-function ImpactRow({ icon, title, value, description }: { icon: any; title: string; value: string; description: string }) {
-  return (
-    <View style={styles.impactRow}>
-      <View style={styles.impactRowIcon}>
-        <Ionicons name={icon} size={20} color={Colors.primary} />
-      </View>
-      <View style={styles.impactRowContent}>
-        <Text style={styles.impactRowTitle}>{title}</Text>
-        <Text style={styles.impactRowDescription}>{description}</Text>
-      </View>
-      <Text style={styles.impactRowValue}>{value}</Text>
     </View>
   );
 }
@@ -340,64 +451,49 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 28 },
   pageHeader: { marginBottom: 16 },
-  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, lineHeight: 31, color: Colors.primary2 },
-  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 2 },
-  ratingHeroCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 16, marginBottom: 20 },
-  ratingHeroTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  ratingHeroLabel: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
-  ratingHeroScore: { fontFamily: "PoppinsBold", fontSize: 32, color: Colors.primary },
-  ratingHeroCount: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
-  reviewItemCard: { backgroundColor: "#F8FAF9", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: Colors.border },
-  reviewConsumerName: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
-  reviewDateText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon },
-  reviewItemBadge: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: Colors.primary, marginTop: 2 },
-  reviewCommentText: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 4, fontStyle: "italic" },
-  impactHero: { backgroundColor: Colors.primary, borderRadius: 14, padding: 18, marginBottom: 24 },
-  heroIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center", marginBottom: 12 },
-  heroTitle: { fontFamily: "PoppinsBold", fontSize: 19, color: Colors.white },
+  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
+  pageSubTitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2 },
+  heroCard: { backgroundColor: Colors.primary, borderRadius: 16, padding: 18, marginBottom: 14 },
+  heroTopRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  heroBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 9.5, color: "rgba(255,255,255,0.8)", letterSpacing: 0.6 },
+  heroBigValue: { fontFamily: "PoppinsBold", fontSize: 30, color: Colors.white, marginTop: 2 },
+  heroSubLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: "rgba(255,255,255,0.85)" },
+  heroIconCircle: { width: 52, height: 52, borderRadius: 26, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center" },
   heroDivider: { height: 1, backgroundColor: "rgba(255,255,255,0.18)", marginVertical: 14 },
-  heroBottom: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-  heroNumber: { fontFamily: "PoppinsBold", fontSize: 22, color: Colors.white },
-  heroLabel: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: "#D8E3DD", marginTop: 1 },
-  heroLeafIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
-  sectionHeader: { marginBottom: 10 },
-  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 16, color: Colors.primary2 },
-  sectionSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 1 },
-  statsGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", marginBottom: 24 },
-  statCard: { width: "48.5%", backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 14, marginBottom: 10 },
-  statIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginBottom: 10 },
-  statValue: { fontFamily: "PoppinsBold", fontSize: 20, color: Colors.primary },
-  statLabel: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary2, marginTop: 2 },
-  statUnit: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 1 },
-  chartCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 16, marginBottom: 24 },
-  chartTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
-  chartTotal: { fontFamily: "PoppinsBold", fontSize: 20, color: Colors.primary },
-  chartLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 1 },
-  growthBadge: { flexDirection: "row", alignItems: "center", backgroundColor: "#E7F0E9", borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6 },
-  growthText: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.button, marginLeft: 4 },
-  chart: { height: 165, flexDirection: "row" },
-  chartYAxis: { width: 35, height: 135, justifyContent: "space-between", alignItems: "flex-start" },
-  axisText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
-  chartArea: { flex: 1, height: 150, position: "relative", justifyContent: "flex-end" },
-  gridLine: { position: "absolute", left: 0, right: 0, height: 1, backgroundColor: Colors.border },
-  barsRow: { height: 150, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-around", paddingHorizontal: 8 },
-  barColumn: { height: 150, alignItems: "center", justifyContent: "flex-end" },
-  bar: { width: 26, borderTopLeftRadius: 6, borderTopRightRadius: 6, backgroundColor: Colors.button, marginBottom: 8 },
-  barLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
-  communityCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 14, paddingVertical: 6, marginBottom: 24 },
-  impactRow: { flexDirection: "row", alignItems: "center", paddingVertical: 13 },
-  impactRowIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 12 },
-  impactRowContent: { flex: 1 },
-  impactRowTitle: { fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.primary2 },
-  impactRowDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 15, marginTop: 2 },
-  impactRowValue: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.primary },
-  impactDivider: { height: 1, backgroundColor: Colors.border },
-  recentCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 14, marginBottom: 24 },
-  recentRow: { minHeight: 72, flexDirection: "row", alignItems: "center", borderBottomWidth: 1, borderBottomColor: Colors.border },
-  recentRowLast: { borderBottomWidth: 0 },
-  recentIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 11 },
-  recentContent: { flex: 1 },
-  recentTitle: { fontFamily: "PoppinsMedium", fontSize: 12.5, color: Colors.primary2 },
-  recentDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 15, marginTop: 2, paddingRight: 6 },
-  recentDate: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, alignSelf: "flex-start", marginTop: 18 },
+  heroMetricsRow: { flexDirection: "row", justifyContent: "space-between" },
+  heroMetricItem: { flex: 1, alignItems: "center" },
+  heroMetricNumber: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.white },
+  heroMetricLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: "rgba(255,255,255,0.8)", marginTop: 1 },
+  statsRow: { flexDirection: "row", gap: 10, marginBottom: 16 },
+  statCard: { flex: 1, backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 13, flexDirection: "row", alignItems: "center", gap: 10 },
+  statIcon: { width: 38, height: 38, borderRadius: 12, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center" },
+  statNumber: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary2 },
+  statLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
+  sectionCard: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1, borderColor: Colors.border, padding: 16, marginBottom: 16 },
+  cardHeaderRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 },
+  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2 },
+  sectionSubtitle: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1 },
+  pillBadge: { backgroundColor: "#E8EFEA", paddingHorizontal: 9, paddingVertical: 4, borderRadius: 8 },
+  pillBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
+  barChartRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", height: 155, paddingTop: 18 },
+  barCol: { flex: 1, alignItems: "center" },
+  barValText: { fontFamily: "PoppinsMedium", fontSize: 9, color: Colors.primary1, marginBottom: 4 },
+  barTrack: { width: 24, height: 110, backgroundColor: "#F2F5F3", borderRadius: 6, justifyContent: "flex-end", overflow: "hidden" },
+  barFill: { width: "100%", borderRadius: 6 },
+  barMonthText: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, marginTop: 6 },
+  reviewItem: { backgroundColor: "#F7F9F7", borderRadius: 12, borderWidth: 1, borderColor: Colors.border, padding: 12, marginBottom: 8 },
+  reviewHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  reviewAuthor: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
+  reviewStars: { fontFamily: "PoppinsBold", fontSize: 12, color: "#D97706" },
+  reviewProduct: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: Colors.primary, marginTop: 2 },
+  reviewComment: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary2, marginTop: 4, lineHeight: 16 },
+  reviewDate: { fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.placeholder, marginTop: 4 },
+  impactRow: { flexDirection: "row", alignItems: "center", paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: Colors.border, gap: 10 },
+  impactIcon: { width: 34, height: 34, borderRadius: 17, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center" },
+  impactTitle: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.primary2 },
+  impactDesc: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 1 },
+  impactDate: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.placeholder },
+  emptyBox: { paddingVertical: 24, alignItems: "center" },
+  emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.primary2, marginTop: 6 },
+  emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, textAlign: "center", marginTop: 2 },
 });

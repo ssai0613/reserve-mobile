@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, usePathname } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import {
   DeviceEventEmitter,
   Platform,
@@ -15,8 +15,29 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 
+export type MerchantTabName =
+  | "Home"
+  | "Listings"
+  | "Orders"
+  | "Donation"
+  | "Earnings"
+  | "Impact"
+  | "Profile";
+
+// Indicates whether a Merchant tab is rendered inside the persistent _layout.tsx shell
+export const MerchantShellDirectRenderContext = createContext<boolean>(false);
+
+export const useIsInsideMerchantShell = () =>
+  useContext(MerchantShellDirectRenderContext);
+
+// Instant 0ms tab switcher (no full page reload)
+export const switchMerchantTab = (tab: MerchantTabName) => {
+  DeviceEventEmitter.emit("merchant_switch_tab", { tab });
+};
+
 export const MERCHANT_READ_NOTIFS_KEY = "@reserve_merchant_read_notifs";
-export const MERCHANT_DISMISSED_NOTIFS_KEY = "@reserve_merchant_dismissed_notifs";
+export const MERCHANT_DISMISSED_NOTIFS_KEY =
+  "@reserve_merchant_dismissed_notifs";
 
 export const getAppStorage = async (key: string): Promise<string | null> => {
   if (!key || typeof key !== "string" || key.trim() === "") return null;
@@ -42,7 +63,18 @@ export const setAppStorage = async (
   }
 };
 
-export function EstablishmentHeader() {
+export function EstablishmentHeader({
+  isShellHeader = false,
+  activeTab,
+  onSelectTab,
+}: {
+  isShellHeader?: boolean;
+  activeTab?: MerchantTabName;
+  onSelectTab?: (tab: MerchantTabName) => void;
+}) {
+  const isInsideShell = useIsInsideMerchantShell();
+  if (isInsideShell && !isShellHeader) return null;
+
   const pathname = usePathname();
   const [busName, setBusName] = useState("Merchant Portal");
   const [merchType, setMerchType] = useState("Establishment");
@@ -131,14 +163,33 @@ export function EstablishmentHeader() {
     } catch (e) {}
   };
 
-  const isProfileActive = pathname?.includes("/establishment/profile");
+  const isProfileActive =
+    activeTab === "Profile" || pathname?.includes("/establishment/profile");
+
+  const handleGoHome = () => {
+    if (onSelectTab) {
+      onSelectTab("Home");
+    } else {
+      switchMerchantTab("Home");
+      router.replace("/establishment/dashboard" as any);
+    }
+  };
+
+  const handleGoProfile = () => {
+    if (onSelectTab) {
+      onSelectTab("Profile");
+    } else {
+      switchMerchantTab("Profile");
+      router.replace("/establishment/profile" as any);
+    }
+  };
 
   return (
     <View style={styles.header}>
       <TouchableOpacity
         style={styles.brandTouchable}
         activeOpacity={0.75}
-        onPress={() => router.replace("/establishment/dashboard" as any)}
+        onPress={handleGoHome}
       >
         <View style={styles.brandIconBox}>
           <Ionicons name="storefront-outline" size={20} color={Colors.primary} />
@@ -180,7 +231,7 @@ export function EstablishmentHeader() {
             isProfileActive && styles.profileBtnActive,
           ]}
           activeOpacity={0.8}
-          onPress={() => router.replace("/establishment/profile" as any)}
+          onPress={handleGoProfile}
         >
           <Ionicons
             name={isProfileActive ? "person" : "person-outline"}
@@ -195,16 +246,16 @@ export function EstablishmentHeader() {
 
 export function EstablishmentBottomNav({
   activeTab,
+  isShellNav = false,
+  onSelectTab,
 }: {
-  activeTab?:
-    | "Home"
-    | "Listings"
-    | "Orders"
-    | "Donation"
-    | "Earnings"
-    | "Impact"
-    | "Profile";
+  activeTab?: MerchantTabName;
+  isShellNav?: boolean;
+  onSelectTab?: (tab: MerchantTabName) => void;
 }) {
+  const isInsideShell = useIsInsideMerchantShell();
+  if (isInsideShell && !isShellNav) return null;
+
   const insets = useSafeAreaInsets();
   const [merchType, setMerchType] = useState("Bakeshop");
 
@@ -218,6 +269,15 @@ export function EstablishmentBottomNav({
   const listingsRoute = merchType.toLowerCase().includes("market")
     ? "/establishment/market_listing"
     : "/establishment/listing";
+
+  const handleTabPress = (tab: MerchantTabName, fallbackRoute: string) => {
+    if (onSelectTab) {
+      onSelectTab(tab);
+    } else {
+      switchMerchantTab(tab);
+      router.replace(fallbackRoute as any);
+    }
+  };
 
   return (
     <View
@@ -233,37 +293,37 @@ export function EstablishmentBottomNav({
         icon={activeTab === "Home" ? "home" : "home-outline"}
         label="Home"
         active={activeTab === "Home"}
-        onPress={() => router.replace("/establishment/dashboard" as any)}
+        onPress={() => handleTabPress("Home", "/establishment/dashboard")}
       />
       <BottomNavItem
         icon={activeTab === "Listings" ? "restaurant" : "restaurant-outline"}
         label="Listings"
         active={activeTab === "Listings"}
-        onPress={() => router.replace(listingsRoute as any)}
+        onPress={() => handleTabPress("Listings", listingsRoute)}
       />
       <BottomNavItem
         icon={activeTab === "Orders" ? "receipt" : "receipt-outline"}
         label="Orders"
         active={activeTab === "Orders"}
-        onPress={() => router.replace("/establishment/orders" as any)}
+        onPress={() => handleTabPress("Orders", "/establishment/orders")}
       />
       <BottomNavItem
         icon={activeTab === "Donation" ? "gift" : "gift-outline"}
         label="Donation"
         active={activeTab === "Donation"}
-        onPress={() => router.replace("/establishment/donation" as any)}
+        onPress={() => handleTabPress("Donation", "/establishment/donation")}
       />
       <BottomNavItem
         icon={activeTab === "Earnings" ? "wallet" : "wallet-outline"}
         label="Earnings"
         active={activeTab === "Earnings"}
-        onPress={() => router.replace("/establishment/earnings" as any)}
+        onPress={() => handleTabPress("Earnings", "/establishment/earnings")}
       />
       <BottomNavItem
         icon={activeTab === "Impact" ? "leaf" : "leaf-outline"}
         label="Impact"
         active={activeTab === "Impact"}
-        onPress={() => router.replace("/establishment/impact" as any)}
+        onPress={() => handleTabPress("Impact", "/establishment/impact")}
       />
     </View>
   );

@@ -4,23 +4,24 @@ import { router, Stack } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Platform,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  DeviceEventEmitter,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
-    PhoneOtpVerifier,
-    ReserveAlertModal,
-    ReserveConfirmModal,
-    ReserveModalState,
+  PhoneOtpVerifier,
+  ReserveAlertModal,
+  ReserveConfirmModal,
+  ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
 
 const getStorageItem = async (key: string) => {
@@ -170,6 +171,7 @@ export default function PrivacySecurity() {
       await setStorageItem("user_email", cleanEmail);
       setCurrentEmail(cleanEmail);
       setNewEmail("");
+      DeviceEventEmitter.emit("consumer_profile_updated");
       showModal(
         "Email Updated",
         res.data?.message ||
@@ -209,6 +211,7 @@ export default function PrivacySecurity() {
       setCurrentPhone(newPhone.trim());
       setNewPhone("");
       setIsPhoneVerified(false);
+      DeviceEventEmitter.emit("consumer_profile_updated");
       showModal(
         "Phone Number Updated",
         res.data?.message ||

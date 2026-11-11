@@ -20,6 +20,7 @@ import {
   getAppStorage,
   MERCHANT_DISMISSED_NOTIFS_KEY,
   MERCHANT_READ_NOTIFS_KEY,
+  switchMerchantTab,
 } from "../components/EstablishmentNav";
 
 type NotificationItem = {
@@ -185,25 +186,33 @@ export default function EstablishmentNotifications() {
       return;
     }
 
-    if (item.target_route) {
-      router.push(item.target_route as any);
-      return;
-    }
-    if (item.type === "order") {
-      router.push("/establishment/orders");
-    } else if (item.type === "review") {
-      router.push("/establishment/impact");
-    } else if (item.type === "donation") {
-      router.push("/establishment/donation");
-    } else if (item.type === "expiry_1hr" || item.type === "suggested_expiry") {
-      const mType = (await getAppStorage("merch_type")) || "";
-      if (mType.toLowerCase().includes("market")) {
-        router.push("/establishment/market_listing" as any);
-      } else {
-        router.push("/establishment/listing");
-      }
+    const route = String(item.target_route || "");
+    if (route.includes("/orders") || item.type === "order") {
+      DeviceEventEmitter.emit("merchant_orders_updated");
+      switchMerchantTab("Orders");
+    } else if (route.includes("/impact") || item.type === "review") {
+      switchMerchantTab("Impact");
+    } else if (route.includes("/donation") || item.type === "donation") {
+      DeviceEventEmitter.emit("merchant_donations_updated");
+      switchMerchantTab("Donation");
+    } else if (route.includes("/earnings")) {
+      switchMerchantTab("Earnings");
+    } else if (
+      route.includes("/listing") ||
+      route.includes("/market_listing") ||
+      item.type === "expiry_1hr" ||
+      item.type === "suggested_expiry"
+    ) {
+      DeviceEventEmitter.emit("merchant_listings_updated");
+      switchMerchantTab("Listings");
     } else {
-      router.push("/establishment/profile");
+      switchMerchantTab("Profile");
+    }
+
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/establishment/dashboard" as any);
     }
   };
 

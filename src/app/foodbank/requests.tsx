@@ -1,9 +1,9 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { Stack, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  DeviceEventEmitter,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -18,7 +18,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -30,6 +29,7 @@ import {
   FoodBankHeader,
   FoodBankMapModal,
   getFoodBankStorage,
+  useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
 
 type RequestLine = {
@@ -75,10 +75,18 @@ const FALLBACK_TYPES = [
   "Other",
 ];
 
+let cachedFbRequestsMemory: ConsolidatedRequest[] = [];
+let cachedFbFoodTypesMemory: string[] = FALLBACK_TYPES;
+
 export default function FoodBankRequestsScreen() {
-  const [requests, setRequests] = useState<ConsolidatedRequest[]>([]);
-  const [foodTypes, setFoodTypes] = useState<string[]>(FALLBACK_TYPES);
-  const [loading, setLoading] = useState(true);
+  const isInsideShell = useIsInsideFoodBankShell();
+  if (!isInsideShell) return null;
+
+  const [requests, setRequests] = useState<ConsolidatedRequest[]>(
+    cachedFbRequestsMemory
+  );
+  const [foodTypes, setFoodTypes] = useState<string[]>(cachedFbFoodTypesMemory);
+  const [loading, setLoading] = useState(cachedFbRequestsMemory.length === 0);
   const [refreshing, setRefreshing] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -86,12 +94,10 @@ export default function FoodBankRequestsScreen() {
     "All" | "Pending" | "Ongoing" | "Successful" | "Closed"
   >("All");
 
-  // View Summary & Contact Modal State
   const [selectedReq, setSelectedReq] = useState<ConsolidatedRequest | null>(
     null
   );
 
-  // Post General Request Modal State
   const [newModalOpen, setNewModalOpen] = useState(false);
   const [newType, setNewType] = useState(FALLBACK_TYPES[0]);
   const [newQty, setNewQty] = useState("10");
@@ -99,7 +105,6 @@ export default function FoodBankRequestsScreen() {
   const [newAdditional, setNewAdditional] = useState("");
   const [submittingNew, setSubmittingNew] = useState(false);
 
-  // Map Modal State
   const [mapTarget, setMapTarget] = useState<{
     name: string;
     address: string;
@@ -107,7 +112,6 @@ export default function FoodBankRequestsScreen() {
     lng: number;
   } | null>(null);
 
-  // Confirm & Alert Modals
   const [confirmState, setConfirmState] = useState<{
     visible: boolean;
     title: string;
@@ -149,8 +153,11 @@ export default function FoodBankRequestsScreen() {
         ),
         api.get("donations/food-types/").catch(() => null),
       ]);
-      setRequests(Array.isArray(reqRes.data) ? reqRes.data : []);
+      const nextReqs = Array.isArray(reqRes.data) ? reqRes.data : [];
+      cachedFbRequestsMemory = nextReqs;
+      setRequests(nextReqs);
       if (typesRes?.data?.food_types?.length) {
+        cachedFbFoodTypesMemory = typesRes.data.food_types;
         setFoodTypes(typesRes.data.food_types);
       }
     } catch (e) {
@@ -161,11 +168,14 @@ export default function FoodBankRequestsScreen() {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
+  useEffect(() => {
+    loadRequests();
+
+    const reqSub = DeviceEventEmitter.addListener("fb_requests_updated", () => {
       loadRequests();
-    }, [loadRequests])
-  );
+    });
+    return () => reqSub.remove();
+  }, [loadRequests]);
 
   const visibleRequests = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -218,6 +228,8 @@ export default function FoodBankRequestsScreen() {
           });
           setSelectedReq(null);
           await loadRequests();
+          DeviceEventEmitter.emit("fb_requests_updated");
+          DeviceEventEmitter.emit("fb_notifs_updated");
           showModal(
             action === "withdraw"
               ? "Request Withdrawn"
@@ -271,6 +283,8 @@ export default function FoodBankRequestsScreen() {
       setNewReason("");
       setNewAdditional("");
       await loadRequests();
+      DeviceEventEmitter.emit("fb_requests_updated");
+      DeviceEventEmitter.emit("fb_notifs_updated");
       showModal(
         "General Request Posted!",
         "Partner merchants can now see and fulfill your request.",
@@ -284,9 +298,7 @@ export default function FoodBankRequestsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <FoodBankHeader />
 
       <View style={styles.topSection}>
@@ -501,9 +513,7 @@ export default function FoodBankRequestsScreen() {
         />
       )}
 
-      {/* =========================================================
-          MODAL 1: VIEW REQUEST SUMMARY & MERCHANT CONTACT
-      ========================================================= */}
+      {/* MODAL 1: VIEW REQUEST SUMMARY & MERCHANT CONTACT */}
       <Modal
         visible={!!selectedReq}
         transparent
@@ -744,9 +754,7 @@ export default function FoodBankRequestsScreen() {
         </View>
       </Modal>
 
-      {/* =========================================================
-          MODAL 2: POST GENERAL REQUEST
-      ========================================================= */}
+      {/* MODAL 2: POST GENERAL REQUEST */}
       <Modal
         visible={newModalOpen}
         transparent
@@ -876,7 +884,7 @@ export default function FoodBankRequestsScreen() {
       />
 
       <FoodBankBottomNav activeTab="Requests" />
-    </SafeAreaView>
+    </View>
   );
 }
 

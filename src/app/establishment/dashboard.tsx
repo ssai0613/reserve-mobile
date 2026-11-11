@@ -4,11 +4,12 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import { router, Stack } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  DeviceEventEmitter,
   Dimensions,
   Image,
   KeyboardAvoidingView,
@@ -25,7 +26,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -34,9 +34,23 @@ import {
 import {
   EstablishmentBottomNav,
   EstablishmentHeader,
+  switchMerchantTab,
+  useIsInsideMerchantShell,
 } from "../components/EstablishmentNav";
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
+
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
+
+let cachedDashboardMemory = {
+  establishmentName: "Establishment Portal",
+  foodListings: [] as any[],
+  flaggedCount: 0,
+  completedCount: 0,
+  rescuedKg: 0,
+  notifications: [] as any[],
+};
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") {
@@ -46,15 +60,26 @@ const getStorageItem = async (key: string): Promise<string | null> => {
 };
 
 export default function EstablishmentDashboard() {
-  const [merchantId, setMerchantId] = useState<string>("1");
+  const isInsideShell = useIsInsideMerchantShell();
+  if (!isInsideShell) return null;
+
+  const [merchantId, setMerchantId] = useState<string>("");
   const [establishmentName, setEstablishmentName] = useState<string>(
-    "Establishment Portal"
+    cachedDashboardMemory.establishmentName
   );
-  const [foodListings, setFoodListings] = useState<any[]>([]);
-  const [flaggedCount, setFlaggedCount] = useState(0);
-  const [completedCount, setCompletedCount] = useState(0);
-  const [rescuedKg, setRescuedKg] = useState(0);
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [foodListings, setFoodListings] = useState<any[]>(
+    cachedDashboardMemory.foodListings
+  );
+  const [flaggedCount, setFlaggedCount] = useState(
+    cachedDashboardMemory.flaggedCount
+  );
+  const [completedCount, setCompletedCount] = useState(
+    cachedDashboardMemory.completedCount
+  );
+  const [rescuedKg, setRescuedKg] = useState(cachedDashboardMemory.rescuedKg);
+  const [notifications, setNotifications] = useState<any[]>(
+    cachedDashboardMemory.notifications
+  );
   const [refreshing, setRefreshing] = useState(false);
 
   const [modalAlert, setModalAlert] = useState<ReserveModalState>({
@@ -142,17 +167,53 @@ export default function EstablishmentDashboard() {
 
   useEffect(() => {
     initDashboard();
+
+    const listSub = DeviceEventEmitter.addListener(
+      "merchant_listings_updated",
+      () => {
+        initDashboard();
+      }
+    );
+    const ordSub = DeviceEventEmitter.addListener(
+      "merchant_orders_updated",
+      () => {
+        initDashboard();
+      }
+    );
+    const profSub = DeviceEventEmitter.addListener(
+      "merchant_profile_updated",
+      () => {
+        initDashboard();
+      }
+    );
+
+    return () => {
+      listSub.remove();
+      ordSub.remove();
+      profSub.remove();
+    };
   }, []);
 
   const initDashboard = async () => {
-    const storedId = (await getStorageItem("profile_id")) || "1";
+    const storedId = await getStorageItem("profile_id");
+    const storedEmail = (await getStorageItem("user_email")) || "";
     const storedName = (await getStorageItem("entity_name")) || "";
-    setMerchantId(storedId);
-    if (storedName) setEstablishmentName(storedName);
+
+    if (!storedId && !storedEmail) {
+      router.replace("/consumer");
+      return;
+    }
+
+    const resolvedId = storedId || "0";
+    setMerchantId(resolvedId);
+    if (storedName) {
+      cachedDashboardMemory.establishmentName = storedName;
+      setEstablishmentName(storedName);
+    }
 
     await Promise.all([
-      fetchListings(storedId, storedName),
-      fetchNotifications(storedId),
+      fetchListings(resolvedId, storedName),
+      fetchNotifications(resolvedId),
     ]);
   };
 
@@ -164,8 +225,15 @@ export default function EstablishmentDashboard() {
 
   const fetchNotifications = async (mId = merchantId) => {
     try {
-      const response = await api.get(`listings/notifications/?merchant=${mId}`);
-      setNotifications(response.data.notifications || response.data || []);
+      const storedEmail = (await getStorageItem("user_email")) || "";
+      const response = await api.get(
+        `listings/notifications/?merchant=${mId}&email=${encodeURIComponent(
+          storedEmail
+        )}`
+      );
+      const list = response.data.notifications || response.data || [];
+      cachedDashboardMemory.notifications = list;
+      setNotifications(list);
     } catch (error) {
       console.error("Failed to fetch notifications:", error);
     }
@@ -175,31 +243,38 @@ export default function EstablishmentDashboard() {
     mId = merchantId,
     fallbackName = establishmentName
   ) => {
+    const storedEmail = (await getStorageItem("user_email")) || "";
     try {
-      const storedEmail = (await getStorageItem("user_email")) || "";
       const summaryRes = await api.get(
         `listings/merchant-portal/${mId}/?email=${encodeURIComponent(
           storedEmail
         )}`
       );
-      setCompletedCount(
-        Number(summaryRes.data?.earnings?.transactions_completed || 0)
+      const cCount = Number(
+        summaryRes.data?.earnings?.transactions_completed || 0
       );
-      setRescuedKg(
+      const rKg =
         parseFloat(
           String(summaryRes.data?.impact?.food_rescued_kg || "0").replace(
             /,/g,
             ""
           )
-        ) || 0
-      );
+        ) || 0;
+      cachedDashboardMemory.completedCount = cCount;
+      cachedDashboardMemory.rescuedKg = rKg;
+      setCompletedCount(cCount);
+      setRescuedKg(rKg);
     } catch (e) {
       setCompletedCount(0);
       setRescuedKg(0);
     }
 
     try {
-      const response = await api.get(`listings/establishment/?merchant=${mId}`);
+      const response = await api.get(
+        `listings/establishment/?merchant=${mId}&email=${encodeURIComponent(
+          storedEmail
+        )}`
+      );
       const rawListings = response.data.listings || response.data || [];
 
       if (
@@ -207,6 +282,7 @@ export default function EstablishmentDashboard() {
         rawListings[0].merchant_name &&
         !fallbackName
       ) {
+        cachedDashboardMemory.establishmentName = rawListings[0].merchant_name;
         setEstablishmentName(rawListings[0].merchant_name);
       }
 
@@ -235,7 +311,7 @@ export default function EstablishmentDashboard() {
           price: Number(item.price || 0),
           originalPrice: Number(item.original_price || 0),
           floorPrice: Number(item.floor_price || 0),
-          distance: "0.5 km",
+          distance: item.distance || "Storefront",
           time: item.status === "Draft" ? "Not published" : "Active",
           image:
             item.image_path ||
@@ -266,9 +342,11 @@ export default function EstablishmentDashboard() {
       });
 
       const flaggedItems = realData.filter((i: any) => i.status === "Flagged");
+      cachedDashboardMemory.flaggedCount = flaggedItems.length;
       setFlaggedCount(flaggedItems.length);
 
       realData.sort((a: any, b: any) => a.expiryTimestamp - b.expiryTimestamp);
+      cachedDashboardMemory.foodListings = realData;
       setFoodListings(realData);
     } catch (error) {
       console.error("Failed to pull from DB:", error);
@@ -719,12 +797,10 @@ export default function EstablishmentDashboard() {
       if (
         imageUri &&
         !imageUri.includes("unsplash") &&
-        !imageUri.startsWith("http")
+        !imageUri.startsWith("http") &&
+        SUPABASE_URL &&
+        SUPABASE_ANON_KEY
       ) {
-        const supabaseUrl = "https://pxyigbutwupyslndoplm.supabase.co";
-        const supabaseKey =
-          "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4eWlnYnV0d3VweXNsbmRvcGxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczOTEzNjcsImV4cCI6MjEwMjk2NzM2N30.r8UjIGq7SiVNPJ87zs_TnHBbRbaVfSk59gmY3jSrdrY";
-
         const fileName = `${Date.now()}_photo.jpg`;
 
         try {
@@ -748,12 +824,12 @@ export default function EstablishmentDashboard() {
           }
 
           const uploadRes = await fetch(
-            `${supabaseUrl}/storage/v1/object/food-images/${fileName}`,
+            `${SUPABASE_URL}/storage/v1/object/food-images/${fileName}`,
             {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${supabaseKey}`,
-                apikey: supabaseKey,
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                apikey: SUPABASE_ANON_KEY,
                 "Content-Type": "image/jpeg",
                 "x-upsert": "true",
               },
@@ -762,7 +838,7 @@ export default function EstablishmentDashboard() {
           );
 
           if (uploadRes.ok) {
-            finalImageUrl = `${supabaseUrl}/storage/v1/object/public/food-images/${fileName}`;
+            finalImageUrl = `${SUPABASE_URL}/storage/v1/object/public/food-images/${fileName}`;
           }
         } catch (uploadErr) {
           console.error("Error processing image upload:", uploadErr);
@@ -774,6 +850,10 @@ export default function EstablishmentDashboard() {
         pricingMode === "fixed" ? normalPrice : originalPrice;
       const finalFloorPrice =
         pricingMode === "fixed" ? normalPrice : floorPrice;
+
+      const activeMerchId =
+        merchantId || (await getStorageItem("profile_id")) || "0";
+      const storedEmail = (await getStorageItem("user_email")) || "";
 
       const payload = {
         prod_name: foodName,
@@ -789,7 +869,8 @@ export default function EstablishmentDashboard() {
         category: getCategoryId(category),
         secondary_classification: secondaryClass,
         pricing_mode: pricingMode,
-        merchant: Number(merchantId) || 1,
+        merchant: Number(activeMerchId),
+        email: storedEmail,
         threshold: 1,
         status: finalStatus,
         preparation_date: preparationDate.replace(/\u202f/g, " "),
@@ -805,7 +886,8 @@ export default function EstablishmentDashboard() {
         await api.post("listings/create/", payload);
       }
 
-      await fetchListings(merchantId, establishmentName);
+      await fetchListings(activeMerchId, establishmentName);
+      DeviceEventEmitter.emit("merchant_listings_updated");
       setListingModalVisible(false);
       setEditingListing(null);
       resetForm();
@@ -827,9 +909,12 @@ export default function EstablishmentDashboard() {
     }
     try {
       await api.delete(`listings/delete/${id}/`);
-      setFoodListings((currentListings) =>
-        currentListings.filter((item) => item.id !== id)
-      );
+      setFoodListings((currentListings) => {
+        const next = currentListings.filter((item) => item.id !== id);
+        cachedDashboardMemory.foodListings = next;
+        return next;
+      });
+      DeviceEventEmitter.emit("merchant_listings_updated");
       setViewModalVisible(false);
       setSelectedListing(null);
     } catch (error) {
@@ -839,9 +924,7 @@ export default function EstablishmentDashboard() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <EstablishmentHeader />
 
       <ScrollView
@@ -913,7 +996,7 @@ export default function EstablishmentDashboard() {
 
           <TouchableOpacity
             activeOpacity={0.7}
-            onPress={() => router.push("/establishment/listing")}
+            onPress={() => switchMerchantTab("Listings")}
           >
             <Text style={styles.viewAll}>View all</Text>
           </TouchableOpacity>
@@ -1121,7 +1204,9 @@ export default function EstablishmentDashboard() {
                   )}
 
                   <InputLabel text="Secondary Classification (Composition)" />
-                  <View style={{ flexDirection: "row", gap: 7, marginBottom: 8 }}>
+                  <View
+                    style={{ flexDirection: "row", gap: 7, marginBottom: 8 }}
+                  >
                     {(["Plain", "Sweet", "Egg-Based"] as const).map((sec) => (
                       <TouchableOpacity
                         key={sec}
@@ -1546,7 +1631,7 @@ export default function EstablishmentDashboard() {
 
                 <View style={styles.viewSection}>
                   <Text style={styles.viewSectionTitle}>
-                    Storage & preparation
+                    Storage &amp; preparation
                   </Text>
                   <DetailRow
                     icon="calendar-outline"
@@ -1598,7 +1683,9 @@ export default function EstablishmentDashboard() {
                         size={17}
                         color={Colors.white}
                       />
-                      <Text style={styles.viewEditButtonText}>Edit listing</Text>
+                      <Text style={styles.viewEditButtonText}>
+                        Edit listing
+                      </Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -1615,7 +1702,7 @@ export default function EstablishmentDashboard() {
         type={modalAlert.type}
         onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

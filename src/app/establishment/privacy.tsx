@@ -1,309 +1,269 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, Stack } from "expo-router";
-import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Platform,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  DeviceEventEmitter,
+  Modal,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
-    PhoneOtpVerifier,
-    ReserveAlertModal,
-    ReserveConfirmModal,
-    ReserveModalState,
-} from "../components/CebuRegistrationHelpers";
+  getAppStorage,
+  MERCHANT_DISMISSED_NOTIFS_KEY,
+  MERCHANT_READ_NOTIFS_KEY,
+  switchMerchantTab,
+} from "../components/EstablishmentNav";
 
-const getStorageItem = async (key: string) => {
-  if (Platform.OS === "web") return localStorage.getItem(key);
-  return await SecureStore.getItemAsync(key);
+type NotificationItem = {
+  id: string;
+  title: string;
+  description: string;
+  time: string;
+  sort_ts?: number;
+  target_route?: string;
+  audience?: string;
+  type:
+    | "order"
+    | "review"
+    | "donation"
+    | "system"
+    | "expiry_1hr"
+    | "suggested_expiry"
+    | "announcement";
 };
 
-const setStorageItem = async (key: string, value: string) => {
-  if (Platform.OS === "web") {
-    localStorage.setItem(key, value);
-  } else {
-    await SecureStore.setItemAsync(key, value);
-  }
-};
-
-const clearMerchantStorage = async () => {
-  const keys = [
-    "access",
-    "refresh",
-    "user_role",
-    "user_email",
-    "profile_id",
-    "entity_name",
-    "merch_type",
-    "account_status",
-  ];
-  for (const k of keys) {
-    if (Platform.OS === "web") localStorage.removeItem(k);
-    else await SecureStore.deleteItemAsync(k);
-  }
-};
-
-const maskPhoneNumber = (rawPhone: string): string => {
-  if (!rawPhone || rawPhone === "Not Provided") return "09xxxxxxxxx";
-  let digits = rawPhone.replace(/\D/g, "");
-  if (digits.startsWith("63") && digits.length >= 11) {
-    digits = "0" + digits.slice(2);
-  } else if (digits.startsWith("9") && digits.length === 10) {
-    digits = "0" + digits;
-  }
-  if (digits.length >= 5) {
-    const lastThree = digits.slice(-3);
-    const middleLength = Math.max(6, digits.length - 5);
-    return `09${"x".repeat(middleLength)}${lastThree}`;
-  }
-  return "09xxxxxx000";
-};
-
-export default function MerchantPrivacySecurity() {
-  const [merchantId, setMerchantId] = useState("1");
+export default function EstablishmentNotifications() {
+  const [merchId, setMerchId] = useState("1");
+  const [activeTab, setActiveTab] = useState<"activity" | "announcements">(
+    "activity"
+  );
+  const [activityItems, setActivityItems] = useState<NotificationItem[]>([]);
+  const [announcementItems, setAnnouncementItems] = useState<
+    NotificationItem[]
+  >([]);
+  const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
-
-  // 1. Email Update State
-  const [currentEmail, setCurrentEmail] = useState("merchant@email.com");
-  const [newEmail, setNewEmail] = useState("");
-  const [savingEmail, setSavingEmail] = useState(false);
-
-  // 2. Phone Update State (SMS OTP)
-  const [currentPhone, setCurrentPhone] = useState("09xxxxxxxxx");
-  const [newPhone, setNewPhone] = useState("");
-  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
-  const [savingPhone, setSavingPhone] = useState(false);
-
-  // 3. Password Change State
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [showCurrent, setShowCurrent] = useState(false);
-  const [showNew, setShowNew] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [savingPassword, setSavingPassword] = useState(false);
-
-  // 4. Soft Delete / Deactivate Account Modal State
-  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
-
-  const [modalAlert, setModalAlert] = useState<ReserveModalState>({
-    visible: false,
-    title: "",
-    message: "",
-    type: "info",
-  });
-
-  const showModal = (
-    title: string,
-    message: string,
-    type: "success" | "error" | "info" | "warning" = "info"
-  ) => setModalAlert({ visible: true, title, message, type });
+  const [selectedBroadcast, setSelectedBroadcast] =
+    useState<NotificationItem | null>(null);
 
   useEffect(() => {
-    loadSecurityData();
+    loadAllFeeds();
   }, []);
 
-  const loadSecurityData = async () => {
+  const loadAllFeeds = async () => {
     try {
-      const storedId = (await getStorageItem("profile_id")) || "1";
-      const storedEmail =
-        (await getStorageItem("user_email")) || "merchant@email.com";
-      setMerchantId(storedId);
-      setCurrentEmail(storedEmail);
+      const storedId = (await getAppStorage("profile_id")) || "1";
+      const storedEmail = (await getAppStorage("user_email")) || "";
+      setMerchId(storedId);
 
-      const res = await api.get(
-        `listings/merchant-portal/${storedId}/?email=${encodeURIComponent(
-          storedEmail
-        )}`
-      );
-      if (res.data?.profile) {
-        if (res.data.profile.email) setCurrentEmail(res.data.profile.email);
-        if (
-          res.data.profile.phone &&
-          res.data.profile.phone !== "Not Provided"
-        ) {
-          setCurrentPhone(res.data.profile.phone);
-        }
+      const [notifRes, annRes, savedReads, savedDismissed] = await Promise.all([
+        api
+          .get(
+            `listings/notifications/?merchant=${storedId}&email=${encodeURIComponent(
+              storedEmail
+            )}`
+          )
+          .catch(() => ({ data: [] })),
+        api
+          .get(
+            `listings/announcements/?merchant=${storedId}&email=${encodeURIComponent(
+              storedEmail
+            )}`
+          )
+          .catch(() => ({ data: [] })),
+        AsyncStorage.getItem(`${MERCHANT_READ_NOTIFS_KEY}_${storedId}`),
+        AsyncStorage.getItem(`${MERCHANT_DISMISSED_NOTIFS_KEY}_${storedId}`),
+      ]);
+
+      let rSet = new Set<string>();
+      if (savedReads) {
+        try {
+          rSet = new Set(JSON.parse(savedReads));
+        } catch (e) {}
       }
-    } catch (e) {
-      console.log("Error loading merchant privacy data:", e);
+      setReadIds(rSet);
+
+      let dSet = new Set<string>();
+      if (savedDismissed) {
+        try {
+          dSet = new Set(JSON.parse(savedDismissed));
+        } catch (e) {}
+      }
+      setDismissedIds(dSet);
+
+      const rawNotifs: any[] = Array.isArray(notifRes.data)
+        ? notifRes.data
+        : notifRes.data?.notifications || [];
+
+      const formattedActivity: NotificationItem[] = rawNotifs
+        .filter((item) => !dSet.has(String(item.id)))
+        .map((item) => ({
+          id: String(item.id),
+          title: item.title || "Notification",
+          description: item.description || item.message || "",
+          time: item.time || "Recent",
+          sort_ts: Number(item.sort_ts || 0),
+          target_route: item.target_route,
+          type: item.type || "system",
+        }))
+        .sort((a, b) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0));
+
+      const rawAnns: any[] = Array.isArray(annRes.data) ? annRes.data : [];
+      const formattedAnnouncements: NotificationItem[] = rawAnns
+        .map((b) => ({
+          id: String(b.id),
+          title: b.title || "System Announcement",
+          description: b.body || "",
+          audience: b.audience || "Merchants",
+          time: b.date || "Official Broadcast",
+          sort_ts: Number(b.sort_ts || 0),
+          type: "announcement" as const,
+        }))
+        .sort((a, b) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0));
+
+      setActivityItems(formattedActivity);
+      setAnnouncementItems(formattedAnnouncements);
+    } catch (error) {
+      console.warn("Could not fetch merchant notifications:", error);
     }
   };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadSecurityData();
+    await loadAllFeeds();
     setRefreshing(false);
   };
 
-  const handleUpdateEmail = async () => {
-    const cleanEmail = newEmail.trim().toLowerCase();
-    if (!cleanEmail || !cleanEmail.includes("@")) {
-      showModal(
-        "Invalid Email",
-        "Please enter a valid email address.",
-        "warning"
-      );
-      return;
-    }
-    if (cleanEmail === currentEmail.toLowerCase()) {
-      showModal(
-        "Same Email",
-        "The new email address is the same as your current email.",
-        "warning"
-      );
+  const persistReadSet = async (nextSet: Set<string>) => {
+    setReadIds(new Set(nextSet));
+    await AsyncStorage.setItem(
+      `${MERCHANT_READ_NOTIFS_KEY}_${merchId}`,
+      JSON.stringify(Array.from(nextSet))
+    );
+    DeviceEventEmitter.emit("merchant_notifs_updated");
+  };
+
+  const markSingleRead = async (id: string) => {
+    const next = new Set(readIds);
+    next.add(String(id));
+    await persistReadSet(next);
+  };
+
+  const handleMarkAllAsRead = async () => {
+    const next = new Set(readIds);
+    activityItems.forEach((n) => next.add(String(n.id)));
+    announcementItems.forEach((a) => next.add(String(a.id)));
+    await persistReadSet(next);
+  };
+
+  const deleteNotification = async (id: string) => {
+    setActivityItems((prev) => prev.filter((item) => item.id !== id));
+    const nextDismissed = new Set(dismissedIds);
+    nextDismissed.add(String(id));
+    setDismissedIds(nextDismissed);
+    await AsyncStorage.setItem(
+      `${MERCHANT_DISMISSED_NOTIFS_KEY}_${merchId}`,
+      JSON.stringify(Array.from(nextDismissed))
+    );
+    DeviceEventEmitter.emit("merchant_notifs_updated");
+  };
+
+  const handleNotificationPress = async (item: NotificationItem) => {
+    await markSingleRead(item.id);
+
+    if (item.type === "announcement") {
+      setSelectedBroadcast(item);
       return;
     }
 
-    setSavingEmail(true);
-    try {
-      const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
-        action: "update_profile",
-        email: currentEmail,
-        new_email: cleanEmail,
-      });
+    const route = String(item.target_route || "");
+    if (route.includes("/orders") || item.type === "order") {
+      DeviceEventEmitter.emit("merchant_orders_updated");
+      switchMerchantTab("Orders");
+    } else if (route.includes("/impact") || item.type === "review") {
+      switchMerchantTab("Impact");
+    } else if (route.includes("/donation") || item.type === "donation") {
+      DeviceEventEmitter.emit("merchant_donations_updated");
+      switchMerchantTab("Donation");
+    } else if (route.includes("/earnings")) {
+      switchMerchantTab("Earnings");
+    } else if (
+      route.includes("/listing") ||
+      route.includes("/market_listing") ||
+      item.type === "expiry_1hr" ||
+      item.type === "suggested_expiry"
+    ) {
+      DeviceEventEmitter.emit("merchant_listings_updated");
+      switchMerchantTab("Listings");
+    } else {
+      switchMerchantTab("Profile");
+    }
 
-      await setStorageItem("user_email", cleanEmail);
-      setCurrentEmail(cleanEmail);
-      setNewEmail("");
-      showModal(
-        "Email Updated",
-        res.data?.message ||
-          "Your official merchant email has been updated successfully.",
-        "success"
-      );
-    } catch (err: any) {
-      showModal(
-        "Update Failed",
-        err.response?.data?.error ||
-          "Could not update email address. Please try again.",
-        "error"
-      );
-    } finally {
-      setSavingEmail(false);
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/establishment/dashboard" as any);
     }
   };
 
-  const handleUpdatePhone = async () => {
-    if (!isPhoneVerified) {
-      showModal(
-        "Phone Verification Required",
-        "Please enter your new phone number and verify it via SMS OTP first.",
-        "warning"
-      );
-      return;
-    }
+  const unreadActivityCount = useMemo(
+    () => activityItems.filter((n) => !readIds.has(String(n.id))).length,
+    [activityItems, readIds]
+  );
 
-    setSavingPhone(true);
-    try {
-      const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
-        action: "update_profile",
-        email: currentEmail,
-        phone: newPhone.trim(),
-      });
+  const unreadAnnouncementsCount = useMemo(
+    () => announcementItems.filter((a) => !readIds.has(String(a.id))).length,
+    [announcementItems, readIds]
+  );
 
-      setCurrentPhone(newPhone.trim());
-      setNewPhone("");
-      setIsPhoneVerified(false);
-      showModal(
-        "Phone Number Updated",
-        res.data?.message ||
-          "Your verified mobile number has been updated successfully.",
-        "success"
-      );
-    } catch (err: any) {
-      showModal(
-        "Update Failed",
-        err.response?.data?.error || "Could not update phone number.",
-        "error"
-      );
-    } finally {
-      setSavingPhone(false);
-    }
-  };
+  const displayedList =
+    activeTab === "activity" ? activityItems : announcementItems;
 
-  const handleChangePassword = async () => {
-    if (!currentPassword || !newPassword || !confirmPassword) {
-      showModal(
-        "Missing Fields",
-        "Please fill in all password fields.",
-        "warning"
-      );
-      return;
+  const getIconConfig = (type: NotificationItem["type"], isRead: boolean) => {
+    if (!isRead) {
+      return {
+        name:
+          type === "announcement"
+            ? "megaphone-outline"
+            : type === "donation"
+            ? "gift-outline"
+            : type === "review"
+            ? "star"
+            : type === "expiry_1hr" || type === "suggested_expiry"
+            ? "alarm-outline"
+            : "notifications-outline",
+        bg: Colors.primary,
+        color: Colors.white,
+      };
     }
-    if (newPassword !== confirmPassword) {
-      showModal(
-        "Password Mismatch",
-        "New passwords do not match. Please check again.",
-        "warning"
-      );
-      return;
-    }
-    if (newPassword.length < 6) {
-      showModal(
-        "Weak Password",
-        "New password must be at least 6 characters long.",
-        "warning"
-      );
-      return;
-    }
-
-    setSavingPassword(true);
-    try {
-      const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
-        action: "change_password",
-        email: currentEmail,
-        current_password: currentPassword,
-        new_password: newPassword,
-      });
-
-      showModal(
-        "Password Updated",
-        res.data?.message || "Your password has been changed successfully.",
-        "success"
-      );
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    } catch (err: any) {
-      showModal(
-        "Update Failed",
-        err.response?.data?.error ||
-          "Could not update password. Verify your current password.",
-        "error"
-      );
-    } finally {
-      setSavingPassword(false);
-    }
-  };
-
-  const executeSoftDeleteAccount = async () => {
-    setDeleteConfirmVisible(false);
-    try {
-      await api.post(`listings/merchant-portal/${merchantId}/`, {
-        action: "deactivate_account",
-        email: currentEmail,
-      });
-    } catch (e) {}
-    await clearMerchantStorage();
-    router.replace("/consumer");
+    return {
+      name:
+        type === "announcement"
+          ? "megaphone-outline"
+          : type === "donation"
+          ? "gift-outline"
+          : type === "review"
+          ? "star-outline"
+          : type === "expiry_1hr" || type === "suggested_expiry"
+          ? "alarm-outline"
+          : "notifications-outline",
+      bg: "#E8EFEA",
+      color: Colors.primary,
+    };
   };
 
   return (
-    <SafeAreaView
-      style={styles.container}
-      edges={["top", "left", "right", "bottom"]}
-    >
+    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
       <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
 
       {/* STATUS-BAR-SAFE HEADER */}
@@ -312,333 +272,314 @@ export default function MerchantPrivacySecurity() {
           style={styles.backButton}
           activeOpacity={0.7}
           onPress={() => {
-            if (router.canGoBack()) {
-              router.back();
-            } else {
-              router.replace("/establishment/profile" as any);
-            }
+            if (router.canGoBack()) router.back();
+            else router.replace("/establishment/dashboard" as any);
           }}
         >
           <Ionicons name="arrow-back" size={20} color={Colors.primary} />
         </TouchableOpacity>
 
         <View style={styles.headerTextContainer}>
-          <Text style={styles.headerTitle}>Privacy &amp; Security</Text>
+          <Text style={styles.headerTitle}>Notifications &amp; Updates</Text>
           <Text style={styles.headerSubtitle}>
-            Manage your official email, mobile number, password, and account
-            status
+            Sorted latest to oldest • Tap any alert to open
           </Text>
         </View>
+
+        <TouchableOpacity
+          style={styles.markAllBtn}
+          activeOpacity={0.75}
+          onPress={handleMarkAllAsRead}
+        >
+          <Ionicons
+            name="checkmark-done-outline"
+            size={15}
+            color={Colors.primary}
+          />
+          <Text style={styles.markAllBtnText}>Mark all as read</Text>
+        </TouchableOpacity>
       </View>
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.content}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor={Colors.primary}
-              colors={[Colors.primary]}
-            />
-          }
+      {/* DEDICATED TABS: NOTIFICATIONS vs. SYSTEM ANNOUNCEMENTS */}
+      <View style={styles.tabsWrapper}>
+        <TouchableOpacity
+          style={[
+            styles.tabButton,
+            activeTab === "activity" && styles.tabButtonActive,
+          ]}
+          activeOpacity={0.85}
+          onPress={() => setActiveTab("activity")}
         >
-          {/* 1. UPDATE EMAIL ADDRESS */}
-          <View style={styles.sectionCard}>
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.iconCircle}>
-                <Ionicons
-                  name="mail-outline"
-                  size={19}
-                  color={Colors.primary}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>Official Email Address</Text>
-                <Text style={styles.cardSubtitle}>
-                  Used for merchant login, KYB notices, and payout confirmations
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.currentContainer}>
-              <Text style={styles.currentLabel}>Current Email Address</Text>
-              <View style={styles.currentRow}>
-                <Ionicons
-                  name="checkmark-circle"
-                  size={15}
-                  color={Colors.primary}
-                />
-                <Text style={styles.currentValueText}>{currentEmail}</Text>
-              </View>
-            </View>
-
-            <Text style={styles.label}>New Email Address *</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="mail-outline"
-                size={18}
-                color={Colors.primary}
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. store@email.com"
-                placeholderTextColor={Colors.placeholder}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                value={newEmail}
-                onChangeText={setNewEmail}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={styles.button}
-              activeOpacity={0.85}
-              onPress={handleUpdateEmail}
-              disabled={savingEmail}
-            >
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={17}
-                color={Colors.white}
-              />
-              <Text style={styles.buttonText}>
-                {savingEmail ? "UPDATING EMAIL..." : "Update Email Address"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* 2. UPDATE PHONE NUMBER (WITH SMS OTP VERIFIER) */}
-          <View style={styles.sectionCard}>
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.iconCircle}>
-                <Ionicons
-                  name="call-outline"
-                  size={19}
-                  color={Colors.primary}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>Mobile Contact Number</Text>
-                <Text style={styles.cardSubtitle}>
-                  Verified mobile number for order &amp; Food Bank coordination
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.currentContainer}>
-              <Text style={styles.currentLabel}>Current Phone Number</Text>
-              <View style={styles.currentRow}>
-                <Ionicons
-                  name="call-outline"
-                  size={15}
-                  color={Colors.primary}
-                />
-                <Text style={styles.currentValueText}>
-                  {maskPhoneNumber(currentPhone)}
-                </Text>
-              </View>
-            </View>
-
-            <PhoneOtpVerifier
-              label="New Phone Number (SMS OTP Verified) *"
-              phone={newPhone}
-              onChangePhone={setNewPhone}
-              isVerified={isPhoneVerified}
-              onVerifiedChange={setIsPhoneVerified}
-              iconName="call-outline"
-            />
-
-            <TouchableOpacity
-              style={[styles.button, !isPhoneVerified && { opacity: 0.65 }]}
-              activeOpacity={0.85}
-              onPress={handleUpdatePhone}
-              disabled={savingPhone || !isPhoneVerified}
-            >
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={17}
-                color={Colors.white}
-              />
-              <Text style={styles.buttonText}>
-                {savingPhone ? "UPDATING NUMBER..." : "Update Phone Number"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* 3. CHANGE PASSWORD */}
-          <View style={styles.sectionCard}>
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.iconCircle}>
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={19}
-                  color={Colors.primary}
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>Change Password</Text>
-                <Text style={styles.cardSubtitle}>
-                  Enter your current password and choose a secure new password
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.label}>Current Password *</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons
-                  name="lock-closed-outline"
-                  size={18}
-                  color={Colors.primary}
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter current password"
-                  placeholderTextColor={Colors.placeholder}
-                  secureTextEntry={!showCurrent}
-                  value={currentPassword}
-                  onChangeText={setCurrentPassword}
-                />
-                <TouchableOpacity onPress={() => setShowCurrent(!showCurrent)}>
-                  <Ionicons
-                    name={showCurrent ? "eye-outline" : "eye-off-outline"}
-                    size={18}
-                    color={Colors.icon}
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.label}>New Password *</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons
-                  name="key-outline"
-                  size={18}
-                  color={Colors.primary}
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter new password (min. 6 chars)"
-                  placeholderTextColor={Colors.placeholder}
-                  secureTextEntry={!showNew}
-                  value={newPassword}
-                  onChangeText={setNewPassword}
-                />
-                <TouchableOpacity onPress={() => setShowNew(!showNew)}>
-                  <Ionicons
-                    name={showNew ? "eye-outline" : "eye-off-outline"}
-                    size={18}
-                    color={Colors.icon}
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.label}>Confirm New Password *</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons
-                  name="key-outline"
-                  size={18}
-                  color={Colors.primary}
-                  style={styles.inputIcon}
-                />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Re-enter new password"
-                  placeholderTextColor={Colors.placeholder}
-                  secureTextEntry={!showConfirm}
-                  value={confirmPassword}
-                  onChangeText={setConfirmPassword}
-                />
-                <TouchableOpacity onPress={() => setShowConfirm(!showConfirm)}>
-                  <Ionicons
-                    name={showConfirm ? "eye-outline" : "eye-off-outline"}
-                    size={18}
-                    color={Colors.icon}
-                  />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              style={styles.button}
-              activeOpacity={0.85}
-              onPress={handleChangePassword}
-              disabled={savingPassword}
-            >
-              <Ionicons
-                name="checkmark-circle-outline"
-                size={17}
-                color={Colors.white}
-              />
-              <Text style={styles.buttonText}>
-                {savingPassword ? "UPDATING PASSWORD..." : "Update Password"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* 4. SOFT DELETE / DEACTIVATE STOREFRONT ACCOUNT */}
-          <View style={[styles.sectionCard, styles.dangerSectionCard]}>
-            <View style={styles.cardHeaderRow}>
-              <View style={[styles.iconCircle, styles.dangerIconCircle]}>
-                <Ionicons name="trash-outline" size={19} color="#B3261E" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.cardTitle, { color: "#B3261E" }]}>
-                  Delete / Deactivate Storefront Account
-                </Text>
-                <Text style={styles.cardSubtitle}>
-                  Sets your merchant status to Inactive while preserving audit
-                  and transaction history
-                </Text>
-              </View>
-            </View>
-
-            <TouchableOpacity
-              style={styles.deleteButton}
-              activeOpacity={0.85}
-              onPress={() => setDeleteConfirmVisible(true)}
-            >
-              <Ionicons name="trash-outline" size={17} color="#B3261E" />
-              <Text style={styles.deleteButtonText}>Delete Account</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.footerText}>
-            Your storefront security and KYB records are protected by RESERVE.
+          <Ionicons
+            name="notifications-outline"
+            size={15}
+            color={activeTab === "activity" ? Colors.white : Colors.primary2}
+          />
+          <Text
+            style={[
+              styles.tabButtonText,
+              activeTab === "activity" && styles.tabButtonTextActive,
+            ]}
+          >
+            Notifications ({activityItems.length})
           </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          {unreadActivityCount > 0 && (
+            <View
+              style={[
+                styles.tabUnreadPill,
+                activeTab === "activity" && { backgroundColor: Colors.white },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.tabUnreadPillText,
+                  activeTab === "activity" && { color: Colors.primary },
+                ]}
+              >
+                {unreadActivityCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
 
-      <ReserveConfirmModal
-        visible={deleteConfirmVisible}
-        title="Delete / Deactivate Storefront?"
-        message="Confirming this action will set your Merchant account status to Inactive/Deleted. Your historical listings and transaction records remain preserved for audit compliance, and you will be signed out immediately."
-        confirmText="Yes, Delete Account"
-        cancelText="Cancel"
-        isDestructive
-        onConfirm={executeSoftDeleteAccount}
-        onCancel={() => setDeleteConfirmVisible(false)}
-      />
+        <TouchableOpacity
+          style={[
+            styles.tabButton,
+            activeTab === "announcements" && styles.tabButtonActive,
+          ]}
+          activeOpacity={0.85}
+          onPress={() => setActiveTab("announcements")}
+        >
+          <Ionicons
+            name="megaphone-outline"
+            size={15}
+            color={
+              activeTab === "announcements" ? Colors.white : Colors.primary2
+            }
+          />
+          <Text
+            style={[
+              styles.tabButtonText,
+              activeTab === "announcements" && styles.tabButtonTextActive,
+            ]}
+          >
+            Announcements ({announcementItems.length})
+          </Text>
+          {unreadAnnouncementsCount > 0 && (
+            <View
+              style={[
+                styles.tabUnreadPill,
+                activeTab === "announcements" && {
+                  backgroundColor: Colors.white,
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.tabUnreadPillText,
+                  activeTab === "announcements" && { color: Colors.primary },
+                ]}
+              >
+                {unreadAnnouncementsCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
 
-      <ReserveAlertModal
-        visible={modalAlert.visible}
-        title={modalAlert.title}
-        message={modalAlert.message}
-        type={modalAlert.type}
-        onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
-      />
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
+      >
+        {displayedList.length > 0 ? (
+          displayedList.map((item, idx) => {
+            const isRead = readIds.has(String(item.id));
+            const iconCfg = getIconConfig(item.type, isRead);
+
+            return (
+              <TouchableOpacity
+                key={item.id || idx}
+                style={[
+                  styles.notificationCard,
+                  isRead ? styles.cardRead : styles.cardUnread,
+                ]}
+                activeOpacity={0.8}
+                onPress={() => handleNotificationPress(item)}
+              >
+                <View
+                  style={[
+                    styles.iconCircle,
+                    { backgroundColor: iconCfg.bg, borderColor: iconCfg.bg },
+                  ]}
+                >
+                  <Ionicons
+                    name={iconCfg.name as any}
+                    size={19}
+                    color={iconCfg.color}
+                  />
+                </View>
+
+                <View style={styles.notificationContent}>
+                  <View style={styles.titleRow}>
+                    <Text
+                      style={[
+                        styles.notificationTitle,
+                        !isRead && { fontFamily: "PoppinsBold" },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.title}
+                    </Text>
+
+                    <View
+                      style={[
+                        styles.stateBadge,
+                        isRead
+                          ? styles.stateBadgeRead
+                          : styles.stateBadgeUnread,
+                      ]}
+                    >
+                      {!isRead && <View style={styles.unreadDot} />}
+                      <Text
+                        style={[
+                          styles.stateBadgeText,
+                          isRead
+                            ? styles.stateBadgeTextRead
+                            : styles.stateBadgeTextUnread,
+                        ]}
+                      >
+                        {isRead ? "Read ✓" : "NEW"}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text
+                    style={[
+                      styles.notificationText,
+                      !isRead && { color: Colors.primary2 },
+                    ]}
+                  >
+                    {item.description}
+                  </Text>
+
+                  <View style={styles.footerRow}>
+                    <View style={styles.timeRow}>
+                      <Ionicons
+                        name="time-outline"
+                        size={12}
+                        color={Colors.icon}
+                      />
+                      <Text style={styles.timeText}>{item.time}</Text>
+                    </View>
+
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 10,
+                      }}
+                    >
+                      <Text style={styles.openHintText}>
+                        {item.type === "announcement"
+                          ? "Read Broadcast →"
+                          : "Open Module →"}
+                      </Text>
+                      {item.type !== "announcement" && (
+                        <TouchableOpacity
+                          onPress={(e) => {
+                            e.stopPropagation?.();
+                            deleteNotification(item.id);
+                          }}
+                          style={{ padding: 2 }}
+                        >
+                          <Ionicons
+                            name="trash-outline"
+                            size={14}
+                            color={Colors.icon}
+                          />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          })
+        ) : (
+          <View style={styles.emptyBox}>
+            <Ionicons
+              name={
+                activeTab === "announcements"
+                  ? "megaphone-outline"
+                  : "notifications-off-outline"
+              }
+              size={32}
+              color={Colors.icon}
+            />
+            <Text style={styles.emptyTitle}>
+              {activeTab === "announcements"
+                ? "No system announcements yet"
+                : "No notifications yet"}
+            </Text>
+            <Text style={styles.emptySubtext}>
+              {activeTab === "announcements"
+                ? "Official broadcasts from ReServe Admin will appear here."
+                : "Orders, customer reviews, TTT weather alerts, and Food Bank updates will appear here."}
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* ANNOUNCEMENT DETAIL MODAL */}
+      <Modal
+        visible={!!selectedBroadcast}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedBroadcast(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSelectedBroadcast(null)}
+          />
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeaderRow}>
+              <View style={styles.modalBadge}>
+                <Ionicons
+                  name="megaphone-outline"
+                  size={15}
+                  color={Colors.primary}
+                />
+                <Text style={styles.modalBadgeText}>
+                  {selectedBroadcast?.audience || "Official Broadcast"}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setSelectedBroadcast(null)}>
+                <Ionicons name="close" size={20} color={Colors.primary2} />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.modalTitle}>{selectedBroadcast?.title}</Text>
+            <Text style={styles.modalTime}>{selectedBroadcast?.time}</Text>
+            <Text style={styles.modalBody}>
+              {selectedBroadcast?.description}
+            </Text>
+            <TouchableOpacity
+              style={styles.modalCloseBtn}
+              onPress={() => setSelectedBroadcast(null)}
+            >
+              <Text style={styles.modalCloseBtnText}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -646,13 +587,14 @@ export default function MerchantPrivacySecurity() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: {
-    height: 60,
+    minHeight: 60,
     paddingHorizontal: 16,
     backgroundColor: Colors.background,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
   },
   backButton: {
     width: 34,
@@ -664,9 +606,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  headerTextContainer: { marginLeft: 11, flex: 1 },
+  headerTextContainer: { flex: 1, marginLeft: 10, marginRight: 8 },
   headerTitle: {
-    fontFamily: "PoppinsSemiBold",
+    fontFamily: "PoppinsBold",
     fontSize: 15,
     color: Colors.primary2,
   },
@@ -676,30 +618,87 @@ const styles = StyleSheet.create({
     color: Colors.primary1,
     marginTop: -1,
   },
-  content: {
-    paddingHorizontal: 16,
-    paddingTop: 18,
-    paddingBottom: 40,
-    maxWidth: 600,
-    width: "100%",
-    alignSelf: "center",
+  markAllBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "#E8EFEA",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.border,
   },
-  sectionCard: {
+  markAllBtnText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
+    color: Colors.primary,
+  },
+  tabsWrapper: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 6,
+  },
+  tabButton: {
+    flex: 1,
+    height: 40,
+    borderRadius: 10,
     backgroundColor: Colors.white,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 14,
-    padding: 15,
-    marginBottom: 16,
-  },
-  dangerSectionCard: {
-    borderColor: "#E8CACA",
-    backgroundColor: "#FFFBFB",
-  },
-  cardHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 12,
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 8,
+  },
+  tabButtonActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  tabButtonText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11,
+    color: Colors.primary2,
+  },
+  tabButtonTextActive: {
+    color: Colors.white,
+  },
+  tabUnreadPill: {
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: "#B3261E",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tabUnreadPillText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 9,
+    color: Colors.white,
+  },
+  content: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 32 },
+  notificationCard: {
+    width: "100%",
+    borderRadius: 14,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    padding: 13,
+    marginBottom: 10,
+    borderWidth: 1,
+  },
+  cardUnread: {
+    backgroundColor: "#E8EFEA",
+    borderColor: "#3A826D",
+    borderWidth: 1.2,
+  },
+  cardRead: {
+    backgroundColor: Colors.white,
+    borderColor: Colors.border,
+    opacity: 0.85,
   },
   iconCircle: {
     width: 38,
@@ -711,110 +710,173 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginRight: 11,
+    marginTop: 2,
   },
-  dangerIconCircle: {
-    backgroundColor: "#FBEDED",
-    borderColor: "#E8CACA",
+  notificationContent: { flex: 1 },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 6,
+    marginBottom: 3,
   },
-  cardTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 13.5,
+  notificationTitle: {
+    flex: 1,
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 12,
     color: Colors.primary2,
   },
-  cardSubtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.primary1,
-    marginTop: 1,
+  stateBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
   },
-  currentContainer: {
-    backgroundColor: "#F7F9F7",
+  stateBadgeUnread: {
+    backgroundColor: Colors.white,
     borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginBottom: 12,
+    borderColor: "#3A826D",
   },
-  currentLabel: {
+  stateBadgeRead: {
+    backgroundColor: "#F3F6F4",
+  },
+  unreadDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#3A826D",
+  },
+  stateBadgeText: {
+    fontFamily: "PoppinsBold",
+    fontSize: 8.5,
+  },
+  stateBadgeTextUnread: {
+    color: Colors.primary,
+  },
+  stateBadgeTextRead: {
+    color: Colors.primary1,
+    fontFamily: "PoppinsMedium",
+  },
+  notificationText: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    lineHeight: 16,
+    color: Colors.primary1,
+  },
+  footerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 8,
+    paddingTop: 6,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(0,0,0,0.05)",
+  },
+  timeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  timeText: {
     fontFamily: "PoppinsMedium",
     fontSize: 9.5,
     color: Colors.primary1,
-    marginBottom: 3,
   },
-  currentRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  currentValueText: {
+  openHintText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11.5,
-    color: Colors.primary2,
+    fontSize: 10,
+    color: Colors.primary,
   },
-  fieldGroup: {
-    marginBottom: 12,
-  },
-  label: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 10.5,
-    color: Colors.primary2,
-    marginBottom: 6,
-  },
-  inputContainer: {
-    height: 44,
-    backgroundColor: Colors.input,
-    borderRadius: 10,
-    flexDirection: "row",
+  emptyBox: {
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 14,
+    paddingVertical: 42,
+    paddingHorizontal: 20,
     alignItems: "center",
-    paddingHorizontal: 12,
+    marginTop: 12,
+  },
+  emptyTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 13.5,
+    color: Colors.primary2,
+    marginTop: 8,
+  },
+  emptySubtext: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    color: Colors.primary1,
+    textAlign: "center",
+    marginTop: 3,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(18,55,44,0.55)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 18,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 400,
+    backgroundColor: Colors.white,
+    borderRadius: 18,
+    padding: 18,
     borderWidth: 1,
     borderColor: Colors.border,
   },
-  inputIcon: { marginRight: 8 },
-  input: {
-    flex: 1,
-    fontFamily: "PoppinsRegular",
-    fontSize: 11.5,
-    color: Colors.primary2,
-    paddingVertical: 0,
+  modalHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
   },
-  button: {
+  modalBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#E8EFEA",
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  modalBadgeText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
+    color: Colors.primary,
+  },
+  modalTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 16,
+    color: Colors.primary2,
+  },
+  modalTime: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10,
+    color: Colors.icon,
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  modalBody: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 12,
+    color: Colors.primary1,
+    lineHeight: 19,
+    marginBottom: 16,
+  },
+  modalCloseBtn: {
     height: 44,
     backgroundColor: Colors.button,
     borderRadius: 10,
-    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    gap: 6,
-    marginTop: 12,
   },
-  buttonText: {
+  modalCloseBtnText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11.5,
+    fontSize: 12,
     color: Colors.white,
-  },
-  deleteButton: {
-    height: 44,
-    backgroundColor: "#FBEDED",
-    borderWidth: 1,
-    borderColor: "#E5B8B4",
-    borderRadius: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  deleteButtonText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 11.5,
-    color: "#B3261E",
-  },
-  footerText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
-    color: Colors.placeholder,
-    textAlign: "center",
-    marginTop: 4,
   },
 });

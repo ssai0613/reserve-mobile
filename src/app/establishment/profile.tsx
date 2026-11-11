@@ -1,9 +1,13 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router, Stack, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  DeviceEventEmitter,
+  Linking,
+  Modal,
   Platform,
   RefreshControl,
   ScrollView,
@@ -12,14 +16,35 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
   ReserveConfirmModal,
   ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
-import { EstablishmentBottomNav } from "../components/EstablishmentNav";
+import {
+  EstablishmentBottomNav,
+  useIsInsideMerchantShell,
+} from "../components/EstablishmentNav";
+
+let cachedMerchantProfileMemory = {
+  merchantId: "",
+  busName: "Partner Establishment",
+  merchType: "Bakeshop",
+  contactPerson: "Manager",
+  email: "Loading...",
+  phone: "Not Provided",
+  address: "Cebu City, Philippines",
+  status: "Active",
+  avgRating: 0,
+  reviewCount: 0,
+  planId: 1,
+  planName: "Free Tier (Basic)",
+  weeklyUsed: 0,
+  weeklyLimit: "10",
+  commissionPct: 10,
+  premiumMonthlyPrice: 399,
+};
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -60,28 +85,59 @@ const maskPhoneNumber = (rawPhone: string): string => {
 };
 
 export default function EstablishmentProfile() {
-  const [merchantId, setMerchantId] = useState("1");
-  const [busName, setBusName] = useState("Partner Establishment");
-  const [merchType, setMerchType] = useState("Bakeshop");
-  const [contactPerson, setContactPerson] = useState("Manager");
-  const [email, setEmail] = useState("Loading...");
-  const [phone, setPhone] = useState("Not Provided");
-  const [address, setAddress] = useState("Cebu City, Philippines");
-  const [status, setStatus] = useState("Active");
+  const isInsideShell = useIsInsideMerchantShell();
+  if (!isInsideShell) return null;
 
-  // Live Rating & Dynamic Governance Subscription States
-  const [avgRating, setAvgRating] = useState(0);
-  const [reviewCount, setReviewCount] = useState(0);
-  const [planId, setPlanId] = useState(1);
-  const [planName, setPlanName] = useState("Free Tier (Basic)");
-  const [weeklyUsed, setWeeklyUsed] = useState(0);
-  const [weeklyLimit, setWeeklyLimit] = useState("10");
-  const [commissionPct, setCommissionPct] = useState(10);
-  const [premiumMonthlyPrice, setPremiumMonthlyPrice] = useState(399);
+  const [merchantId, setMerchantId] = useState(
+    cachedMerchantProfileMemory.merchantId
+  );
+  const [busName, setBusName] = useState(cachedMerchantProfileMemory.busName);
+  const [merchType, setMerchType] = useState(
+    cachedMerchantProfileMemory.merchType
+  );
+  const [contactPerson, setContactPerson] = useState(
+    cachedMerchantProfileMemory.contactPerson
+  );
+  const [email, setEmail] = useState(cachedMerchantProfileMemory.email);
+  const [phone, setPhone] = useState(cachedMerchantProfileMemory.phone);
+  const [address, setAddress] = useState(cachedMerchantProfileMemory.address);
+  const [status, setStatus] = useState(cachedMerchantProfileMemory.status);
+
+  const [avgRating, setAvgRating] = useState(
+    cachedMerchantProfileMemory.avgRating
+  );
+  const [reviewCount, setReviewCount] = useState(
+    cachedMerchantProfileMemory.reviewCount
+  );
+  const [planId, setPlanId] = useState(cachedMerchantProfileMemory.planId);
+  const [planName, setPlanName] = useState(
+    cachedMerchantProfileMemory.planName
+  );
+  const [weeklyUsed, setWeeklyUsed] = useState(
+    cachedMerchantProfileMemory.weeklyUsed
+  );
+  const [weeklyLimit, setWeeklyLimit] = useState(
+    cachedMerchantProfileMemory.weeklyLimit
+  );
+  const [commissionPct, setCommissionPct] = useState(
+    cachedMerchantProfileMemory.commissionPct
+  );
+  const [premiumMonthlyPrice, setPremiumMonthlyPrice] = useState(
+    cachedMerchantProfileMemory.premiumMonthlyPrice
+  );
 
   const [refreshing, setRefreshing] = useState(false);
   const [tierConfirmVisible, setTierConfirmVisible] = useState(false);
   const [logoutConfirmVisible, setLogoutConfirmVisible] = useState(false);
+
+  // Live Xendit Pro Subscription Payment Modal States
+  const [proGatewayModalVisible, setProGatewayModalVisible] = useState(false);
+  const [creatingProInvoice, setCreatingProInvoice] = useState(false);
+  const [verifyingProPayment, setVerifyingProPayment] = useState(false);
+  const [proInvoiceId, setProInvoiceId] = useState<string | null>(null);
+  const [proCheckoutUrl, setProCheckoutUrl] = useState<string | null>(null);
+  const [proInvoiceStatus, setProInvoiceStatus] = useState<string>("PENDING");
+  const proPollRef = useRef<any>(null);
 
   const [modalAlert, setModalAlert] = useState<ReserveModalState>({
     visible: false,
@@ -98,50 +154,117 @@ export default function EstablishmentProfile() {
 
   const loadMerchantProfile = useCallback(async () => {
     try {
-      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedId = await getStorageItem("profile_id");
       const storedEmail = (await getStorageItem("user_email")) || "";
-      setMerchantId(storedId);
+      if (!storedId && !storedEmail) {
+        router.replace("/consumer");
+        return;
+      }
+      const resolvedId = storedId || "0";
+      setMerchantId(resolvedId);
 
       const portalRes = await api.get(
-        `listings/merchant-portal/${storedId}/?email=${encodeURIComponent(
+        `listings/merchant-portal/${resolvedId}/?email=${encodeURIComponent(
           storedEmail
         )}`
       );
 
       const p = portalRes.data?.profile;
       if (p) {
-        setMerchantId(String(p.merch_id || storedId));
-        setBusName(p.bus_name || "Partner Establishment");
-        setMerchType(p.merch_type || "Bakeshop");
-        setContactPerson(p.contact_person || "Manager");
-        setEmail(p.email || storedEmail);
-        setPhone(p.phone || "Not Provided");
-        setAddress(p.address || "Cebu City, Philippines");
-        setStatus(p.status || "Active");
+        const nextProfile = {
+          merchantId: String(p.merch_id || resolvedId),
+          busName: p.bus_name || "Partner Establishment",
+          merchType: p.merch_type || "Bakeshop",
+          contactPerson: p.contact_person || "Manager",
+          email: p.email || storedEmail,
+          phone: p.phone || "Not Provided",
+          address: p.address || "Cebu City, Philippines",
+          status: p.status || "Active",
+          avgRating: Number(p.avg_rating || 0),
+          reviewCount: Number(p.review_count || 0),
+          planId: Number(p.plan_id || 1),
+          planName: p.plan_name || "Free Tier (Basic)",
+          weeklyUsed: Number(p.weekly_listings_used || 0),
+          weeklyLimit: String(p.weekly_listings_limit || "10"),
+          commissionPct:
+            p.commission_pct !== undefined
+              ? Number(p.commission_pct)
+              : cachedMerchantProfileMemory.commissionPct,
+          premiumMonthlyPrice:
+            p.premium_monthly_price !== undefined
+              ? Number(p.premium_monthly_price)
+              : cachedMerchantProfileMemory.premiumMonthlyPrice,
+        };
+        cachedMerchantProfileMemory = nextProfile;
 
-        setAvgRating(Number(p.avg_rating || 0));
-        setReviewCount(Number(p.review_count || 0));
-        setPlanId(Number(p.plan_id || 1));
-        setPlanName(p.plan_name || "Free Tier (Basic)");
-        setWeeklyUsed(Number(p.weekly_listings_used || 0));
-        setWeeklyLimit(String(p.weekly_listings_limit || "10"));
-        if (p.commission_pct !== undefined) {
-          setCommissionPct(Number(p.commission_pct));
-        }
-        if (p.premium_monthly_price !== undefined) {
-          setPremiumMonthlyPrice(Number(p.premium_monthly_price));
-        }
+        setMerchantId(nextProfile.merchantId);
+        setBusName(nextProfile.busName);
+        setMerchType(nextProfile.merchType);
+        setContactPerson(nextProfile.contactPerson);
+        setEmail(nextProfile.email);
+        setPhone(nextProfile.phone);
+        setAddress(nextProfile.address);
+        setStatus(nextProfile.status);
+        setAvgRating(nextProfile.avgRating);
+        setReviewCount(nextProfile.reviewCount);
+        setPlanId(nextProfile.planId);
+        setPlanName(nextProfile.planName);
+        setWeeklyUsed(nextProfile.weeklyUsed);
+        setWeeklyLimit(nextProfile.weeklyLimit);
+        setCommissionPct(nextProfile.commissionPct);
+        setPremiumMonthlyPrice(nextProfile.premiumMonthlyPrice);
       }
     } catch (e) {
       console.log("Merchant profile load error:", e);
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadMerchantProfile();
-    }, [loadMerchantProfile])
-  );
+  useEffect(() => {
+    loadMerchantProfile();
+
+    const profSub = DeviceEventEmitter.addListener(
+      "merchant_profile_updated",
+      () => {
+        loadMerchantProfile();
+      }
+    );
+    const listSub = DeviceEventEmitter.addListener(
+      "merchant_listings_updated",
+      () => {
+        loadMerchantProfile();
+      }
+    );
+    const ordSub = DeviceEventEmitter.addListener(
+      "merchant_orders_updated",
+      () => {
+        loadMerchantProfile();
+      }
+    );
+
+    return () => {
+      profSub.remove();
+      listSub.remove();
+      ordSub.remove();
+      if (proPollRef.current) clearInterval(proPollRef.current);
+    };
+  }, [loadMerchantProfile]);
+
+  useEffect(() => {
+    if (proGatewayModalVisible && proInvoiceId) {
+      proPollRef.current = setInterval(() => {
+        checkProInvoiceStatus(proInvoiceId, true);
+      }, 3500);
+    } else if (proPollRef.current) {
+      clearInterval(proPollRef.current);
+      proPollRef.current = null;
+    }
+    return () => {
+      if (proPollRef.current) {
+        clearInterval(proPollRef.current);
+        proPollRef.current = null;
+      }
+    };
+  }, [proGatewayModalVisible, proInvoiceId]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -149,26 +272,146 @@ export default function EstablishmentProfile() {
     setRefreshing(false);
   };
 
+  const openExternalUrl = (url: string) => {
+    if (Platform.OS === "web") {
+      window.open(url, "_blank");
+    } else {
+      Linking.openURL(url);
+    }
+  };
+
   const executeTierSwitch = async () => {
     setTierConfirmVisible(false);
     const targetPlan = planId === 2 ? 1 : 2;
+
+    // Downgrading to Free Tier (plan_id = 1) requires no payment
+    if (targetPlan === 1) {
+      try {
+        const activeId =
+          merchantId || (await getStorageItem("profile_id")) || "0";
+        const res = await api.post(`listings/merchant-portal/${activeId}/`, {
+          action: "upgrade_tier",
+          plan_id: 1,
+        });
+        await loadMerchantProfile();
+        DeviceEventEmitter.emit("merchant_profile_updated");
+        showModal(
+          "Switched to Free Tier",
+          res.data?.message || "Your subscription plan has been updated.",
+          "success"
+        );
+      } catch (e: any) {
+        showModal(
+          "Subscription Error",
+          e.response?.data?.error || "Could not update subscription tier.",
+          "error"
+        );
+      }
+      return;
+    }
+
+    // Upgrading to Premium Pro (plan_id = 2) requires Xendit invoice payment verification
+    setProInvoiceId(null);
+    setProCheckoutUrl(null);
+    setProInvoiceStatus("CREATING INVOICE...");
+    setProGatewayModalVisible(true);
+    setCreatingProInvoice(true);
+
     try {
-      const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
-        action: "upgrade_tier",
-        plan_id: targetPlan,
+      const pmRes = await api.post("listings/paymongo-checkout/", {
+        action: "create_invoice",
+        amount: premiumMonthlyPrice,
+        description: `RESERVE Premium Pro Monthly Subscription (${busName})`,
+        purpose: "merchant_upgrade",
       });
-      await loadMerchantProfile();
+
+      const checkoutUrl = pmRes.data?.checkout_url;
+      const invoiceId = pmRes.data?.invoice_id || pmRes.data?.session_id;
+
+      if (checkoutUrl && invoiceId) {
+        setProInvoiceId(invoiceId);
+        setProCheckoutUrl(checkoutUrl);
+        setProInvoiceStatus("AWAITING PAYMENT");
+        openExternalUrl(checkoutUrl);
+      } else {
+        setProGatewayModalVisible(false);
+        showModal(
+          "Xendit Gateway Error",
+          "Could not initialize Xendit subscription invoice.",
+          "error"
+        );
+      }
+    } catch (err: any) {
+      setProGatewayModalVisible(false);
       showModal(
-        targetPlan === 2 ? "Upgraded to Premium Pro!" : "Switched to Free Tier",
-        res.data?.message || "Your subscription plan has been updated.",
-        "success"
-      );
-    } catch (e: any) {
-      showModal(
-        "Subscription Error",
-        e.response?.data?.error || "Could not update subscription tier.",
+        "Xendit Gateway Error",
+        err.response?.data?.error ||
+          "Could not create Xendit subscription invoice.",
         "error"
       );
+    } finally {
+      setCreatingProInvoice(false);
+    }
+  };
+
+  const checkProInvoiceStatus = async (invoiceId: string, silent = false) => {
+    if (!invoiceId || verifyingProPayment) return;
+    if (!silent) setVerifyingProPayment(true);
+
+    try {
+      const verifyRes = await api.post("listings/paymongo-checkout/", {
+        action: "check_status",
+        invoice_id: invoiceId,
+      });
+
+      const statusVal = String(verifyRes.data?.status || "PENDING").toUpperCase();
+      setProInvoiceStatus(statusVal);
+
+      if (
+        verifyRes.data?.is_paid ||
+        statusVal === "PAID" ||
+        statusVal === "SETTLED"
+      ) {
+        if (proPollRef.current) {
+          clearInterval(proPollRef.current);
+          proPollRef.current = null;
+        }
+        const activeId =
+          merchantId || (await getStorageItem("profile_id")) || "0";
+        const res = await api.post(`listings/merchant-portal/${activeId}/`, {
+          action: "upgrade_tier",
+          plan_id: 2,
+          xendit_invoice_id: invoiceId,
+        });
+        setProGatewayModalVisible(false);
+        setProInvoiceId(null);
+        setProCheckoutUrl(null);
+        await loadMerchantProfile();
+        DeviceEventEmitter.emit("merchant_profile_updated");
+        showModal(
+          "Upgraded to Premium Pro!",
+          res.data?.message ||
+            "Your Xendit payment was verified and Premium Pro is now active!",
+          "success"
+        );
+      } else if (!silent) {
+        showModal(
+          "Payment Still Pending",
+          `Xendit invoice status is currently "${statusVal}". Please complete the subscription payment in the Xendit checkout window first.`,
+          "info"
+        );
+      }
+    } catch (err: any) {
+      if (!silent) {
+        showModal(
+          "Verification Error",
+          err.response?.data?.error ||
+            "Could not verify Xendit subscription status.",
+          "error"
+        );
+      }
+    } finally {
+      if (!silent) setVerifyingProPayment(false);
     }
   };
 
@@ -179,9 +422,7 @@ export default function EstablishmentProfile() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       {/* FULL-SCREEN SCROLL CONTENT (NO TOP HEADER BAR) */}
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -280,7 +521,7 @@ export default function EstablishmentProfile() {
               ? "You enjoy unlimited weekly surplus listings and 0% platform commission on all wallet withdrawals."
               : `Upgrade to Premium Pro for ₱${premiumMonthlyPrice.toFixed(
                   2
-                )}/month to unlock Unlimited Weekly Listings and 0% Commission on all payouts!`}
+                )}/month via Xendit to unlock Unlimited Weekly Listings and 0% Commission on all payouts!`}
           </Text>
 
           <TouchableOpacity
@@ -311,9 +552,7 @@ export default function EstablishmentProfile() {
           </TouchableOpacity>
         </View>
 
-        {/* ============================================================
-            TWO MAIN ACCOUNT SETTINGS ROWS / CARDS (OPEN SEPARATE PAGES)
-        ============================================================ */}
+        {/* TWO MAIN ACCOUNT SETTINGS ROWS / CARDS */}
         <Text style={styles.sectionTitle}>Account Settings</Text>
 
         {/* ROW 1: STOREFRONT & PERSONAL INFORMATION */}
@@ -485,17 +724,177 @@ export default function EstablishmentProfile() {
         message={
           planId === 2
             ? `Switch back to the Free Tier (${weeklyLimit} listings/week cap and ${commissionPct}% withdrawal fee)?`
-            : `Activate Premium Pro for ₱${premiumMonthlyPrice.toFixed(
+            : `Proceed to Xendit Checkout (GCash / Maya) for ₱${premiumMonthlyPrice.toFixed(
                 2
-              )}/month? You will immediately unlock Unlimited Weekly Listings and 0% Platform Commission on all withdrawals.`
+              )}/month? Once payment is verified, Unlimited Weekly Listings and 0% Platform Commission will be activated.`
         }
         confirmText={
-          planId === 2 ? "Switch to Free Tier" : "Activate Premium Pro"
+          planId === 2 ? "Switch to Free Tier" : "Proceed to Xendit Checkout"
         }
         cancelText="Cancel"
         onConfirm={executeTierSwitch}
         onCancel={() => setTierConfirmVisible(false)}
       />
+
+      {/* XENDIT PRO SUBSCRIPTION VERIFICATION MODAL */}
+      <Modal
+        visible={proGatewayModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setProGatewayModalVisible(false)}
+      >
+        <View style={styles.gatewayOverlay}>
+          <View style={styles.gatewayCard}>
+            <View style={styles.gatewayHeader}>
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+              >
+                <Ionicons name="sparkles" size={19} color={Colors.white} />
+                <Text style={styles.gatewayHeaderTitle}>
+                  Xendit Premium Pro Subscription
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setProGatewayModalVisible(false)}
+              >
+                <Ionicons name="close" size={20} color={Colors.white} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ padding: 18, paddingBottom: 28 }}>
+              <View style={styles.gatewayAmountBox}>
+                <Text style={styles.gatewayAmountLabel}>
+                  MONTHLY PRO SUBSCRIPTION ({busName})
+                </Text>
+                <Text style={styles.gatewayAmountValue}>
+                  ₱{premiumMonthlyPrice.toFixed(2)}
+                </Text>
+                <Text style={styles.gatewayMerchantNote}>
+                  Unlocks Unlimited Weekly Listings &amp; 0% Withdrawal Fee
+                </Text>
+              </View>
+
+              {creatingProInvoice ? (
+                <View
+                  style={{ paddingVertical: 24, alignItems: "center", gap: 10 }}
+                >
+                  <ActivityIndicator size="large" color={Colors.primary} />
+                  <Text style={styles.invoiceStatusVal}>
+                    Creating Xendit subscription invoice...
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.invoiceStatusBox}>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <Text style={styles.invoiceStatusLabel}>
+                        Xendit Invoice ID:
+                      </Text>
+                      <Text style={styles.invoiceStatusVal}>
+                        {proInvoiceId || "Initializing..."}
+                      </Text>
+                    </View>
+                    <View
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginTop: 6,
+                      }}
+                    >
+                      <Text style={styles.invoiceStatusLabel}>
+                        Payment Status:
+                      </Text>
+                      <View
+                        style={{
+                          flexDirection: "row",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        <ActivityIndicator
+                          size="small"
+                          color={Colors.primary}
+                        />
+                        <Text
+                          style={[
+                            styles.invoiceStatusVal,
+                            { color: Colors.primary },
+                          ]}
+                        >
+                          {proInvoiceStatus}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <Text style={styles.gatewayInstructions}>
+                    Complete your ₱{premiumMonthlyPrice.toFixed(2)} subscription
+                    payment via GCash or Maya in the Xendit window. Your
+                    storefront will upgrade automatically as soon as payment is
+                    verified.
+                  </Text>
+
+                  <TouchableOpacity
+                    style={styles.gatewayPayBtn}
+                    activeOpacity={0.85}
+                    onPress={() =>
+                      proInvoiceId && checkProInvoiceStatus(proInvoiceId, false)
+                    }
+                    disabled={verifyingProPayment || !proInvoiceId}
+                  >
+                    <Ionicons
+                      name="checkmark-done-circle-outline"
+                      size={18}
+                      color={Colors.white}
+                    />
+                    <Text style={styles.gatewayPayBtnText}>
+                      {verifyingProPayment
+                        ? "VERIFYING PAYMENT..."
+                        : "I Have Completed Payment — Verify Now"}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {proCheckoutUrl && (
+                    <TouchableOpacity
+                      style={[
+                        styles.gatewayPayBtn,
+                        {
+                          backgroundColor: Colors.white,
+                          borderWidth: 1,
+                          borderColor: Colors.primary,
+                          marginTop: 10,
+                        },
+                      ]}
+                      activeOpacity={0.85}
+                      onPress={() => openExternalUrl(proCheckoutUrl)}
+                    >
+                      <Ionicons
+                        name="open-outline"
+                        size={16}
+                        color={Colors.primary}
+                      />
+                      <Text
+                        style={[
+                          styles.gatewayPayBtnText,
+                          { color: Colors.primary },
+                        ]}
+                      >
+                        Re-open Xendit Checkout Window
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* LOGOUT CONFIRM MODAL */}
       <ReserveConfirmModal
@@ -517,9 +916,8 @@ export default function EstablishmentProfile() {
         onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
       />
 
-      {/* FLUSH BOTTOM NAVIGATION BAR */}
       <EstablishmentBottomNav activeTab="Profile" />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -527,289 +925,63 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scrollContent: { paddingHorizontal: 16, paddingTop: 18, paddingBottom: 28 },
   titleBlock: { marginBottom: 16 },
-  pageTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 24,
-    color: Colors.primary2,
-  },
-  pageSubtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    color: Colors.primary1,
-    marginTop: 2,
-  },
-  profileCard: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 16,
-    padding: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 16,
-  },
-  profileCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: "#E8EFEA",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
+  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 2 },
+  profileCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 16, padding: 16, flexDirection: "row", alignItems: "center", marginBottom: 16 },
+  profileCircle: { width: 68, height: 68, borderRadius: 34, backgroundColor: "#E8EFEA", borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
   profileDetails: { flex: 1, marginLeft: 14 },
-  profileName: {
-    fontFamily: "PoppinsBold",
-    fontSize: 18,
-    color: Colors.primary2,
-  },
-  profileEmail: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    color: Colors.primary1,
-  },
-  profileLocation: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10.5,
-    color: Colors.placeholder,
-    marginTop: 2,
-  },
-  badgeRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    alignItems: "center",
-    gap: 6,
-    marginTop: 8,
-  },
-  merchantBadge: {
-    backgroundColor: "#E7F0E9",
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  merchantBadgeText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 9,
-    color: Colors.primary,
-  },
-  ratingBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "#FEF3C7",
-    borderWidth: 1,
-    borderColor: "#FDE68A",
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 2.5,
-  },
-  ratingBadgeText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 9,
-    color: "#B45309",
-  },
-  tierCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: Colors.primary,
-    padding: 15,
-    marginBottom: 20,
-  },
-  tierHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  tierBadgeLabel: {
-    fontFamily: "PoppinsBold",
-    fontSize: 9.5,
-    color: Colors.primary,
-    letterSpacing: 0.6,
-  },
-  tierTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 15,
-    color: Colors.primary2,
-    marginTop: 2,
-  },
-  tierPricePill: {
-    backgroundColor: "#E8EFEA",
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  tierPricePillText: {
-    fontFamily: "PoppinsBold",
-    fontSize: 12,
-    color: Colors.primary,
-  },
-  tierMetricsBox: {
-    flexDirection: "row",
-    backgroundColor: "#F7F9F7",
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingVertical: 10,
-    marginBottom: 10,
-  },
+  profileName: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary2 },
+  profileEmail: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
+  profileLocation: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.placeholder, marginTop: 2 },
+  badgeRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 8 },
+  merchantBadge: { backgroundColor: "#E7F0E9", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  merchantBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 9, color: Colors.primary },
+  ratingBadge: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#FEF3C7", borderWidth: 1, borderColor: "#FDE68A", borderRadius: 6, paddingHorizontal: 8, paddingVertical: 2.5 },
+  ratingBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 9, color: "#B45309" },
+  tierCard: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.primary, padding: 15, marginBottom: 20 },
+  tierHeaderRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  tierBadgeLabel: { fontFamily: "PoppinsBold", fontSize: 9.5, color: Colors.primary, letterSpacing: 0.6 },
+  tierTitle: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.primary2, marginTop: 2 },
+  tierPricePill: { backgroundColor: "#E8EFEA", paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1, borderColor: Colors.border },
+  tierPricePillText: { fontFamily: "PoppinsBold", fontSize: 12, color: Colors.primary },
+  tierMetricsBox: { flexDirection: "row", backgroundColor: "#F7F9F7", borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingVertical: 10, marginBottom: 10 },
   tierMetricItem: { flex: 1, alignItems: "center" },
   tierMetricDivider: { width: 1, backgroundColor: Colors.border },
-  tierMetricLabel: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.primary1,
-  },
-  tierMetricValue: {
-    fontFamily: "PoppinsBold",
-    fontSize: 13,
-    color: Colors.primary2,
-    marginTop: 2,
-  },
-  tierSubNote: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10.5,
-    color: Colors.primary1,
-    lineHeight: 15,
-    marginBottom: 12,
-  },
-  tierActionBtn: {
-    height: 44,
-    backgroundColor: Colors.button,
-    borderRadius: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-  },
-  tierActionBtnOutline: {
-    backgroundColor: Colors.input,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  tierActionBtnText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: Colors.white,
-  },
-  sectionTitle: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 15,
-    color: Colors.primary2,
-    marginBottom: 8,
-    marginTop: 4,
-  },
-  featureRowCard: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 14,
-    padding: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  featureIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: "#E8EFEA",
-    alignItems: "center",
-    justifyContent: "center",
-    marginRight: 12,
-  },
-  featureCardBody: {
-    flex: 1,
-    paddingRight: 8,
-  },
-  featureCardTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 13.5,
-    color: Colors.primary2,
-  },
-  featureCardDesc: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10.5,
-    color: Colors.primary1,
-    lineHeight: 15,
-    marginTop: 2,
-  },
-  featureMetaPills: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    marginTop: 8,
-  },
-  metaPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: "#F7F9F7",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    maxWidth: "100%",
-  },
-  metaPillText: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 9.5,
-    color: Colors.primary2,
-    flexShrink: 1,
-  },
-  menuItem: {
-    height: 60,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
+  tierMetricLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
+  tierMetricValue: { fontFamily: "PoppinsBold", fontSize: 13, color: Colors.primary2, marginTop: 2 },
+  tierSubNote: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, lineHeight: 15, marginBottom: 12 },
+  tierActionBtn: { height: 44, backgroundColor: Colors.button, borderRadius: 10, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
+  tierActionBtnOutline: { backgroundColor: Colors.input, borderWidth: 1, borderColor: Colors.border },
+  tierActionBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.white },
+  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2, marginBottom: 8, marginTop: 4 },
+  featureRowCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 14, flexDirection: "row", alignItems: "center", marginBottom: 12 },
+  featureIconBox: { width: 42, height: 42, borderRadius: 12, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 12 },
+  featureCardBody: { flex: 1, paddingRight: 8 },
+  featureCardTitle: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2 },
+  featureCardDesc: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, lineHeight: 15, marginTop: 2 },
+  featureMetaPills: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
+  metaPill: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: "#F7F9F7", borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, maxWidth: "100%" },
+  metaPillText: { fontFamily: "PoppinsMedium", fontSize: 9.5, color: Colors.primary2, flexShrink: 1 },
+  menuItem: { height: 60, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
   menuLeft: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10 },
-  menuIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: "#E8EFEA",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  menuText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: Colors.primary2,
-  },
-  menuSubtext: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.placeholder,
-    marginTop: 1,
-  },
-  logoutButton: {
-    height: 48,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: "#E5B8B4",
-    borderRadius: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    marginTop: 14,
-  },
-  logoutText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: "#B3261E",
-  },
+  menuIcon: { width: 34, height: 34, borderRadius: 8, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center" },
+  menuText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
+  menuSubtext: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.placeholder, marginTop: 1 },
+  logoutButton: { height: 48, backgroundColor: Colors.white, borderWidth: 1, borderColor: "#E5B8B4", borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: 14 },
+  logoutText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: "#B3261E" },
   bottomSpacing: { height: 12 },
+  gatewayOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.55)", justifyContent: "flex-end" },
+  gatewayCard: { width: "100%", backgroundColor: Colors.white, borderTopLeftRadius: 22, borderTopRightRadius: 22, overflow: "hidden" },
+  gatewayHeader: { backgroundColor: Colors.primary, paddingHorizontal: 18, paddingVertical: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  gatewayHeaderTitle: { fontFamily: "PoppinsBold", fontSize: 14, color: Colors.white },
+  gatewayAmountBox: { backgroundColor: "#F3F6F4", borderRadius: 12, padding: 14, alignItems: "center", marginBottom: 14, borderWidth: 1, borderColor: Colors.border },
+  gatewayAmountLabel: { fontFamily: "PoppinsSemiBold", fontSize: 9.5, color: Colors.primary1, textAlign: "center" },
+  gatewayAmountValue: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary, marginVertical: 2 },
+  gatewayMerchantNote: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon },
+  invoiceStatusBox: { backgroundColor: "#F8FAF9", borderRadius: 10, padding: 12, borderWidth: 1, borderColor: Colors.border, marginBottom: 12 },
+  invoiceStatusLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
+  invoiceStatusVal: { fontFamily: "PoppinsBold", fontSize: 11.5, color: Colors.primary2 },
+  gatewayInstructions: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, lineHeight: 16, textAlign: "center", marginBottom: 4 },
+  gatewayPayBtn: { height: 46, backgroundColor: Colors.button, borderRadius: 11, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 14 },
+  gatewayPayBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.white },
 });

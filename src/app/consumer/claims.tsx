@@ -1,9 +1,10 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router, Stack, useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
 import {
+  DeviceEventEmitter,
   Image,
   Modal,
   Platform,
@@ -16,25 +17,43 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
   ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
-import { ConsumerBottomNav, ConsumerHeader } from "../components/ConsumerNav";
+import {
+  ConsumerBottomNav,
+  ConsumerHeader,
+  switchConsumerTab,
+  useIsInsideConsumerShell,
+} from "../components/ConsumerNav";
 import { ShopLocationMapModal } from "./homepage";
+
+let cachedClaimsMemory: any[] = [];
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
   return await SecureStore.getItemAsync(key);
 };
 
+const getDynamicQrUrl = (voucherCode: string) => {
+  const cleanCode = String(voucherCode || "").trim().toUpperCase();
+  return `https://api.qrserver.com/v1/create-qr-code/?size=320x320&ecc=M&margin=10&color=12372C&bgcolor=FFFFFF&data=${encodeURIComponent(
+    cleanCode
+  )}`;
+};
+
 export default function RescueConfirmed() {
+  const isInsideShell = useIsInsideConsumerShell();
+  if (!isInsideShell) return null;
+
   const params = useLocalSearchParams();
-  const [consumerId, setConsumerId] = useState("1");
-  const [claims, setClaims] = useState<any[]>([]);
-  const [statusFilter, setStatusFilter] = useState<"All" | "Pending" | "Completed">("All");
+  const [consumerId, setConsumerId] = useState("");
+  const [claims, setClaims] = useState<any[]>(cachedClaimsMemory);
+  const [statusFilter, setStatusFilter] = useState<
+    "All" | "Pending" | "Completed"
+  >("All");
   const [selectedClaim, setSelectedClaim] = useState<any | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -63,23 +82,46 @@ export default function RescueConfirmed() {
   ) => setModalAlert({ visible: true, title, message, type });
 
   useEffect(() => {
-    loadClaims();
+    loadClaims(params.voucher ? String(params.voucher) : undefined);
+
+    const claimsSub = DeviceEventEmitter.addListener(
+      "consumer_claims_updated",
+      (payload?: { voucher?: string }) => {
+        loadClaims(payload?.voucher);
+      }
+    );
+
+    return () => claimsSub.remove();
   }, []);
 
-  const loadClaims = async () => {
+  const loadClaims = async (targetVoucher?: string) => {
     try {
-      const consId = (await getStorageItem("profile_id")) || "1";
+      const consId = await getStorageItem("profile_id");
       const email = (await getStorageItem("user_email")) || "";
-      setConsumerId(consId);
+
+      if (!consId && !email) {
+        router.replace("/consumer");
+        return;
+      }
+
+      const resolvedId = consId || "0";
+      setConsumerId(resolvedId);
 
       const res = await api.get(
-        `listings/consumer-portal/${consId}/?email=${encodeURIComponent(email)}`
+        `listings/consumer-portal/${resolvedId}/?email=${encodeURIComponent(
+          email
+        )}`
       );
       const list = res.data?.claims || [];
+      cachedClaimsMemory = list;
       setClaims(list);
 
-      if (params.voucher) {
-        const found = list.find((c: any) => c.voucher_code === params.voucher);
+      if (targetVoucher) {
+        const found = list.find(
+          (c: any) =>
+            String(c.voucher_code).toUpperCase() ===
+            String(targetVoucher).toUpperCase()
+        );
         if (found) {
           openClaimModal(found);
         }
@@ -97,7 +139,9 @@ export default function RescueConfirmed() {
 
   const openClaimModal = (claim: any) => {
     setSelectedClaim(claim);
-    setRatingScore(claim.rating_score && claim.rating_score > 0 ? claim.rating_score : 5);
+    setRatingScore(
+      claim.rating_score && claim.rating_score > 0 ? claim.rating_score : 5
+    );
     setReviewComment(claim.review_comment || "");
   };
 
@@ -106,7 +150,9 @@ export default function RescueConfirmed() {
     setSubmittingReview(true);
     try {
       const email = (await getStorageItem("user_email")) || "";
-      const res = await api.post(`listings/consumer-portal/${consumerId}/`, {
+      const activeId =
+        consumerId || (await getStorageItem("profile_id")) || "0";
+      const res = await api.post(`listings/consumer-portal/${activeId}/`, {
         action: "submit_review",
         email,
         order_id: selectedClaim.order_id,
@@ -122,11 +168,13 @@ export default function RescueConfirmed() {
         review_comment: reviewComment.trim(),
       };
       setSelectedClaim(updatedClaim);
-      setClaims((prev) =>
-        prev.map((c) =>
+      setClaims((prev) => {
+        const next = prev.map((c) =>
           c.voucher_code === updatedClaim.voucher_code ? updatedClaim : c
-        )
-      );
+        );
+        cachedClaimsMemory = next;
+        return next;
+      });
 
       showModal(
         "Rating & Review Submitted!",
@@ -152,7 +200,10 @@ export default function RescueConfirmed() {
   });
 
   const getPurchasedItemsSummary = (claim: any) => {
-    if (Array.isArray(claim.items_breakdown) && claim.items_breakdown.length > 0) {
+    if (
+      Array.isArray(claim.items_breakdown) &&
+      claim.items_breakdown.length > 0
+    ) {
       return claim.items_breakdown
         .map((it: any) => `${it.qty}x ${it.food_name}`)
         .join(", ");
@@ -161,10 +212,7 @@ export default function RescueConfirmed() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
-      {/* STATUS-BAR-SAFE HEADER */}
+    <View style={styles.container}>
       <ConsumerHeader />
 
       <ScrollView
@@ -189,11 +237,15 @@ export default function RescueConfirmed() {
               { key: "All", label: `All (${claims.length})` },
               {
                 key: "Pending",
-                label: `Pending Pickup (${claims.filter((c) => c.status === "Pending").length})`,
+                label: `Pending Pickup (${
+                  claims.filter((c) => c.status === "Pending").length
+                })`,
               },
               {
                 key: "Completed",
-                label: `Completed (${claims.filter((c) => c.status === "Completed").length})`,
+                label: `Completed (${
+                  claims.filter((c) => c.status === "Completed").length
+                })`,
               },
             ] as const
           ).map((tab) => {
@@ -201,7 +253,10 @@ export default function RescueConfirmed() {
             return (
               <TouchableOpacity
                 key={tab.key}
-                style={[styles.filterTabBtn, active && styles.filterTabBtnActive]}
+                style={[
+                  styles.filterTabBtn,
+                  active && styles.filterTabBtnActive,
+                ]}
                 onPress={() => setStatusFilter(tab.key)}
               >
                 <Text
@@ -230,7 +285,10 @@ export default function RescueConfirmed() {
                 onPress={() => openClaimModal(claim)}
               >
                 <View style={styles.claimTopRow}>
-                  <Image source={{ uri: claim.image }} style={styles.claimThumbLarge} />
+                  <Image
+                    source={{ uri: claim.image }}
+                    style={styles.claimThumbLarge}
+                  />
 
                   <View style={styles.claimMainInfo}>
                     <View style={styles.claimHeaderLine}>
@@ -241,11 +299,15 @@ export default function RescueConfirmed() {
                       <View
                         style={[
                           styles.statusPillBadge,
-                          isCompleted ? styles.statusCompletedBg : styles.statusPendingBg,
+                          isCompleted
+                            ? styles.statusCompletedBg
+                            : styles.statusPendingBg,
                         ]}
                       >
                         <Ionicons
-                          name={isCompleted ? "checkmark-circle" : "time-outline"}
+                          name={
+                            isCompleted ? "checkmark-circle" : "time-outline"
+                          }
                           size={12}
                           color={isCompleted ? "#15803D" : "#C2410C"}
                           style={{ marginRight: 3 }}
@@ -253,7 +315,9 @@ export default function RescueConfirmed() {
                         <Text
                           style={[
                             styles.statusPillText,
-                            isCompleted ? styles.statusCompletedText : styles.statusPendingText,
+                            isCompleted
+                              ? styles.statusCompletedText
+                              : styles.statusPendingText,
                           ]}
                         >
                           {isCompleted ? "Completed" : "Pending for Pickup"}
@@ -262,22 +326,43 @@ export default function RescueConfirmed() {
                     </View>
 
                     <View style={styles.claimMetaRow}>
-                      <Ionicons name="fast-food-outline" size={13} color={Colors.primary} />
-                      <Text style={styles.claimMerchantLabel} numberOfLines={2}>
+                      <Ionicons
+                        name="fast-food-outline"
+                        size={13}
+                        color={Colors.primary}
+                      />
+                      <Text
+                        style={styles.claimMerchantLabel}
+                        numberOfLines={2}
+                      >
                         {purchasedItemsText}
                       </Text>
                     </View>
 
                     <View style={styles.claimMetaRow}>
-                      <Ionicons name="location-outline" size={13} color={Colors.primary} />
-                      <Text style={styles.claimAddressLabel} numberOfLines={1}>
+                      <Ionicons
+                        name="location-outline"
+                        size={13}
+                        color={Colors.primary}
+                      />
+                      <Text
+                        style={styles.claimAddressLabel}
+                        numberOfLines={1}
+                      >
                         {claim.address || "Cebu City, Cebu"}
                       </Text>
                     </View>
 
                     <View style={styles.claimMetaRow}>
-                      <Ionicons name="calendar-outline" size={13} color="#B91C1C" />
-                      <Text style={styles.claimDeadlineLabel} numberOfLines={1}>
+                      <Ionicons
+                        name="calendar-outline"
+                        size={13}
+                        color="#B91C1C"
+                      />
+                      <Text
+                        style={styles.claimDeadlineLabel}
+                        numberOfLines={1}
+                      >
                         Pick up before: {claim.pickup_deadline}
                       </Text>
                     </View>
@@ -300,11 +385,17 @@ export default function RescueConfirmed() {
                     <View style={styles.actionButtonRated}>
                       <Ionicons name="star" size={15} color="#EAB308" />
                       <Text style={styles.actionButtonRatedText}>Rated</Text>
-                      <View style={{ flexDirection: "row", gap: 1, marginLeft: 4 }}>
+                      <View
+                        style={{ flexDirection: "row", gap: 1, marginLeft: 4 }}
+                      >
                         {[1, 2, 3, 4, 5].map((s) => (
                           <Ionicons
                             key={s}
-                            name={s <= (claim.rating_score || 5) ? "star" : "star-outline"}
+                            name={
+                              s <= (claim.rating_score || 5)
+                                ? "star"
+                                : "star-outline"
+                            }
                             size={12}
                             color="#EAB308"
                           />
@@ -313,8 +404,14 @@ export default function RescueConfirmed() {
                     </View>
                   ) : (
                     <View style={styles.actionButtonQR}>
-                      <Ionicons name="qr-code-outline" size={15} color={Colors.primary} />
-                      <Text style={styles.actionButtonQRText}>View QR &amp; Summary</Text>
+                      <Ionicons
+                        name="qr-code-outline"
+                        size={15}
+                        color={Colors.primary}
+                      />
+                      <Text style={styles.actionButtonQRText}>
+                        View QR &amp; Summary
+                      </Text>
                     </View>
                   )}
                 </View>
@@ -337,7 +434,7 @@ export default function RescueConfirmed() {
         <TouchableOpacity
           style={[styles.doneButton, { marginTop: 10 }]}
           activeOpacity={0.85}
-          onPress={() => router.replace("/consumer/homepage")}
+          onPress={() => switchConsumerTab("Home")}
         >
           <Ionicons name="restaurant-outline" size={16} color={Colors.white} />
           <Text style={styles.doneButtonText}>Browse More Surplus Food</Text>
@@ -347,7 +444,7 @@ export default function RescueConfirmed() {
         <View style={styles.bottomSpace} />
       </ScrollView>
 
-      {/* FULL ORDER INFORMATION + QR VOUCHER + MAP + RATE & REVIEW MODAL */}
+      {/* FULL ORDER INFORMATION + DYNAMIC QR VOUCHER + MAP + RATE & REVIEW MODAL */}
       <Modal
         visible={!!selectedClaim}
         transparent
@@ -391,7 +488,9 @@ export default function RescueConfirmed() {
                     </Text>
                     <View style={styles.qrContainer}>
                       <Image
-                        source={require("../../assets/qr.png")}
+                        source={{
+                          uri: getDynamicQrUrl(selectedClaim.voucher_code),
+                        }}
                         style={styles.qrImage}
                         resizeMode="contain"
                       />
@@ -413,40 +512,47 @@ export default function RescueConfirmed() {
                   <View style={styles.summaryCard}>
                     {Array.isArray(selectedClaim.items_breakdown) &&
                     selectedClaim.items_breakdown.length > 0 ? (
-                      selectedClaim.items_breakdown.map((it: any, idx: number) => (
-                        <View
-                          key={idx}
-                          style={[
-                            styles.summaryRow,
-                            {
-                              backgroundColor: Colors.input,
-                              padding: 9,
-                              borderRadius: 8,
-                              marginBottom: 8,
-                            },
-                          ]}
-                        >
-                          <Text
+                      selectedClaim.items_breakdown.map(
+                        (it: any, idx: number) => (
+                          <View
+                            key={idx}
                             style={[
-                              styles.summaryValue,
-                              { flex: 1, fontFamily: "PoppinsSemiBold" },
+                              styles.summaryRow,
+                              {
+                                backgroundColor: Colors.input,
+                                padding: 9,
+                                borderRadius: 8,
+                                marginBottom: 8,
+                              },
                             ]}
                           >
-                            {it.qty}x {it.food_name} (@ ₱{it.unit_price})
-                          </Text>
-                          <Text
-                            style={[
-                              styles.summaryValue,
-                              { fontFamily: "PoppinsBold", color: Colors.primary },
-                            ]}
-                          >
-                            ₱{it.subtotal}
-                          </Text>
-                        </View>
-                      ))
+                            <Text
+                              style={[
+                                styles.summaryValue,
+                                { flex: 1, fontFamily: "PoppinsSemiBold" },
+                              ]}
+                            >
+                              {it.qty}x {it.food_name} (@ ₱{it.unit_price})
+                            </Text>
+                            <Text
+                              style={[
+                                styles.summaryValue,
+                                {
+                                  fontFamily: "PoppinsBold",
+                                  color: Colors.primary,
+                                },
+                              ]}
+                            >
+                              ₱{it.subtotal}
+                            </Text>
+                          </View>
+                        )
+                      )
                     ) : (
                       <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Food Item &amp; Qty</Text>
+                        <Text style={styles.summaryLabel}>
+                          Food Item &amp; Qty
+                        </Text>
                         <Text style={styles.summaryValue}>
                           {selectedClaim.qty}x {selectedClaim.food_name}
                         </Text>
@@ -637,9 +743,8 @@ export default function RescueConfirmed() {
         onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
       />
 
-      {/* FLUSH BOTTOM NAVIGATION BAR */}
       <ConsumerBottomNav activeTab="Claims" />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -680,10 +785,10 @@ const styles = StyleSheet.create({
   claimDepositSubtext: { fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.placeholder },
   proofCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 16, alignItems: "center", marginBottom: 14 },
   proofTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2, marginBottom: 8 },
-  qrContainer: { width: 145, height: 145, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
-  qrImage: { width: 135, height: 135 },
+  qrContainer: { width: 170, height: 170, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: Colors.border, padding: 6 },
+  qrImage: { width: 154, height: 154 },
   voucherText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, marginTop: 2 },
-  referenceNumber: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary, marginTop: 6, letterSpacing: 0.5 },
+  referenceNumber: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary, marginTop: 8, letterSpacing: 0.5 },
   successSubtext: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, textAlign: "center", marginTop: 2 },
   noticeCard: { backgroundColor: "#E8EFEA", borderWidth: 1, borderColor: Colors.border, borderRadius: 12, padding: 12, flexDirection: "row", gap: 10, marginBottom: 16 },
   noticeIconContainer: { width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },

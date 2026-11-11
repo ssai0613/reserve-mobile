@@ -1,9 +1,10 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router, Stack, useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
+import { router } from "expo-router";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  DeviceEventEmitter,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -11,17 +12,23 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   FoodBankBottomNav,
   FoodBankHeader,
   getFoodBankStorage,
+  switchFoodBankTab,
+  useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
 
+let cachedFbDashboardMemory: any | null = null;
+
 export default function FoodBankDashboard() {
-  const [data, setData] = useState<any | null>(null);
-  const [loading, setLoading] = useState(true);
+  const isInsideShell = useIsInsideFoodBankShell();
+  if (!isInsideShell) return null;
+
+  const [data, setData] = useState<any | null>(cachedFbDashboardMemory);
+  const [loading, setLoading] = useState(!cachedFbDashboardMemory);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadDashboard = useCallback(async (isRefresh = false) => {
@@ -34,6 +41,7 @@ export default function FoodBankDashboard() {
           email
         )}`
       );
+      cachedFbDashboardMemory = response.data;
       setData(response.data);
     } catch (e) {
       console.log("FoodBank dashboard error:", e);
@@ -43,18 +51,33 @@ export default function FoodBankDashboard() {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
+  useEffect(() => {
+    loadDashboard();
+
+    const reqSub = DeviceEventEmitter.addListener("fb_requests_updated", () => {
       loadDashboard();
-    }, [loadDashboard])
-  );
+    });
+    const donSub = DeviceEventEmitter.addListener(
+      "fb_donations_updated",
+      () => {
+        loadDashboard();
+      }
+    );
+    const profSub = DeviceEventEmitter.addListener("fb_profile_updated", () => {
+      loadDashboard();
+    });
+
+    return () => {
+      reqSub.remove();
+      donSub.remove();
+      profSub.remove();
+    };
+  }, [loadDashboard]);
 
   const stats = data?.stats;
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <FoodBankHeader />
 
       {loading ? (
@@ -88,25 +111,25 @@ export default function FoodBankDashboard() {
                 icon="document-text-outline"
                 label="Active Requests"
                 value={String(stats.active_requests || 0)}
-                onPress={() => router.push("/foodbank/requests")}
+                onPress={() => switchFoodBankTab("Requests")}
               />
               <StatCard
                 icon="gift-outline"
                 label="10km Donations"
                 value={String(stats.offers_available || 0)}
-                onPress={() => router.push("/foodbank/donations")}
+                onPress={() => switchFoodBankTab("Donations")}
               />
               <StatCard
                 icon="storefront-outline"
                 label="10km Merchants"
                 value={String(stats.partners || 0)}
-                onPress={() => router.push("/foodbank/partners")}
+                onPress={() => switchFoodBankTab("Partners")}
               />
               <StatCard
                 icon="heart-outline"
                 label="Units Rescued"
                 value={String(Math.round(stats.food_received || 0))}
-                onPress={() => router.push("/foodbank/requests")}
+                onPress={() => switchFoodBankTab("Requests")}
               />
             </View>
           )}
@@ -115,7 +138,7 @@ export default function FoodBankDashboard() {
           <TouchableOpacity
             style={styles.createButton}
             activeOpacity={0.85}
-            onPress={() => router.push("/foodbank/partners")}
+            onPress={() => switchFoodBankTab("Partners")}
           >
             <View style={styles.createIcon}>
               <Ionicons name="storefront" size={21} color={Colors.white} />
@@ -134,12 +157,14 @@ export default function FoodBankDashboard() {
           {/* POSTED DONATIONS RUNNING OUT OF TIME */}
           <View style={styles.sectionHeaderRow}>
             <View>
-              <Text style={styles.sectionTitle}>Available Surplus Donations</Text>
+              <Text style={styles.sectionTitle}>
+                Available Surplus Donations
+              </Text>
               <Text style={styles.sectionSubtitle}>
                 Posted by merchants within your 10km Cebu City radius
               </Text>
             </View>
-            <TouchableOpacity onPress={() => router.push("/foodbank/donations")}>
+            <TouchableOpacity onPress={() => switchFoodBankTab("Donations")}>
               <Text style={styles.viewAllText}>See all</Text>
             </TouchableOpacity>
           </View>
@@ -151,7 +176,7 @@ export default function FoodBankDashboard() {
                 key={offer.donation_id}
                 style={styles.uiCard}
                 activeOpacity={0.85}
-                onPress={() => router.push("/foodbank/donations")}
+                onPress={() => switchFoodBankTab("Donations")}
               >
                 <View style={styles.uiCardTop}>
                   <View style={styles.iconBox}>
@@ -222,14 +247,19 @@ export default function FoodBankDashboard() {
                     },
                   ]}
                   activeOpacity={0.75}
-                  onPress={() =>
-                    router.push(
-                      (ev.target_route ||
-                        (ev.type === "request"
-                          ? "/foodbank/requests"
-                          : "/foodbank/donations")) as any
-                    )
-                  }
+                  onPress={() => {
+                    const route = String(ev.target_route || "");
+                    if (route.includes("/partners")) {
+                      switchFoodBankTab("Partners");
+                    } else if (
+                      route.includes("/requests") ||
+                      ev.type === "request"
+                    ) {
+                      switchFoodBankTab("Requests");
+                    } else {
+                      switchFoodBankTab("Donations");
+                    }
+                  }}
                 >
                   <View style={styles.activityIcon}>
                     <Ionicons
@@ -264,7 +294,7 @@ export default function FoodBankDashboard() {
       )}
 
       <FoodBankBottomNav activeTab="Home" />
-    </SafeAreaView>
+    </View>
   );
 }
 

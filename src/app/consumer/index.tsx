@@ -4,7 +4,6 @@ import { useRouter } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useState } from "react";
 import {
-  Image,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
@@ -91,6 +90,15 @@ export default function LoginScreen() {
         expiry_date,
       } = response.data;
 
+      if (!profile_id) {
+        showModal(
+          "Account Profile Missing",
+          "Could not load the profile record for this account. Please contact ReServe Admin.",
+          "error"
+        );
+        return;
+      }
+
       if (account_status === "Inactive" || account_status === "Deleted") {
         showModal(
           "Account Deactivated",
@@ -111,11 +119,11 @@ export default function LoginScreen() {
         return;
       }
 
-      await saveStorageItem("access", access);
-      await saveStorageItem("refresh", refresh);
-      await saveStorageItem("user_role", role);
+      await saveStorageItem("access", access || "");
+      await saveStorageItem("refresh", refresh || "");
+      await saveStorageItem("user_role", role || "");
       await saveStorageItem("user_email", returnedEmail || email.trim());
-      await saveStorageItem("profile_id", String(profile_id || "1"));
+      await saveStorageItem("profile_id", String(profile_id));
       await saveStorageItem("entity_name", entity_name || "");
       await saveStorageItem("merch_type", merch_type || "Bakeshop");
       await saveStorageItem("account_status", account_status || "Active");
@@ -261,7 +269,7 @@ export default function LoginScreen() {
               styles.card,
               {
                 paddingHorizontal: isNarrowPhone ? 18 : width < 400 ? 22 : 28,
-                paddingVertical: isVeryShortPhone ? 15 : isShortPhone ? 19 : 26,
+                paddingVertical: isVeryShortPhone ? 18 : isShortPhone ? 22 : 28,
               },
             ]}
           >
@@ -338,7 +346,7 @@ export default function LoginScreen() {
               style={[
                 styles.fieldContainer,
                 {
-                  marginBottom: isVeryShortPhone ? 10 : isShortPhone ? 13 : 16,
+                  marginBottom: isVeryShortPhone ? 14 : isShortPhone ? 16 : 20,
                 },
               ]}
             >
@@ -437,109 +445,19 @@ export default function LoginScreen() {
 
             <View
               style={[
-                styles.dividerContainer,
-                {
-                  marginVertical: isVeryShortPhone ? 12 : isShortPhone ? 15 : 19,
-                },
-              ]}
-            >
-              <View style={styles.divider} />
-              <Text
-                style={[
-                  styles.dividerText,
-                  { fontSize: isVeryShortPhone ? 8 : 9 },
-                ]}
-              >
-                or continue with
-              </Text>
-              <View style={styles.divider} />
-            </View>
-
-            <View
-              style={[
-                styles.socialContainer,
-                { gap: isVeryShortPhone ? 9 : 13 },
-              ]}
-            >
-              <TouchableOpacity
-                style={[
-                  styles.socialButton,
-                  {
-                    width: isVeryShortPhone ? 40 : 46,
-                    height: isVeryShortPhone ? 40 : 46,
-                    borderRadius: isVeryShortPhone ? 11 : 13,
-                  },
-                ]}
-                activeOpacity={0.7}
-              >
-                <Image
-                  source={require("../../assets/google.png")}
-                  style={{
-                    width: isVeryShortPhone ? 19 : 22,
-                    height: isVeryShortPhone ? 19 : 22,
-                  }}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.socialButton,
-                  {
-                    width: isVeryShortPhone ? 40 : 46,
-                    height: isVeryShortPhone ? 40 : 46,
-                    borderRadius: isVeryShortPhone ? 11 : 13,
-                  },
-                ]}
-                activeOpacity={0.7}
-              >
-                <Image
-                  source={require("../../assets/facebook.png")}
-                  style={{
-                    width: isVeryShortPhone ? 22 : 25,
-                    height: isVeryShortPhone ? 22 : 25,
-                  }}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.socialButton,
-                  {
-                    width: isVeryShortPhone ? 40 : 46,
-                    height: isVeryShortPhone ? 40 : 46,
-                    borderRadius: isVeryShortPhone ? 11 : 13,
-                  },
-                ]}
-                activeOpacity={0.7}
-              >
-                <Image
-                  source={require("../../assets/github.png")}
-                  style={{
-                    width: isVeryShortPhone ? 21 : 24,
-                    height: isVeryShortPhone ? 21 : 24,
-                  }}
-                  resizeMode="contain"
-                />
-              </TouchableOpacity>
-            </View>
-
-            <View
-              style={[
                 styles.signupContainer,
                 {
-                  marginTop: isVeryShortPhone ? 12 : isShortPhone ? 15 : 19,
+                  marginTop: isVeryShortPhone ? 16 : isShortPhone ? 18 : 22,
                 },
               ]}
             >
               <Text
                 style={[
                   styles.signupText,
-                  { fontSize: isVeryShortPhone ? 9 : 10 },
+                  { fontSize: isVeryShortPhone ? 10 : 11 },
                 ]}
               >
-                Don't have an account?
+                Don&apos;t have an account?
               </Text>
 
               <TouchableOpacity
@@ -549,7 +467,7 @@ export default function LoginScreen() {
                 <Text
                   style={[
                     styles.signupLink,
-                    { fontSize: isVeryShortPhone ? 9 : 10 },
+                    { fontSize: isVeryShortPhone ? 10 : 11 },
                   ]}
                 >
                   {" "}
@@ -693,34 +611,6 @@ const styles = StyleSheet.create({
     fontFamily: "PoppinsSemiBold",
     color: Colors.white,
     letterSpacing: 0.3,
-  },
-  dividerContainer: {
-    width: "100%",
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  divider: { flex: 1, height: 1, backgroundColor: Colors.border },
-  dividerText: {
-    fontFamily: "PoppinsRegular",
-    color: Colors.primary1,
-    marginHorizontal: 9,
-  },
-  socialContainer: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  socialButton: {
-    backgroundColor: Colors.white,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 1,
   },
   signupContainer: {
     flexDirection: "row",

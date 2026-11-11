@@ -1,8 +1,8 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { Stack } from "expo-router";
 import { useEffect, useState } from "react";
 import {
+  DeviceEventEmitter,
   Image,
   Linking,
   Modal,
@@ -14,7 +14,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -25,6 +24,7 @@ import {
   EstablishmentBottomNav,
   EstablishmentHeader,
   getAppStorage,
+  useIsInsideMerchantShell,
 } from "../components/EstablishmentNav";
 
 type AppealLineItem = {
@@ -97,7 +97,16 @@ type PostedDonation = {
   food_bank_address?: string | null;
 };
 
+let cachedDonationHubMemory = {
+  appeals: [] as FoodBankAppeal[],
+  activeInventory: [] as ActiveInventoryListing[],
+  postedDonations: [] as PostedDonation[],
+};
+
 export default function DonationHub() {
+  const isInsideShell = useIsInsideMerchantShell();
+  if (!isInsideShell) return null;
+
   const [merchantId, setMerchantId] = useState("1");
   const [mainTab, setMainTab] = useState<"Requests" | "Donations">("Requests");
   const [requestFilter, setRequestFilter] = useState<
@@ -109,11 +118,15 @@ export default function DonationHub() {
   const [search, setSearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
-  const [appeals, setAppeals] = useState<FoodBankAppeal[]>([]);
+  const [appeals, setAppeals] = useState<FoodBankAppeal[]>(
+    cachedDonationHubMemory.appeals
+  );
   const [activeInventory, setActiveInventory] = useState<
     ActiveInventoryListing[]
-  >([]);
-  const [postedDonations, setPostedDonations] = useState<PostedDonation[]>([]);
+  >(cachedDonationHubMemory.activeInventory);
+  const [postedDonations, setPostedDonations] = useState<PostedDonation[]>(
+    cachedDonationHubMemory.postedDonations
+  );
 
   const [selectedInventoryMap, setSelectedInventoryMap] = useState<{
     [commerceId: number]: number;
@@ -163,6 +176,24 @@ export default function DonationHub() {
 
   useEffect(() => {
     loadAllDonationData();
+
+    const listSub = DeviceEventEmitter.addListener(
+      "merchant_listings_updated",
+      () => {
+        loadAllDonationData();
+      }
+    );
+    const donSub = DeviceEventEmitter.addListener(
+      "merchant_donations_updated",
+      () => {
+        loadAllDonationData();
+      }
+    );
+
+    return () => {
+      listSub.remove();
+      donSub.remove();
+    };
   }, []);
 
   const loadAllDonationData = async () => {
@@ -181,7 +212,7 @@ export default function DonationHub() {
         api.get(`donations/available/?merchant=${storedId}`),
       ]);
 
-      setAppeals(Array.isArray(reqRes.data) ? reqRes.data : []);
+      const nextAppeals = Array.isArray(reqRes.data) ? reqRes.data : [];
 
       const rawListings = estRes.data?.listings || estRes.data || [];
       const activeItems: ActiveInventoryListing[] = rawListings
@@ -204,9 +235,17 @@ export default function DonationHub() {
             l.image_path ||
             "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600&q=80",
         }));
-      setActiveInventory(activeItems);
 
-      setPostedDonations(Array.isArray(donRes.data) ? donRes.data : []);
+      const nextPosted = Array.isArray(donRes.data) ? donRes.data : [];
+
+      cachedDonationHubMemory = {
+        appeals: nextAppeals,
+        activeInventory: activeItems,
+        postedDonations: nextPosted,
+      };
+      setAppeals(nextAppeals);
+      setActiveInventory(activeItems);
+      setPostedDonations(nextPosted);
     } catch (err) {
       console.log("Donation hub load error:", err);
     }
@@ -275,6 +314,8 @@ export default function DonationHub() {
           });
           setSelectedInventoryMap({});
           await loadAllDonationData();
+          DeviceEventEmitter.emit("merchant_donations_updated");
+          DeviceEventEmitter.emit("merchant_listings_updated");
           setDonationSubTab("Posted Donations");
           showModal(
             "Donations Published!",
@@ -369,6 +410,8 @@ export default function DonationHub() {
           });
           setSelectedAppeal(null);
           await loadAllDonationData();
+          DeviceEventEmitter.emit("merchant_donations_updated");
+          DeviceEventEmitter.emit("merchant_listings_updated");
           showModal(
             "Request Updated",
             res.data?.message || `Request status updated!`,
@@ -420,6 +463,8 @@ export default function DonationHub() {
           });
           setSelectedPosted(null);
           await loadAllDonationData();
+          DeviceEventEmitter.emit("merchant_donations_updated");
+          DeviceEventEmitter.emit("merchant_listings_updated");
           showModal(
             "Donation Updated",
             action === "complete"
@@ -471,9 +516,7 @@ export default function DonationHub() {
   const selectedCount = Object.keys(selectedInventoryMap).length;
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <EstablishmentHeader />
 
       <ScrollView
@@ -1421,7 +1464,7 @@ export default function DonationHub() {
         type={modalAlert.type}
         onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 

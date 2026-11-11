@@ -79,9 +79,6 @@ export const CEBU_CITY_BARANGAYS: BarangayCoord[] = [
   { name: "Zapatera", lat: 10.3086, lng: 123.9006 },
 ];
 
-/**
- * Global Reusable Alert Modal (Replaces native alert() across Web & Mobile)
- */
 export function ReserveAlertModal({
   visible,
   title,
@@ -98,10 +95,18 @@ export function ReserveAlertModal({
   onClose: () => void;
 }) {
   const iconConfig = {
-    success: { name: "checkmark-circle" as const, color: Colors.primary, bg: "#E7F3EC" },
+    success: {
+      name: "checkmark-circle" as const,
+      color: Colors.primary,
+      bg: "#E7F3EC",
+    },
     error: { name: "alert-circle" as const, color: "#D9383A", bg: "#FDECEC" },
     warning: { name: "warning" as const, color: "#D97706", bg: "#FEF3C7" },
-    info: { name: "information-circle" as const, color: Colors.primary, bg: "#E8EFEA" },
+    info: {
+      name: "information-circle" as const,
+      color: Colors.primary,
+      bg: "#E8EFEA",
+    },
   }[type];
 
   return (
@@ -113,12 +118,20 @@ export function ReserveAlertModal({
     >
       <View style={styles.modalOverlay}>
         <View style={[styles.modalCard, { padding: 22, maxWidth: 370 }]}>
-          <View style={[styles.otpIconCircle, { backgroundColor: iconConfig.bg }]}>
-            <Ionicons name={iconConfig.name} size={30} color={iconConfig.color} />
+          <View
+            style={[styles.otpIconCircle, { backgroundColor: iconConfig.bg }]}
+          >
+            <Ionicons
+              name={iconConfig.name}
+              size={30}
+              color={iconConfig.color}
+            />
           </View>
 
           <Text style={styles.otpTitle}>{title}</Text>
-          <Text style={[styles.otpSubtitle, { marginTop: 6, marginBottom: 18 }]}>
+          <Text
+            style={[styles.otpSubtitle, { marginTop: 6, marginBottom: 18 }]}
+          >
             {message}
           </Text>
 
@@ -138,9 +151,6 @@ export function ReserveAlertModal({
   );
 }
 
-/**
- * Global Reusable Confirmation Modal (Used for Logout Confirmation & Destructive Actions)
- */
 export function ReserveConfirmModal({
   visible,
   title = "Confirm Action",
@@ -183,7 +193,9 @@ export function ReserveConfirmModal({
           </View>
 
           <Text style={styles.otpTitle}>{title}</Text>
-          <Text style={[styles.otpSubtitle, { marginTop: 6, marginBottom: 18 }]}>
+          <Text
+            style={[styles.otpSubtitle, { marginTop: 6, marginBottom: 18 }]}
+          >
             {message}
           </Text>
 
@@ -226,9 +238,6 @@ export function ReserveConfirmModal({
   );
 }
 
-/**
- * Forgot Password Modal (Sends a clickable password reset link to the user's email)
- */
 export function ForgotPasswordEmailModal({
   visible,
   initialEmail = "",
@@ -444,7 +453,9 @@ export function PhoneOtpVerifier({
       showModalAlert(
         "SMS OTP Sent",
         res.data?.message ||
-          `6-digit SMS OTP sent to ${res.data?.normalized_phone || phone.trim()}!`,
+          `6-digit SMS OTP sent to ${
+            res.data?.normalized_phone || phone.trim()
+          }!`,
         "success"
       );
     } catch (err: any) {
@@ -501,7 +512,10 @@ export function PhoneOtpVerifier({
         style={[
           styles.inputBox,
           { marginBottom: otpSent && !isVerified ? 8 : 0 },
-          isVerified && { borderColor: Colors.primary, backgroundColor: "#F2F9F5" },
+          isVerified && {
+            borderColor: Colors.primary,
+            backgroundColor: "#F2F9F5",
+          },
         ]}
       >
         <Ionicons
@@ -581,21 +595,23 @@ export function PhoneOtpVerifier({
 }
 
 export function CebuAddressMapPicker({
-  selectedBarangay,
+  selectedBarangay = "",
   onSelectBarangay,
-  streetDetail,
+  streetDetail = "",
   onChangeStreetDetail,
   latitude,
   longitude,
   onChangeCoords,
+  pinOnly = false,
 }: {
-  selectedBarangay: string;
-  onSelectBarangay: (brgyName: string, fullAddress: string) => void;
-  streetDetail: string;
-  onChangeStreetDetail: (street: string, fullAddress: string) => void;
+  selectedBarangay?: string;
+  onSelectBarangay?: (brgyName: string, fullAddress: string) => void;
+  streetDetail?: string;
+  onChangeStreetDetail?: (street: string, fullAddress: string) => void;
   latitude: number;
   longitude: number;
   onChangeCoords: (lat: number, lng: number) => void;
+  pinOnly?: boolean;
 }) {
   const [brgyModalOpen, setBrgyModalOpen] = useState(false);
   const [brgySearch, setBrgySearch] = useState("");
@@ -632,14 +648,14 @@ export function CebuAddressMapPicker({
 
   const handleChooseBarangay = (item: BarangayCoord) => {
     const fullAddr = buildFullAddress(streetDetail, item.name);
-    onSelectBarangay(item.name, fullAddr);
+    if (onSelectBarangay) onSelectBarangay(item.name, fullAddr);
     onChangeCoords(item.lat, item.lng);
     setBrgyModalOpen(false);
   };
 
   const handleStreetInput = (val: string) => {
     const fullAddr = buildFullAddress(val, selectedBarangay);
-    onChangeStreetDetail(val, fullAddr);
+    if (onChangeStreetDetail) onChangeStreetDetail(val, fullAddr);
   };
 
   const useDeviceGps = async () => {
@@ -678,7 +694,8 @@ export function CebuAddressMapPicker({
           setLocating(false);
         }
       } else {
-        const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+        const { status } =
+          await ExpoLocation.requestForegroundPermissionsAsync();
         if (status !== "granted") {
           setGpsAlert({
             visible: true,
@@ -767,7 +784,7 @@ export function CebuAddressMapPicker({
   return (
     <View style={styles.wrapper}>
       <Text style={styles.groupLabel}>
-        Service Area Address (Strictly Cebu City Scope)
+        Service Area Location (Strictly Cebu City Scope)
       </Text>
 
       <View style={styles.lockedGrid}>
@@ -802,57 +819,63 @@ export function CebuAddressMapPicker({
         </View>
       </View>
 
-      <Text style={styles.fieldLabel}>Barangay (Cebu City) *</Text>
-      <TouchableOpacity
-        style={styles.dropdownBtn}
-        activeOpacity={0.75}
-        onPress={() => setBrgyModalOpen(true)}
-      >
-        <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
-          <Ionicons
-            name="location-outline"
-            size={18}
-            color={Colors.primary}
-            style={{ marginRight: 8 }}
-          />
-          <Text
-            style={[
-              styles.dropdownText,
-              selectedBarangay && {
-                color: Colors.primary2,
-                fontFamily: "PoppinsMedium",
-              },
-            ]}
+      {!pinOnly && (
+        <>
+          <Text style={styles.fieldLabel}>Barangay (Cebu City) *</Text>
+          <TouchableOpacity
+            style={styles.dropdownBtn}
+            activeOpacity={0.75}
+            onPress={() => setBrgyModalOpen(true)}
           >
-            {selectedBarangay
-              ? `Brgy. ${selectedBarangay}, Cebu City`
-              : "-- Select Cebu City Barangay --"}
-          </Text>
-        </View>
-        <Ionicons name="chevron-down" size={18} color={Colors.primary2} />
-      </TouchableOpacity>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
+            >
+              <Ionicons
+                name="location-outline"
+                size={18}
+                color={Colors.primary}
+                style={{ marginRight: 8 }}
+              />
+              <Text
+                style={[
+                  styles.dropdownText,
+                  selectedBarangay && {
+                    color: Colors.primary2,
+                    fontFamily: "PoppinsMedium",
+                  },
+                ]}
+              >
+                {selectedBarangay
+                  ? `Brgy. ${selectedBarangay}, Cebu City`
+                  : "-- Select Cebu City Barangay --"}
+              </Text>
+            </View>
+            <Ionicons name="chevron-down" size={18} color={Colors.primary2} />
+          </TouchableOpacity>
 
-      <Text style={styles.fieldLabel}>Street / Building / Landmark *</Text>
-      <View style={styles.inputBox}>
-        <Ionicons
-          name="home-outline"
-          size={18}
-          color={Colors.primary}
-          style={{ marginRight: 8 }}
-        />
-        <TextInput
-          style={styles.textInput}
-          placeholder="e.g. Unit 4, Osmeña Blvd near Fuente Circle"
-          placeholderTextColor={Colors.placeholder}
-          value={streetDetail}
-          onChangeText={handleStreetInput}
-        />
-      </View>
+          <Text style={styles.fieldLabel}>Street / Building / Landmark *</Text>
+          <View style={styles.inputBox}>
+            <Ionicons
+              name="home-outline"
+              size={18}
+              color={Colors.primary}
+              style={{ marginRight: 8 }}
+            />
+            <TextInput
+              style={styles.textInput}
+              placeholder="e.g. Unit 4, Osmeña Blvd near Fuente Circle"
+              placeholderTextColor={Colors.placeholder}
+              value={streetDetail}
+              onChangeText={handleStreetInput}
+            />
+          </View>
+        </>
+      )}
 
       <View style={styles.mapHeaderRow}>
-        <View>
+        <View style={{ flex: 1, paddingRight: 8 }}>
           <Text style={styles.fieldLabel}>
-            Pin Exact Location on Map (Haversine 10km Matching)
+            Pin Exact Store Location on Map (Haversine 10km Matching) *
           </Text>
           <Text style={styles.coordSubtext}>
             Pinned GPS: {latitude.toFixed(5)}° N, {longitude.toFixed(5)}° E
@@ -903,58 +926,60 @@ export function CebuAddressMapPicker({
         )}
       </View>
 
-      <Modal
-        visible={brgyModalOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setBrgyModalOpen(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Cebu City Barangay</Text>
-              <TouchableOpacity onPress={() => setBrgyModalOpen(false)}>
-                <Ionicons name="close" size={20} color={Colors.primary2} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.searchBar}>
-              <Ionicons name="search-outline" size={16} color={Colors.icon} />
-              <TextInput
-                value={brgySearch}
-                onChangeText={setBrgySearch}
-                placeholder="Search Cebu City barangay..."
-                placeholderTextColor={Colors.placeholder}
-                style={styles.searchInput}
-              />
-            </View>
-
-            <ScrollView style={{ maxHeight: 300 }}>
-              {filteredBarangays.map((b) => (
-                <TouchableOpacity
-                  key={b.name}
-                  style={styles.brgyItem}
-                  onPress={() => handleChooseBarangay(b)}
-                >
-                  <View>
-                    <Text style={styles.brgyItemText}>Brgy. {b.name}</Text>
-                    <Text style={styles.brgyCoordHint}>
-                      Cebu City • ({b.lat.toFixed(4)}, {b.lng.toFixed(4)})
-                    </Text>
-                  </View>
-                  {selectedBarangay === b.name && (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={18}
-                      color={Colors.primary}
-                    />
-                  )}
+      {!pinOnly && (
+        <Modal
+          visible={brgyModalOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setBrgyModalOpen(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Select Cebu City Barangay</Text>
+                <TouchableOpacity onPress={() => setBrgyModalOpen(false)}>
+                  <Ionicons name="close" size={20} color={Colors.primary2} />
                 </TouchableOpacity>
-              ))}
-            </ScrollView>
+              </View>
+
+              <View style={styles.searchBar}>
+                <Ionicons name="search-outline" size={16} color={Colors.icon} />
+                <TextInput
+                  value={brgySearch}
+                  onChangeText={setBrgySearch}
+                  placeholder="Search Cebu City barangay..."
+                  placeholderTextColor={Colors.placeholder}
+                  style={styles.searchInput}
+                />
+              </View>
+
+              <ScrollView style={{ maxHeight: 300 }}>
+                {filteredBarangays.map((b) => (
+                  <TouchableOpacity
+                    key={b.name}
+                    style={styles.brgyItem}
+                    onPress={() => handleChooseBarangay(b)}
+                  >
+                    <View>
+                      <Text style={styles.brgyItemText}>Brgy. {b.name}</Text>
+                      <Text style={styles.brgyCoordHint}>
+                        Cebu City • ({b.lat.toFixed(4)}, {b.lng.toFixed(4)})
+                      </Text>
+                    </View>
+                    {selectedBarangay === b.name && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={18}
+                        color={Colors.primary}
+                      />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      )}
 
       <ReserveAlertModal
         visible={gpsAlert.visible}
@@ -1026,14 +1051,19 @@ export function RegistrationOtpModal({
 
           <Text style={styles.otpTitle}>Email Verification</Text>
           <Text style={styles.otpSubtitle}>
-            Your phone number is verified! Now enter the 6-digit code sent to your email{" "}
-            <Text style={{ fontFamily: "PoppinsSemiBold", color: Colors.primary2 }}>
+            Your phone number is verified! Now enter the 6-digit code sent to
+            your email{" "}
+            <Text
+              style={{ fontFamily: "PoppinsSemiBold", color: Colors.primary2 }}
+            >
               ({email})
             </Text>
             .
           </Text>
 
-          <Text style={styles.fieldLabel}>Email Verification Code (6 Digits)</Text>
+          <Text style={styles.fieldLabel}>
+            Email Verification Code (6 Digits)
+          </Text>
           <TextInput
             value={otpCode}
             onChangeText={onChangeOtp}

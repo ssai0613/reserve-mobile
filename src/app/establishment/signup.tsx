@@ -32,10 +32,6 @@ export default function EstablishmentSignup() {
   const isNarrowPhone = width < 360;
   const horizontalPadding = isNarrowPhone ? 12 : 15;
 
-  const [busName, setBusName] = useState("");
-  const [barangay, setBarangay] = useState("");
-  const [streetDetail, setStreetDetail] = useState("");
-  const [address, setAddress] = useState("");
   const [latitude, setLatitude] = useState(10.3157);
   const [longitude, setLongitude] = useState(123.8854);
   const [contactPerson, setContactPerson] = useState("");
@@ -59,7 +55,6 @@ export default function EstablishmentSignup() {
 
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpCode, setOtpCode] = useState("");
-  const [devOtpHint, setDevOtpHint] = useState("");
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
 
   const [modalAlert, setModalAlert] = useState<ReserveModalState>({
@@ -102,12 +97,9 @@ export default function EstablishmentSignup() {
 
   const handleRequestOtp = async () => {
     if (
-      !busName ||
-      !barangay ||
-      !streetDetail ||
-      !contactPerson ||
-      !phone ||
-      !email ||
+      !contactPerson.trim() ||
+      !phone.trim() ||
+      !email.trim() ||
       !password ||
       !confirmPassword ||
       !merchType ||
@@ -115,7 +107,7 @@ export default function EstablishmentSignup() {
     ) {
       showModal(
         "Missing Required Details",
-        "Please fill in all required fields (including Confirm Password), select your Cebu City Barangay and Business Type, and upload your Business Permit.",
+        "Please fill in your Contact Person, verified Phone Number, Email, Password, Business Type, pin your location on the map, and upload your Cebu City Business Permit.",
         "warning"
       );
       return;
@@ -155,12 +147,11 @@ export default function EstablishmentSignup() {
 
     setIsLoading(true);
     try {
-      const res = await api.post("accounts/send-otp/", {
+      await api.post("accounts/send-otp/", {
         email: email.trim(),
         phone: phone.trim(),
         channel: "email",
       });
-      setDevOtpHint(res.data?.dev_otp_preview || "");
       setOtpCode("");
       setOtpModalVisible(true);
     } catch (err: any) {
@@ -212,10 +203,8 @@ export default function EstablishmentSignup() {
 
       formData.append("user_email", email.trim());
       formData.append("user_pass", password);
-      formData.append("bus_name", busName.trim());
-      formData.append("address", address);
-      formData.append("contact_person", contactPerson);
-      formData.append("hotline", hotline);
+      formData.append("contact_person", contactPerson.trim());
+      formData.append("hotline", hotline.trim());
       formData.append("phone", phone.trim());
       formData.append("merch_type", merchType);
       formData.append("bus_expiry_date", "2026-12-31");
@@ -240,15 +229,21 @@ export default function EstablishmentSignup() {
         } as any);
       }
 
-      await api.post("accounts/register/merchant/", formData, {
+      const regRes = await api.post("accounts/register/merchant/", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
       });
 
+      const ocrName = regRes.data?.ocr_analysis?.business_name;
+      const detectedMsg =
+        ocrName && ocrName !== "Not Detected"
+          ? `Detected Establishment: "${ocrName}". `
+          : "";
+
       showModal(
         "Application Submitted!",
-        "Phone & Email verified! Your Food Establishment application has been submitted for Admin Review.",
+        `Phone & Email verified! ${detectedMsg}Your Business Permit has been scanned via AI OCR and sent to ReServe Admin for KYB verification.`,
         "success",
         () => router.replace("/consumer")
       );
@@ -317,39 +312,30 @@ export default function EstablishmentSignup() {
             <View style={styles.sectionNumber}>
               <Text style={styles.sectionNumberText}>1</Text>
             </View>
-            <Text style={styles.sectionTitle}>Business Details</Text>
+            <Text style={styles.sectionTitle}>
+              Store Location Pin &amp; Contact Details
+            </Text>
           </View>
 
-          <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Establishment Name *</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons
-                name="storefront-outline"
-                size={19}
-                color={Colors.primary}
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Nena's Bakeshop"
-                placeholderTextColor={Colors.placeholder}
-                value={busName}
-                onChangeText={setBusName}
-              />
-            </View>
+          <View style={styles.ocrNoticeBanner}>
+            <Ionicons
+              name="sparkles-outline"
+              size={18}
+              color={Colors.primary}
+            />
+            <Text style={styles.ocrNoticeText}>
+              <Text style={{ fontFamily: "PoppinsSemiBold" }}>
+                Automated AI OCR Onboarding:
+              </Text>{" "}
+              You do not need to type your Establishment Name or Business
+              Address manually—our AI OCR engine extracts them directly from
+              your uploaded Cebu City Business Permit in Step 4. Simply pin your
+              exact store coordinates on the map below!
+            </Text>
           </View>
 
           <CebuAddressMapPicker
-            selectedBarangay={barangay}
-            onSelectBarangay={(brgy, fullAddr) => {
-              setBarangay(brgy);
-              setAddress(fullAddr);
-            }}
-            streetDetail={streetDetail}
-            onChangeStreetDetail={(st, fullAddr) => {
-              setStreetDetail(st);
-              setAddress(fullAddr);
-            }}
+            pinOnly
             latitude={latitude}
             longitude={longitude}
             onChangeCoords={(lat, lng) => {
@@ -588,14 +574,20 @@ export default function EstablishmentSignup() {
               <Text style={styles.sectionNumberText}>4</Text>
             </View>
             <View style={styles.sectionTitleArea}>
-              <Text style={styles.sectionTitle}>Upload Documents</Text>
-              <Text style={styles.requiredText}>Verification required</Text>
+              <Text style={styles.sectionTitle}>
+                Upload Business Permit (AI OCR)
+              </Text>
+              <Text style={styles.requiredText}>
+                Extracts Establishment Name, Address &amp; Expiry automatically
+              </Text>
             </View>
           </View>
 
           <Text style={styles.documentDescription}>
-            Please upload your Cebu City Mayor's Business Permit for AI OCR
-            comparison.
+            Upload a clear photo of your Cebu City Mayor&apos;s Business Permit.
+            Our AI OCR engine will automatically extract your Establishment Name,
+            Registered Address, Permit Number, and Expiry Date for Admin KYB
+            verification.
           </Text>
 
           <TouchableOpacity
@@ -633,7 +625,8 @@ export default function EstablishmentSignup() {
               color={Colors.primary}
             />
             <Text style={styles.secureText}>
-              Files are securely transmitted to the Admin team for review.
+              Files are securely scanned via AI OCR and reviewed by ReServe
+              Admin.
             </Text>
           </View>
 
@@ -695,7 +688,6 @@ export default function EstablishmentSignup() {
         onResend={handleRequestOtp}
         onClose={() => setOtpModalVisible(false)}
         isVerifying={isVerifyingOtp}
-        devOtpHint={devOtpHint}
       />
 
       <ReserveAlertModal
@@ -705,7 +697,11 @@ export default function EstablishmentSignup() {
         type={modalAlert.type}
         onClose={() => {
           const cb = modalAlert.onConfirm;
-          setModalAlert((prev) => ({ ...prev, visible: false, onConfirm: null }));
+          setModalAlert((prev) => ({
+            ...prev,
+            visible: false,
+            onConfirm: null,
+          }));
           if (cb) cb();
         }}
       />
@@ -716,53 +712,315 @@ export default function EstablishmentSignup() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scrollContent: { flexGrow: 1, alignItems: "center" },
-  header: { width: "100%", flexDirection: "row", alignItems: "center", marginBottom: 8 },
-  backButton: { flexDirection: "row", alignItems: "center", paddingVertical: 6, paddingRight: 12 },
-  headerTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2, marginLeft: 2 },
+  header: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  backButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 6,
+    paddingRight: 12,
+  },
+  headerTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 13,
+    color: Colors.primary2,
+    marginLeft: 2,
+  },
   brandContainer: { alignItems: "center", marginBottom: 18 },
-  logo: { fontFamily: "PoppinsBold", color: Colors.primary2, letterSpacing: 1.5 },
-  brandSubtitle: { fontFamily: "PoppinsRegular", fontSize: 9, color: Colors.primary1, marginTop: 1 },
-  card: { width: "100%", maxWidth: 500, backgroundColor: Colors.white, borderRadius: 20, paddingHorizontal: 18, paddingVertical: 21, elevation: 4 },
+  logo: {
+    fontFamily: "PoppinsBold",
+    color: Colors.primary2,
+    letterSpacing: 1.5,
+  },
+  brandSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 9,
+    color: Colors.primary1,
+    marginTop: 1,
+  },
+  card: {
+    width: "100%",
+    maxWidth: 500,
+    backgroundColor: Colors.white,
+    borderRadius: 20,
+    paddingHorizontal: 18,
+    paddingVertical: 21,
+    elevation: 4,
+  },
   titleContainer: { marginBottom: 20 },
-  mainTitle: { fontFamily: "PoppinsBold", color: Colors.primary2, letterSpacing: 0.3 },
-  mainSubtitle: { fontFamily: "PoppinsRegular", fontSize: 9.5, lineHeight: 15, color: "#777777", marginTop: 4, maxWidth: 330 },
-  sectionHeader: { flexDirection: "row", alignItems: "center", marginBottom: 13 },
-  sectionNumber: { width: 27, height: 27, borderRadius: 14, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center", marginRight: 9 },
-  sectionNumberText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.white },
+  mainTitle: {
+    fontFamily: "PoppinsBold",
+    color: Colors.primary2,
+    letterSpacing: 0.3,
+  },
+  mainSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 9.5,
+    lineHeight: 15,
+    color: "#777777",
+    marginTop: 4,
+    maxWidth: 330,
+  },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 13,
+  },
+  sectionNumber: {
+    width: 27,
+    height: 27,
+    borderRadius: 14,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 9,
+  },
+  sectionNumberText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11,
+    color: Colors.white,
+  },
   sectionTitleArea: { flex: 1 },
-  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2 },
-  requiredText: { fontFamily: "PoppinsRegular", fontSize: 8.5, color: "#888888", marginTop: 1 },
-  sectionDivider: { height: 1, backgroundColor: "#E8E8E8", marginVertical: 17 },
+  sectionTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 14,
+    color: Colors.primary2,
+  },
+  requiredText: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 8.5,
+    color: "#888888",
+    marginTop: 1,
+  },
+  ocrNoticeBanner: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    backgroundColor: "#E8EFEA",
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 11,
+    padding: 11,
+    marginBottom: 12,
+  },
+  ocrNoticeText: {
+    flex: 1,
+    fontFamily: "PoppinsRegular",
+    fontSize: 9.5,
+    lineHeight: 14.5,
+    color: Colors.primary2,
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: "#E8E8E8",
+    marginVertical: 17,
+  },
   fieldContainer: { width: "100%", marginBottom: 12 },
-  label: { fontFamily: "PoppinsMedium", fontSize: 10, color: "#303030", marginBottom: 5 },
-  inputContainer: { width: "100%", height: 45, backgroundColor: Colors.input, borderRadius: 10, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, borderWidth: 1, borderColor: "#E5E5E5" },
+  label: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 10,
+    color: "#303030",
+    marginBottom: 5,
+  },
+  inputContainer: {
+    width: "100%",
+    height: 45,
+    backgroundColor: Colors.input,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: "#E5E5E5",
+  },
   inputIcon: { marginRight: 9 },
-  input: { flex: 1, height: "100%", fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary2, paddingVertical: 0 },
-  dropdown: { width: "100%", height: 45, backgroundColor: Colors.input, borderRadius: 10, flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, borderWidth: 1, borderColor: "#E5E5E5" },
+  input: {
+    flex: 1,
+    height: "100%",
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    color: Colors.primary2,
+    paddingVertical: 0,
+  },
+  dropdown: {
+    width: "100%",
+    height: 45,
+    backgroundColor: Colors.input,
+    borderRadius: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: "#E5E5E5",
+  },
   dropdownLeft: { flexDirection: "row", alignItems: "center" },
-  dropdownText: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: "#999999", marginLeft: 9 },
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.4)", justifyContent: "center", alignItems: "center", padding: 20 },
-  dropdownMenu: { width: "100%", maxWidth: 320, backgroundColor: Colors.white, borderRadius: 15, overflow: "hidden", elevation: 10 },
-  dropdownHeader: { backgroundColor: "#F8F9FA", paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: "#E5E5E5" },
-  dropdownHeaderText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, textAlign: "center" },
-  dropdownItem: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 16, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: "#F0F0F0" },
-  dropdownItemText: { fontFamily: "PoppinsMedium", fontSize: 12, color: Colors.primary2 },
-  documentDescription: { fontFamily: "PoppinsRegular", fontSize: 9.5, lineHeight: 14, color: "#777777", marginBottom: 10 },
-  uploadBox: { width: "100%", minHeight: 72, borderWidth: 1, borderColor: "#D5E4DC", backgroundColor: "#FAFCFB", borderRadius: 11, flexDirection: "row", alignItems: "center", paddingHorizontal: 10, paddingVertical: 9, marginBottom: 9 },
-  uploadIconCircle: { width: 44, height: 44, borderRadius: 10, backgroundColor: "#E7F1EC", alignItems: "center", justifyContent: "center", marginRight: 10 },
+  dropdownText: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    color: "#999999",
+    marginLeft: 9,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  dropdownMenu: {
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: Colors.white,
+    borderRadius: 15,
+    overflow: "hidden",
+    elevation: 10,
+  },
+  dropdownHeader: {
+    backgroundColor: "#F8F9FA",
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E5E5E5",
+  },
+  dropdownHeaderText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11,
+    color: Colors.primary2,
+    textAlign: "center",
+  },
+  dropdownItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: "#F0F0F0",
+  },
+  dropdownItemText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 12,
+    color: Colors.primary2,
+  },
+  documentDescription: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 9.5,
+    lineHeight: 14,
+    color: "#777777",
+    marginBottom: 10,
+  },
+  uploadBox: {
+    width: "100%",
+    minHeight: 72,
+    borderWidth: 1,
+    borderColor: "#D5E4DC",
+    backgroundColor: "#FAFCFB",
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    marginBottom: 9,
+  },
+  uploadIconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    backgroundColor: "#E7F1EC",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 10,
+  },
   uploadContent: { flex: 1, minWidth: 0 },
-  uploadTitle: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: "#252525" },
-  uploadSubtitle: { fontFamily: "PoppinsRegular", fontSize: 8.5, color: "#888888", marginTop: 1 },
-  uploadAction: { fontFamily: "PoppinsMedium", fontSize: 8.5, color: Colors.primary, marginTop: 2 },
-  securityNote: { flexDirection: "row", alignItems: "center", marginTop: 2, marginBottom: 15 },
-  secureText: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 8.5, lineHeight: 13, color: "#777777", marginLeft: 6 },
-  termsContainer: { flexDirection: "row", alignItems: "flex-start", marginBottom: 16 },
-  checkbox: { width: 17, height: 17, borderRadius: 4, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center", marginRight: 7, marginTop: 1 },
-  termsText: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 8.5, lineHeight: 13, color: "#666666" },
+  uploadTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10.5,
+    color: "#252525",
+  },
+  uploadSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 8.5,
+    color: "#888888",
+    marginTop: 1,
+  },
+  uploadAction: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 8.5,
+    color: Colors.primary,
+    marginTop: 2,
+  },
+  securityNote: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 2,
+    marginBottom: 15,
+  },
+  secureText: {
+    flex: 1,
+    fontFamily: "PoppinsRegular",
+    fontSize: 8.5,
+    lineHeight: 13,
+    color: "#777777",
+    marginLeft: 6,
+  },
+  termsContainer: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 16,
+  },
+  checkbox: {
+    width: 17,
+    height: 17,
+    borderRadius: 4,
+    backgroundColor: Colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 7,
+    marginTop: 1,
+  },
+  termsText: {
+    flex: 1,
+    fontFamily: "PoppinsRegular",
+    fontSize: 8.5,
+    lineHeight: 13,
+    color: "#666666",
+  },
   termsLink: { fontFamily: "PoppinsMedium", color: Colors.primary },
-  submitButton: { width: "100%", minHeight: 48, backgroundColor: Colors.button, borderRadius: 11, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, elevation: 2 },
-  submitText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.white },
-  loginContainer: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 16 },
-  loginText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary2 },
-  loginLink: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.primary },
+  submitButton: {
+    width: "100%",
+    minHeight: 48,
+    backgroundColor: Colors.button,
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    elevation: 2,
+  },
+  submitText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11,
+    color: Colors.white,
+  },
+  loginContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 16,
+  },
+  loginText: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10,
+    color: Colors.primary2,
+  },
+  loginLink: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
+    color: Colors.primary,
+  },
 });

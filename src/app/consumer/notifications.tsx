@@ -18,7 +18,10 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
-import { CONSUMER_READ_NOTIFS_KEY } from "../components/ConsumerNav";
+import {
+  CONSUMER_READ_NOTIFS_KEY,
+  switchConsumerTab,
+} from "../components/ConsumerNav";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -131,8 +134,21 @@ export default function Notifications() {
       setSelectedAnnouncement(item);
       return;
     }
-    if (item.target_route) {
-      router.push(item.target_route as any);
+
+    const route = String(item.target_route || "/consumer/claims");
+    if (route.includes("/consumer/homepage")) {
+      switchConsumerTab("Home");
+    } else if (route.includes("/consumer/cart")) {
+      switchConsumerTab("Cart");
+    } else if (route.includes("/consumer/profile")) {
+      switchConsumerTab("Profile");
+    } else {
+      DeviceEventEmitter.emit("consumer_claims_updated");
+      switchConsumerTab("Claims");
+    }
+
+    if (router.canGoBack()) {
+      router.back();
     } else {
       router.replace("/consumer/claims" as any);
     }
@@ -323,7 +339,9 @@ export default function Notifications() {
                     <View
                       style={[
                         styles.stateBadge,
-                        isRead ? styles.stateBadgeRead : styles.stateBadgeUnread,
+                        isRead
+                          ? styles.stateBadgeRead
+                          : styles.stateBadgeUnread,
                       ]}
                     >
                       {!isRead && <View style={styles.unreadDot} />}

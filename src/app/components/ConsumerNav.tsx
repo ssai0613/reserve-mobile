@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import {
   DeviceEventEmitter,
   Modal,
@@ -22,6 +22,22 @@ import {
   ReserveAlertModal,
   ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
+
+export type ConsumerTabName = "Home" | "Cart" | "Claims" | "Profile";
+
+// Indicates whether a tab component is being rendered inside the persistent _layout.tsx shell
+export const ConsumerShellDirectRenderContext = createContext<boolean>(false);
+
+export const useIsInsideConsumerShell = () =>
+  useContext(ConsumerShellDirectRenderContext);
+
+// Instant 0ms tab switcher (no full page reload)
+export const switchConsumerTab = (
+  tab: ConsumerTabName,
+  params?: { voucher?: string; justConfirmed?: string }
+) => {
+  DeviceEventEmitter.emit("consumer_switch_tab", { tab, params });
+};
 
 let cachedConsumerLocation: {
   street: string;
@@ -55,7 +71,11 @@ const setAppStorage = async (key: string, value: string): Promise<void> => {
 export const CONSUMER_LOCATION_KEY = "@reserve_consumer_location";
 export const CONSUMER_READ_NOTIFS_KEY = "@reserve_consumer_read_notifs";
 
-export function ConsumerHeader() {
+export function ConsumerHeader({ isShellHeader = false }: { isShellHeader?: boolean }) {
+  const isInsideShell = useIsInsideConsumerShell();
+  // Prevent duplicate header inside individual screens when managed by _layout.tsx
+  if (isInsideShell && !isShellHeader) return null;
+
   const [unreadTotalCount, setUnreadTotalCount] = useState(0);
 
   const [locationModalVisible, setLocationModalVisible] = useState(false);
@@ -126,7 +146,7 @@ export function ConsumerHeader() {
 
     loadCounts();
     loadConsumerProfileWithoutOverwritingLocation();
-    const timer = setInterval(loadCounts, 4000);
+    const timer = setInterval(loadCounts, 5000);
 
     const handleStorageChange = () => {
       const saved =
@@ -267,6 +287,7 @@ export function ConsumerHeader() {
       setLocationModalVisible(false);
 
       DeviceEventEmitter.emit("app_location_updated", payload);
+      DeviceEventEmitter.emit("consumer_profile_updated");
       if (Platform.OS === "web") {
         window.dispatchEvent(new Event("reserve_location_changed"));
       }
@@ -334,7 +355,9 @@ export function ConsumerHeader() {
               {streetDetail || "Cebu City"}
             </Text>
             <Text style={styles.headerBarangaySmall} numberOfLines={1}>
-              {barangay ? `Brgy. ${barangay}, Cebu City` : address || "Tap to set Cebu City pin"}
+              {barangay
+                ? `Brgy. ${barangay}, Cebu City`
+                : address || "Tap to set Cebu City pin"}
             </Text>
           </View>
         </TouchableOpacity>
@@ -431,16 +454,32 @@ export function ConsumerHeader() {
 
 export function ConsumerBottomNav({
   activeTab,
+  isShellNav = false,
+  onSelectTab,
 }: {
-  activeTab: "Home" | "Cart" | "Claims" | "Profile";
+  activeTab: ConsumerTabName;
+  isShellNav?: boolean;
+  onSelectTab?: (tab: ConsumerTabName) => void;
 }) {
+  const isInsideShell = useIsInsideConsumerShell();
+  if (isInsideShell && !isShellNav) return null;
+
   const insets = useSafeAreaInsets();
   const [cartCount, setCartCount] = useState(0);
 
   useEffect(() => {
     loadCartCount();
-    const interval = setInterval(loadCartCount, 1500);
-    return () => clearInterval(interval);
+    const cartSub = DeviceEventEmitter.addListener(
+      "consumer_cart_updated",
+      () => {
+        loadCartCount();
+      }
+    );
+    const interval = setInterval(loadCartCount, 2500);
+    return () => {
+      cartSub.remove();
+      clearInterval(interval);
+    };
   }, []);
 
   const loadCartCount = async () => {
@@ -454,6 +493,15 @@ export function ConsumerBottomNav({
       }
     } catch (e) {
       setCartCount(0);
+    }
+  };
+
+  const handleTabPress = (tab: ConsumerTabName, fallbackRoute: string) => {
+    if (onSelectTab) {
+      onSelectTab(tab);
+    } else {
+      switchConsumerTab(tab);
+      router.replace(fallbackRoute as any);
     }
   };
 
@@ -473,26 +521,26 @@ export function ConsumerBottomNav({
         icon={activeTab === "Home" ? "home" : "home-outline"}
         label="Home"
         active={activeTab === "Home"}
-        onPress={() => router.replace("/consumer/homepage" as any)}
+        onPress={() => handleTabPress("Home", "/consumer/homepage")}
       />
       <BottomNavItem
         icon={activeTab === "Cart" ? "cart" : "cart-outline"}
         label="My Cart"
         active={activeTab === "Cart"}
         badgeCount={cartCount}
-        onPress={() => router.replace("/consumer/cart" as any)}
+        onPress={() => handleTabPress("Cart", "/consumer/cart")}
       />
       <BottomNavItem
         icon={activeTab === "Claims" ? "receipt" : "receipt-outline"}
         label="My Claims"
         active={activeTab === "Claims"}
-        onPress={() => router.replace("/consumer/claims" as any)}
+        onPress={() => handleTabPress("Claims", "/consumer/claims")}
       />
       <BottomNavItem
         icon={activeTab === "Profile" ? "person" : "person-outline"}
         label="Profile"
         active={activeTab === "Profile"}
-        onPress={() => router.replace("/consumer/profile" as any)}
+        onPress={() => handleTabPress("Profile", "/consumer/profile")}
       />
     </View>
   );

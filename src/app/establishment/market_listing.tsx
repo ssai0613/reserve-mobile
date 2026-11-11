@@ -4,11 +4,12 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { decode } from "base64-arraybuffer";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import { Stack } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useRef, useState } from "react";
 import {
   Animated,
+  DeviceEventEmitter,
   Dimensions,
   Image,
   KeyboardAvoidingView,
@@ -24,14 +25,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   EstablishmentBottomNav,
   EstablishmentHeader,
+  useIsInsideMerchantShell,
 } from "../components/EstablishmentNav";
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
+
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "";
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") {
@@ -67,15 +71,18 @@ type ProduceListing = {
   rescueVoucher: boolean;
 };
 
-const initialProduceListings: ProduceListing[] = [];
+let cachedProduceListingsMemory: ProduceListing[] = [];
 
 export default function SMEProduceListing() {
-  const [merchantId, setMerchantId] = useState<string>("1");
+  const isInsideShell = useIsInsideMerchantShell();
+  if (!isInsideShell) return null;
+
+  const [merchantId, setMerchantId] = useState<string>("");
   const [establishmentName, setEstablishmentName] = useState<string>(
     "Market Vendor Portal"
   );
   const [foodListings, setFoodListings] = useState<ProduceListing[]>(
-    initialProduceListings
+    cachedProduceListingsMemory
   );
   const [listingModalVisible, setListingModalVisible] = useState(false);
   const [viewModalVisible, setViewModalVisible] = useState(false);
@@ -419,20 +426,51 @@ export default function SMEProduceListing() {
   useEffect(() => {
     let interval: any;
     const setup = async () => {
-      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedId = await getStorageItem("profile_id");
+      const storedEmail = (await getStorageItem("user_email")) || "";
       const storedName =
         (await getStorageItem("entity_name")) || "Market Vendor Portal";
-      setMerchantId(storedId);
+
+      if (!storedId && !storedEmail) {
+        router.replace("/consumer");
+        return;
+      }
+
+      const resolvedId = storedId || "0";
+      setMerchantId(resolvedId);
       setEstablishmentName(storedName);
 
-      await fetchListings(storedId, storedName);
+      await fetchListings(resolvedId, storedName);
       interval = setInterval(() => {
-        fetchListings(storedId, storedName);
-      }, 4000);
+        fetchListings(resolvedId, storedName);
+      }, 6000);
     };
     setup();
+
+    const listSub = DeviceEventEmitter.addListener(
+      "merchant_listings_updated",
+      () => {
+        fetchListings();
+      }
+    );
+    const donSub = DeviceEventEmitter.addListener(
+      "merchant_donations_updated",
+      () => {
+        fetchListings();
+      }
+    );
+    const ordSub = DeviceEventEmitter.addListener(
+      "merchant_orders_updated",
+      () => {
+        fetchListings();
+      }
+    );
+
     return () => {
       if (interval) clearInterval(interval);
+      listSub.remove();
+      donSub.remove();
+      ordSub.remove();
     };
   }, []);
 
@@ -445,23 +483,17 @@ export default function SMEProduceListing() {
     fallbackName = establishmentName
   ) => {
     try {
-      let donatedProductIds: number[] = [];
-      try {
-        const donationRes = await api.get("donations/available/");
-        donatedProductIds = donationRes.data.map(
-          (item: any) => item.product_id
-        );
-      } catch (err) {}
+      const activeId = mId || (await getStorageItem("profile_id")) || "0";
+      const storedEmail = (await getStorageItem("user_email")) || "";
 
-      const response = await api.get(`listings/establishment/?merchant=${mId}`);
+      const response = await api.get(
+        `listings/establishment/?merchant=${activeId}&email=${encodeURIComponent(
+          storedEmail
+        )}`
+      );
       const rawListings = response.data.listings || response.data || [];
 
-      const unDonatedListings = rawListings.filter((item: any) => {
-        const listingId = item.prod_id || item.id;
-        return !donatedProductIds.includes(listingId);
-      });
-
-      const realData = unDonatedListings.map((item: any) => {
+      const realData = rawListings.map((item: any) => {
         const rawCond = String(
           item.storage_condition || item.storageCondition || ""
         ).toLowerCase();
@@ -483,7 +515,7 @@ export default function SMEProduceListing() {
           price: Number(item.price || 0),
           originalPrice: Number(item.original_price || 0),
           floorPrice: Number(item.floor_price || 0),
-          distance: "0.5 km",
+          distance: item.distance || "Storefront",
           time: item.status === "Draft" ? "Not published" : "Active",
           image:
             item.image_path ||
@@ -512,6 +544,7 @@ export default function SMEProduceListing() {
         return timeA - timeB;
       });
 
+      cachedProduceListingsMemory = realData;
       setFoodListings(realData);
     } catch (error) {
       console.error("Failed to pull from DB:", error);
@@ -830,12 +863,10 @@ export default function SMEProduceListing() {
       if (
         imageUri &&
         !imageUri.includes("unsplash") &&
-        !imageUri.startsWith("http")
+        !imageUri.startsWith("http") &&
+        SUPABASE_URL &&
+        SUPABASE_ANON_KEY
       ) {
-        const supabaseUrl = "https://pxyigbutwupyslndoplm.supabase.co";
-        const supabaseKey =
-          "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4eWlnYnV0d3VweXNsbmRvcGxtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODczOTEzNjcsImV4cCI6MjEwMjk2NzM2N30.r8UjIGq7SiVNPJ87zs_TnHBbRbaVfSk59gmY3jSrdrY";
-
         const fileName = `${Date.now()}_produce_photo.jpg`;
 
         try {
@@ -859,12 +890,12 @@ export default function SMEProduceListing() {
           }
 
           const uploadRes = await fetch(
-            `${supabaseUrl}/storage/v1/object/food-images/${fileName}`,
+            `${SUPABASE_URL}/storage/v1/object/food-images/${fileName}`,
             {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${supabaseKey}`,
-                apikey: supabaseKey,
+                Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+                apikey: SUPABASE_ANON_KEY,
                 "Content-Type": "image/jpeg",
                 "x-upsert": "true",
               },
@@ -873,12 +904,16 @@ export default function SMEProduceListing() {
           );
 
           if (uploadRes.ok) {
-            finalImageUrl = `${supabaseUrl}/storage/v1/object/public/food-images/${fileName}`;
+            finalImageUrl = `${SUPABASE_URL}/storage/v1/object/public/food-images/${fileName}`;
           }
         } catch (uploadErr) {
           console.error("Error processing image upload:", uploadErr);
         }
       }
+
+      const activeMerchId =
+        merchantId || (await getStorageItem("profile_id")) || "0";
+      const storedEmail = (await getStorageItem("user_email")) || "";
 
       const payload = {
         prod_name: foodName,
@@ -896,7 +931,8 @@ export default function SMEProduceListing() {
         floor_price: floorPrice,
         category: getCategoryId(category),
         pricing_mode: "dynamic",
-        merchant: Number(merchantId) || 1,
+        merchant: Number(activeMerchId),
+        email: storedEmail,
         threshold: 1,
         status: finalStatus,
         preparation_date: preparationDate.replace(/\u202f/g, " "),
@@ -912,7 +948,8 @@ export default function SMEProduceListing() {
         await api.post("listings/create/", payload);
       }
 
-      await fetchListings(merchantId, establishmentName);
+      await fetchListings(activeMerchId, establishmentName);
+      DeviceEventEmitter.emit("merchant_listings_updated");
       setListingModalVisible(false);
       const wasEditing = !!editingListing;
       setEditingListing(null);
@@ -951,7 +988,12 @@ export default function SMEProduceListing() {
   const executeRemoveListing = async (id: number) => {
     try {
       await api.delete(`listings/delete/${id}/`);
-      setFoodListings((current) => current.filter((item) => item.id !== id));
+      setFoodListings((current) => {
+        const next = current.filter((item) => item.id !== id);
+        cachedProduceListingsMemory = next;
+        return next;
+      });
+      DeviceEventEmitter.emit("merchant_listings_updated");
       setAlertConfig({
         visible: true,
         title: "Removed",
@@ -973,8 +1015,7 @@ export default function SMEProduceListing() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
+    <View style={styles.container}>
       <EstablishmentHeader />
 
       <ScrollView
@@ -1004,7 +1045,7 @@ export default function SMEProduceListing() {
           <View style={styles.createTextContainer}>
             <Text style={styles.createTitle}>Add produce listing</Text>
             <Text style={styles.createSubtitle}>
-              Post surplus fruits & vegetables
+              Post surplus fruits &amp; vegetables
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={21} color={Colors.white} />
@@ -1915,7 +1956,9 @@ export default function SMEProduceListing() {
                 </View>
 
                 <View style={styles.viewSection}>
-                  <Text style={styles.viewSectionTitle}>Storage & harvest</Text>
+                  <Text style={styles.viewSectionTitle}>
+                    Storage &amp; harvest
+                  </Text>
                   <DetailRow
                     icon="calendar-outline"
                     label="Harvested / Posted"
@@ -1967,7 +2010,9 @@ export default function SMEProduceListing() {
                         size={17}
                         color={Colors.white}
                       />
-                      <Text style={styles.viewEditButtonText}>Edit listing</Text>
+                      <Text style={styles.viewEditButtonText}>
+                        Edit listing
+                      </Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -1977,7 +2022,7 @@ export default function SMEProduceListing() {
           </Animated.View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -2108,10 +2153,7 @@ function ListingCard({
       ) {
         hasFlaggedRef.current = true;
         item.status = "Flagged";
-        api
-          .put(`listings/update/${item.id}/`, { status: "Flagged" })
-          .then(() => onStatusChange?.())
-          .catch(console.log);
+        onStatusChange?.();
       }
 
       if (distance <= 0) {

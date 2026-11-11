@@ -1,10 +1,13 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
+import { Camera, CameraView } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
-import { Stack } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
+  DeviceEventEmitter,
   Image,
   Modal,
   Platform,
@@ -16,7 +19,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { WebView } from "react-native-webview";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -26,6 +29,7 @@ import {
 import {
   EstablishmentBottomNav,
   EstablishmentHeader,
+  useIsInsideMerchantShell,
 } from "../components/EstablishmentNav";
 
 type Order = {
@@ -56,17 +60,45 @@ type Order = {
   rescueVoucher: boolean;
 };
 
+let cachedOrdersMemory = {
+  pendingOrders: [] as Order[],
+  completedOrders: [] as Order[],
+  activePickupsCount: 0,
+  nearingExpiryCount: 0,
+};
+
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
   return await SecureStore.getItemAsync(key);
 };
 
+const extractCleanVoucherCode = (rawScanned: string): string => {
+  const cleaned = String(rawScanned || "")
+    .replace(/^RESERVE:/i, "")
+    .trim()
+    .toUpperCase();
+  const match = cleaned.match(/OID\d+/i);
+  if (match) return match[0].toUpperCase();
+  return cleaned.split("-")[0].trim();
+};
+
 export default function EstablishmentOrders() {
-  const [merchantId, setMerchantId] = useState("1");
-  const [pendingOrders, setPendingOrders] = useState<Order[]>([]);
-  const [completedOrders, setCompletedOrders] = useState<Order[]>([]);
-  const [activePickupsCount, setActivePickupsCount] = useState(0);
-  const [nearingExpiryCount, setNearingExpiryCount] = useState(0);
+  const isInsideShell = useIsInsideMerchantShell();
+  if (!isInsideShell) return null;
+
+  const [merchantId, setMerchantId] = useState("");
+  const [pendingOrders, setPendingOrders] = useState<Order[]>(
+    cachedOrdersMemory.pendingOrders
+  );
+  const [completedOrders, setCompletedOrders] = useState<Order[]>(
+    cachedOrdersMemory.completedOrders
+  );
+  const [activePickupsCount, setActivePickupsCount] = useState(
+    cachedOrdersMemory.activePickupsCount
+  );
+  const [nearingExpiryCount, setNearingExpiryCount] = useState(
+    cachedOrdersMemory.nearingExpiryCount
+  );
   const [refreshing, setRefreshing] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -78,8 +110,17 @@ export default function EstablishmentOrders() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
 
   const [qrModalVisible, setQrModalVisible] = useState(false);
-  const [verifyMode, setVerifyMode] = useState<"choose" | "manual">("choose");
+  const [verifyMode, setVerifyMode] = useState<
+    "choose" | "live_scan" | "manual"
+  >("choose");
   const [qrOrderCode, setQrOrderCode] = useState("");
+  const [decodingQr, setDecodingQr] = useState(false);
+  const [qrBase64ToDecode, setQrBase64ToDecode] = useState<string | null>(null);
+
+  // Live QR Scanner States
+  const [hasScannedLock, setHasScannedLock] = useState(false);
+  const [torchEnabled, setTorchEnabled] = useState(false);
+  const scanLockRef = useRef(false);
 
   const [summaryConfirmOrder, setSummaryConfirmOrder] = useState<Order | null>(
     null
@@ -115,60 +156,236 @@ export default function EstablishmentOrders() {
   const openVerificationModal = () => {
     setVerifyMode("choose");
     setQrOrderCode("");
+    setDecodingQr(false);
+    setQrBase64ToDecode(null);
+    setHasScannedLock(false);
+    setTorchEnabled(false);
+    scanLockRef.current = false;
     setQrModalVisible(true);
   };
 
-  const handleOpenCameraQrScan = async () => {
+  const closeVerificationModal = () => {
+    setQrModalVisible(false);
+    setVerifyMode("choose");
+    setTorchEnabled(false);
+    setHasScannedLock(false);
+    scanLockRef.current = false;
+  };
+
+  const lookupAndPreviewVoucher = async (rawCode: string) => {
+    const code = extractCleanVoucherCode(rawCode);
+    if (!code) {
+      scanLockRef.current = false;
+      setHasScannedLock(false);
+      showModal(
+        "Unrecognized QR Code",
+        "Could not read a valid RESERVE Voucher ID from the scanned QR code. Please try again or enter the Voucher ID manually.",
+        "warning"
+      );
+      return;
+    }
+
+    const localMatch = pendingOrders.find((o) => o.id.toUpperCase() === code);
+    if (localMatch) {
+      closeVerificationModal();
+      setQrOrderCode("");
+      setSummaryConfirmOrder(localMatch);
+      return;
+    }
+
+    setDecodingQr(true);
+    try {
+      const activeId =
+        merchantId || (await getStorageItem("profile_id")) || "0";
+      const res = await api.post(`listings/merchant-portal/${activeId}/`, {
+        action: "preview_order",
+        order_code: code,
+      });
+      if (res.data?.order) {
+        closeVerificationModal();
+        setQrOrderCode("");
+        setSummaryConfirmOrder(res.data.order);
+      }
+    } catch (e: any) {
+      scanLockRef.current = false;
+      setHasScannedLock(false);
+      showModal(
+        "Order Not Found",
+        e.response?.data?.error ||
+          `No pending order at your store matches scanned voucher "${code}".`,
+        "error"
+      );
+    } finally {
+      setDecodingQr(false);
+    }
+  };
+
+  const handleStartLiveCameraScan = async () => {
     try {
       if (Platform.OS !== "web") {
-        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        const { status } = await Camera.requestCameraPermissionsAsync();
         if (status !== "granted") {
           showModal(
             "Camera Permission Required",
-            "Camera permission is required to scan the customer's QR code.",
+            "Please allow camera access in your device settings to scan customer QR Rescue Vouchers live.",
             "warning"
           );
           return;
         }
       }
-      const result = await ImagePicker.launchCameraAsync({
-        cameraType: ImagePicker.CameraType.back,
-        quality: 0.7,
-      });
+      scanLockRef.current = false;
+      setHasScannedLock(false);
+      setTorchEnabled(false);
+      setVerifyMode("live_scan");
+    } catch (err) {
+      showModal(
+        "Camera Error",
+        "Could not start live camera scanner. You can upload a QR image from your gallery or enter the Voucher ID manually.",
+        "warning"
+      );
+    }
+  };
 
-      if (!result.canceled) {
-        if (pendingOrders.length === 1) {
-          setQrModalVisible(false);
-          setSummaryConfirmOrder(pendingOrders[0]);
+  const handleLiveBarcodeScanned = ({ data }: { type?: string; data: string }) => {
+    if (scanLockRef.current || !data) return;
+    scanLockRef.current = true;
+    setHasScannedLock(true);
+    lookupAndPreviewVoucher(data);
+  };
+
+  // Listen for live WebRTC QR scan messages when running on Web
+  useEffect(() => {
+    if (Platform.OS === "web" && qrModalVisible && verifyMode === "live_scan") {
+      const handleWebMessage = (event: MessageEvent) => {
+        if (
+          event.data &&
+          event.data.type === "RESERVE_LIVE_QR_SCANNED" &&
+          event.data.data
+        ) {
+          handleLiveBarcodeScanned({ data: String(event.data.data) });
+        }
+      };
+      window.addEventListener("message", handleWebMessage);
+      return () => window.removeEventListener("message", handleWebMessage);
+    }
+  }, [qrModalVisible, verifyMode, pendingOrders, merchantId]);
+
+  const decodeQrFromUriOrBase64 = async (
+    uri: string,
+    base64Data?: string | null
+  ) => {
+    setDecodingQr(true);
+    try {
+      if (Platform.OS === "web") {
+        const formData = new FormData();
+        const blobRes = await fetch(uri);
+        const blob = await blobRes.blob();
+        formData.append("file", blob, "qr.png");
+        const qrRes = await fetch("https://api.qrserver.com/v1/read-qr-code/", {
+          method: "POST",
+          body: formData,
+        });
+        const qrJson = await qrRes.json();
+        const decodedText = qrJson?.[0]?.symbol?.[0]?.data;
+        setDecodingQr(false);
+        if (decodedText) {
+          await lookupAndPreviewVoucher(decodedText);
         } else {
-          setVerifyMode("manual");
           showModal(
-            "QR Code Captured",
-            "Please enter or confirm the Transaction / Voucher ID below to view the Order Summary before release.",
-            "info"
+            "QR Code Not Detected",
+            "No valid QR code was detected in the image. Please ensure the QR voucher is clearly visible or enter the Voucher ID manually.",
+            "warning"
           );
         }
+        return;
+      }
+
+      if (base64Data) {
+        setQrBase64ToDecode(base64Data);
+        return;
+      }
+
+      setDecodingQr(false);
+      showModal(
+        "QR Scan Notice",
+        "Could not read image data. Please try again or type the Voucher ID.",
+        "warning"
+      );
+    } catch (err) {
+      setDecodingQr(false);
+      showModal(
+        "QR Decode Error",
+        "Could not decode the QR image. Please try again or enter the Voucher ID manually.",
+        "error"
+      );
+    }
+  };
+
+  const handlePickQrFromGallery = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+        base64: true,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        await decodeQrFromUriOrBase64(asset.uri, asset.base64);
       }
     } catch (err) {
-      setVerifyMode("manual");
+      showModal("Gallery Error", "Could not open image library.", "error");
     }
   };
 
   useEffect(() => {
     loadOrders();
+
+    const ordSub = DeviceEventEmitter.addListener(
+      "merchant_orders_updated",
+      () => {
+        loadOrders();
+      }
+    );
+    const listSub = DeviceEventEmitter.addListener(
+      "merchant_listings_updated",
+      () => {
+        loadOrders();
+      }
+    );
+
+    return () => {
+      ordSub.remove();
+      listSub.remove();
+    };
   }, []);
 
   const loadOrders = async () => {
     try {
-      const storedId = (await getStorageItem("profile_id")) || "1";
-      setMerchantId(storedId);
-      const res = await api.get(`listings/merchant-portal/${storedId}/`);
+      const storedId = await getStorageItem("profile_id");
+      const storedEmail = (await getStorageItem("user_email")) || "";
+      if (!storedId && !storedEmail) {
+        router.replace("/consumer");
+        return;
+      }
+      const resolvedId = storedId || "0";
+      setMerchantId(resolvedId);
+      const res = await api.get(
+        `listings/merchant-portal/${resolvedId}/?email=${encodeURIComponent(
+          storedEmail
+        )}`
+      );
       const o = res.data.orders;
       if (o) {
-        setPendingOrders(o.pending_orders || []);
-        setCompletedOrders(o.completed_orders || []);
-        setActivePickupsCount(o.active_pickups_count || 0);
-        setNearingExpiryCount(o.nearing_expiry_count || 0);
+        cachedOrdersMemory = {
+          pendingOrders: o.pending_orders || [],
+          completedOrders: o.completed_orders || [],
+          activePickupsCount: o.active_pickups_count || 0,
+          nearingExpiryCount: o.nearing_expiry_count || 0,
+        };
+        setPendingOrders(cachedOrdersMemory.pendingOrders);
+        setCompletedOrders(cachedOrdersMemory.completedOrders);
+        setActivePickupsCount(cachedOrdersMemory.activePickupsCount);
+        setNearingExpiryCount(cachedOrdersMemory.nearingExpiryCount);
       }
     } catch (e) {
       console.log("Orders fetch error:", e);
@@ -195,45 +412,24 @@ export default function EstablishmentOrders() {
       );
       return;
     }
-
-    const localMatch = pendingOrders.find((o) => o.id.toUpperCase() === code);
-    if (localMatch) {
-      setQrModalVisible(false);
-      setQrOrderCode("");
-      setSummaryConfirmOrder(localMatch);
-      return;
-    }
-
-    try {
-      const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
-        action: "preview_order",
-        order_code: code,
-      });
-      if (res.data?.order) {
-        setQrModalVisible(false);
-        setQrOrderCode("");
-        setSummaryConfirmOrder(res.data.order);
-      }
-    } catch (e: any) {
-      showModal(
-        "Order Not Found",
-        e.response?.data?.error || `No pending order matches code "${code}".`,
-        "error"
-      );
-    }
+    await lookupAndPreviewVoucher(code);
   };
 
   const executeReleaseOrder = async () => {
     if (!summaryConfirmOrder) return;
     setReleasingOrder(true);
     try {
-      const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
+      const activeId =
+        merchantId || (await getStorageItem("profile_id")) || "0";
+      const res = await api.post(`listings/merchant-portal/${activeId}/`, {
         action: "confirm_order",
         prod_id: summaryConfirmOrder.prod_id,
         order_code: summaryConfirmOrder.id,
       });
       setSummaryConfirmOrder(null);
       await loadOrders();
+      DeviceEventEmitter.emit("merchant_orders_updated");
+      DeviceEventEmitter.emit("merchant_notifs_updated");
       showModal(
         "Order Released & Completed!",
         res.data.message ||
@@ -255,14 +451,18 @@ export default function EstablishmentOrders() {
     if (!noShowTargetOrder) return;
     setMarkingNoShow(true);
     try {
+      const activeId =
+        merchantId || (await getStorageItem("profile_id")) || "0";
       const res = await api.post("accounts/orders/mark-no-show/", {
-        merchant_id: Number(merchantId),
+        merchant_id: Number(activeId),
         order_code: noShowTargetOrder.id,
-        force: true,
+        force: false,
       });
       setNoShowTargetOrder(null);
       setViewModalVisible(false);
       await loadOrders();
+      DeviceEventEmitter.emit("merchant_orders_updated");
+      DeviceEventEmitter.emit("merchant_notifs_updated");
       showModal(
         "No-Show Recorded & Admin Alerted",
         res.data?.message ||
@@ -273,7 +473,8 @@ export default function EstablishmentOrders() {
       setNoShowTargetOrder(null);
       showModal(
         "No-Show Action Failed",
-        e.response?.data?.error || "Could not mark order as No-Show.",
+        e.response?.data?.error ||
+          "Orders can only be marked as No-Show after their pickup deadline has expired.",
         "error"
       );
     } finally {
@@ -311,10 +512,119 @@ export default function EstablishmentOrders() {
     return false;
   });
 
-  return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
+  // Hidden decoder for Gallery image uploads on iOS/Android
+  const qrDecoderHtml = qrBase64ToDecode
+    ? `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    </head>
+    <body>
+      <canvas id="canvas"></canvas>
+      <script>
+        (function() {
+          var img = new Image();
+          img.onload = function() {
+            var canvas = document.getElementById('canvas');
+            var ctx = canvas.getContext('2d');
+            var maxDim = 900;
+            var w = img.width;
+            var h = img.height;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+              else { w = Math.round((w * maxDim) / h); h = maxDim; }
+            }
+            canvas.width = w;
+            canvas.height = h;
+            ctx.drawImage(img, 0, 0, w, h);
+            var imageData = ctx.getImageData(0, 0, w, h);
+            var code = window.jsQR ? window.jsQR(imageData.data, imageData.width, imageData.height) : null;
+            var result = code && code.data ? { ok: true, data: code.data } : { ok: false };
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify(result));
+            }
+          };
+          img.onerror = function() {
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({ ok: false }));
+            }
+          };
+          img.src = "data:image/jpeg;base64,${qrBase64ToDecode}";
+        })();
+      </script>
+    </body>
+    </html>
+  `
+    : "";
 
+  // Live WebRTC Video Stream QR Scanner for Web Browsers
+  const webLiveScannerHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+      <style>
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; font-family: sans-serif; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        .reticle { position: absolute; width: 210px; height: 210px; border: 3px solid #3A826D; border-radius: 18px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.45); pointer-events: none; }
+        .status { position: absolute; bottom: 14px; background: rgba(18,55,44,0.88); color: #fff; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+      </style>
+    </head>
+    <body>
+      <video id="video" playsinline muted></video>
+      <div class="reticle"></div>
+      <div id="status" class="status">Point camera at customer's QR code...</div>
+      <canvas id="canvas" style="display:none;"></canvas>
+      <script>
+        var video = document.getElementById('video');
+        var canvas = document.getElementById('canvas');
+        var ctx = canvas.getContext('2d');
+        var statusEl = document.getElementById('status');
+        var locked = false;
+
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+          .then(function(stream) {
+            video.srcObject = stream;
+            video.setAttribute('playsinline', true);
+            video.play();
+            requestAnimationFrame(tick);
+          })
+          .catch(function(err) {
+            statusEl.innerText = 'Camera permission denied or unavailable.';
+          });
+
+        function tick() {
+          if (locked) return;
+          if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.height = video.videoHeight;
+            canvas.width = video.videoWidth;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            if (window.jsQR) {
+              var code = window.jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: 'dontInvert'
+              });
+              if (code && code.data) {
+                locked = true;
+                statusEl.innerText = 'QR Detected: ' + code.data;
+                if (window.parent) {
+                  window.parent.postMessage({ type: 'RESERVE_LIVE_QR_SCANNED', data: code.data }, '*');
+                }
+                return;
+              }
+            }
+          }
+          requestAnimationFrame(tick);
+        }
+      </script>
+    </body>
+    </html>
+  `;
+
+  return (
+    <View style={styles.container}>
       <EstablishmentHeader />
 
       <ScrollView
@@ -332,7 +642,8 @@ export default function EstablishmentOrders() {
         <View style={styles.pageHeader}>
           <Text style={styles.pageTitle}>Orders management</Text>
           <Text style={styles.pageSubTitle}>
-            Manage active pickups, verify QR vouchers, and report unclaimed No-Shows past expiry
+            Manage active pickups, verify QR vouchers live, and report unclaimed
+            No-Shows past expiry
           </Text>
         </View>
 
@@ -418,7 +729,7 @@ export default function EstablishmentOrders() {
           <View style={styles.scanTextContainer}>
             <Text style={styles.scanTitle}>Scan QR code / Enter Voucher</Text>
             <Text style={styles.scanSubtitle}>
-              Preview order summary & verify pickup
+              Live camera QR detection &amp; pickup verification
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={19} color={Colors.white} />
@@ -465,7 +776,7 @@ export default function EstablishmentOrders() {
             <View style={styles.sectionHeader}>
               <View>
                 <Text style={styles.sectionTitle}>
-                  Completed & No-Show History
+                  Completed &amp; No-Show History
                 </Text>
                 <Text style={styles.sectionSubtitle}>
                   {filteredCompletedOrders.length} recorded order
@@ -501,15 +812,15 @@ export default function EstablishmentOrders() {
 
       <EstablishmentBottomNav activeTab="Orders" />
 
-      {/* QR SCAN OR MANUAL TRANSACTION ID MODAL */}
+      {/* LIVE QR SCANNER & MANUAL VOUCHER MODAL */}
       <Modal
         visible={qrModalVisible}
         transparent
         animationType="fade"
-        onRequestClose={() => setQrModalVisible(false)}
+        onRequestClose={closeVerificationModal}
       >
         <View style={styles.modalOverlayCenter}>
-          <View style={styles.qrCard}>
+          <View style={[styles.qrCard, verifyMode === "live_scan" && { maxWidth: 400 }]}>
             <View
               style={{
                 flexDirection: "row",
@@ -519,15 +830,182 @@ export default function EstablishmentOrders() {
               }}
             >
               <Text style={styles.modalTitle}>Verify Customer Pickup</Text>
-              <TouchableOpacity onPress={() => setQrModalVisible(false)}>
+              <TouchableOpacity onPress={closeVerificationModal}>
                 <Ionicons name="close" size={22} color={Colors.primary2} />
               </TouchableOpacity>
             </View>
 
-            {verifyMode === "choose" ? (
+            {/* Hidden WebView running jsQR to decode gallery images on iOS/Android */}
+            {Platform.OS !== "web" && qrBase64ToDecode && (
+              <View style={{ width: 1, height: 1, opacity: 0 }}>
+                <WebView
+                  originWhitelist={["*"]}
+                  source={{ html: qrDecoderHtml }}
+                  javaScriptEnabled
+                  onMessage={async (event) => {
+                    setQrBase64ToDecode(null);
+                    setDecodingQr(false);
+                    try {
+                      const parsed = JSON.parse(event.nativeEvent.data);
+                      if (parsed.ok && parsed.data) {
+                        await lookupAndPreviewVoucher(parsed.data);
+                      } else {
+                        showModal(
+                          "QR Code Not Detected",
+                          "Could not detect a valid QR voucher in the selected image. Please try Live Camera Scan or enter the Voucher ID manually.",
+                          "warning"
+                        );
+                      }
+                    } catch (e) {
+                      showModal(
+                        "QR Scan Error",
+                        "Could not decode QR image. Please enter the Voucher ID manually.",
+                        "warning"
+                      );
+                    }
+                  }}
+                />
+              </View>
+            )}
+
+            {decodingQr ? (
+              <View
+                style={{ paddingVertical: 28, alignItems: "center", gap: 10 }}
+              >
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text
+                  style={{
+                    fontFamily: "PoppinsSemiBold",
+                    fontSize: 13,
+                    color: Colors.primary2,
+                  }}
+                >
+                  Verifying Customer QR Voucher...
+                </Text>
+              </View>
+            ) : verifyMode === "live_scan" ? (
+              <View style={{ marginTop: 4 }}>
+                <Text style={[styles.modalSubtitle, { marginBottom: 10 }]}>
+                  Center the customer&apos;s QR Rescue Voucher inside the frame
+                  below—it will detect automatically:
+                </Text>
+
+                <View style={styles.liveScannerFrame}>
+                  {Platform.OS === "web" ? (
+                    React.createElement("iframe", {
+                      srcDoc: webLiveScannerHtml,
+                      allow: "camera *",
+                      style: {
+                        width: "100%",
+                        height: "100%",
+                        border: "none",
+                      },
+                      title: "Live Web QR Scanner",
+                    })
+                  ) : (
+                    <>
+                      <CameraView
+                        style={StyleSheet.absoluteFill}
+                        facing="back"
+                        enableTorch={torchEnabled}
+                        barcodeScannerSettings={{
+                          barcodeTypes: ["qr"],
+                        }}
+                        onBarcodeScanned={
+                          hasScannedLock ? undefined : handleLiveBarcodeScanned
+                        }
+                      />
+
+                      <View
+                        style={styles.scannerOverlayMask}
+                        pointerEvents="none"
+                      >
+                        <View style={styles.scannerReticleBox}>
+                          <View
+                            style={[styles.reticleCorner, styles.cornerTL]}
+                          />
+                          <View
+                            style={[styles.reticleCorner, styles.cornerTR]}
+                          />
+                          <View
+                            style={[styles.reticleCorner, styles.cornerBL]}
+                          />
+                          <View
+                            style={[styles.reticleCorner, styles.cornerBR]}
+                          />
+                        </View>
+                        <View style={styles.scannerLiveBadge}>
+                          <Ionicons
+                            name="scan-outline"
+                            size={13}
+                            color={Colors.white}
+                          />
+                          <Text style={styles.scannerLiveBadgeText}>
+                            {hasScannedLock
+                              ? "QR Detected! Loading order..."
+                              : "Scanning live for QR code..."}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.torchToggleBtn,
+                          torchEnabled && { backgroundColor: Colors.button },
+                        ]}
+                        activeOpacity={0.8}
+                        onPress={() => setTorchEnabled((prev) => !prev)}
+                      >
+                        <Ionicons
+                          name={torchEnabled ? "flash" : "flash-off-outline"}
+                          size={18}
+                          color={Colors.white}
+                        />
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                  <TouchableOpacity
+                    style={styles.viewCloseButton}
+                    onPress={() => {
+                      setTorchEnabled(false);
+                      setVerifyMode("choose");
+                    }}
+                  >
+                    <Text style={styles.viewCloseButtonText}>← Back</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.viewCloseButton,
+                      {
+                        backgroundColor: Colors.primary,
+                        borderColor: Colors.primary,
+                      },
+                    ]}
+                    onPress={() => {
+                      setTorchEnabled(false);
+                      setVerifyMode("manual");
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.viewCloseButtonText,
+                        { color: Colors.white },
+                      ]}
+                    >
+                      Type Voucher ID
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : verifyMode === "choose" ? (
               <View style={{ gap: 12, marginTop: 6 }}>
                 <Text style={styles.modalSubtitle}>
-                  Choose how you want to verify the customer's pickup voucher:
+                  Scan the customer&apos;s official QR Rescue Voucher live or
+                  enter their Voucher ID:
                 </Text>
 
                 <TouchableOpacity
@@ -540,7 +1018,7 @@ export default function EstablishmentOrders() {
                     gap: 12,
                   }}
                   activeOpacity={0.85}
-                  onPress={handleOpenCameraQrScan}
+                  onPress={handleStartLiveCameraScan}
                 >
                   <View
                     style={{
@@ -553,7 +1031,7 @@ export default function EstablishmentOrders() {
                     }}
                   >
                     <Ionicons
-                      name="camera-outline"
+                      name="scan-outline"
                       size={22}
                       color={Colors.white}
                     />
@@ -566,7 +1044,7 @@ export default function EstablishmentOrders() {
                         color: Colors.white,
                       }}
                     >
-                      Scan QR Code
+                      Live QR Camera Scanner
                     </Text>
                     <Text
                       style={{
@@ -575,7 +1053,8 @@ export default function EstablishmentOrders() {
                         color: "rgba(255,255,255,0.8)",
                       }}
                     >
-                      Open camera to scan customer's QR voucher
+                      Point camera at customer&apos;s QR code to auto-detect
+                      live
                     </Text>
                   </View>
                   <Ionicons
@@ -592,7 +1071,64 @@ export default function EstablishmentOrders() {
                     backgroundColor: "#F3F6F4",
                     borderWidth: 1,
                     borderColor: Colors.border,
-                    padding: 16,
+                    padding: 14,
+                    borderRadius: 14,
+                    gap: 12,
+                  }}
+                  activeOpacity={0.85}
+                  onPress={handlePickQrFromGallery}
+                >
+                  <View
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 21,
+                      backgroundColor: "#E7EEE9",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Ionicons
+                      name="image-outline"
+                      size={20}
+                      color={Colors.primary}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={{
+                        fontFamily: "PoppinsSemiBold",
+                        fontSize: 13.5,
+                        color: Colors.primary2,
+                      }}
+                    >
+                      Upload QR Image from Gallery
+                    </Text>
+                    <Text
+                      style={{
+                        fontFamily: "PoppinsRegular",
+                        fontSize: 11,
+                        color: Colors.primary1,
+                      }}
+                    >
+                      Decode a saved screenshot of the QR voucher
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={Colors.primary2}
+                  />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    backgroundColor: "#F3F6F4",
+                    borderWidth: 1,
+                    borderColor: Colors.border,
+                    padding: 14,
                     borderRadius: 14,
                     gap: 12,
                   }}
@@ -601,9 +1137,9 @@ export default function EstablishmentOrders() {
                 >
                   <View
                     style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: 22,
+                      width: 42,
+                      height: 42,
+                      borderRadius: 21,
                       backgroundColor: "#E7EEE9",
                       alignItems: "center",
                       justifyContent: "center",
@@ -619,11 +1155,11 @@ export default function EstablishmentOrders() {
                     <Text
                       style={{
                         fontFamily: "PoppinsSemiBold",
-                        fontSize: 14,
+                        fontSize: 13.5,
                         color: Colors.primary2,
                       }}
                     >
-                      Enter Transaction ID
+                      Enter Voucher ID Manually
                     </Text>
                     <Text
                       style={{
@@ -632,7 +1168,7 @@ export default function EstablishmentOrders() {
                         color: Colors.primary1,
                       }}
                     >
-                      Manually type the Order / Voucher ID
+                      Type the Order / Voucher ID (e.g. OID101)
                     </Text>
                   </View>
                   <Ionicons
@@ -645,7 +1181,7 @@ export default function EstablishmentOrders() {
             ) : (
               <View style={{ marginTop: 4 }}>
                 <Text style={[styles.modalSubtitle, { marginBottom: 12 }]}>
-                  Enter the Transaction / Order ID shown on the customer's
+                  Enter the Transaction / Order ID shown on the customer&apos;s
                   Rescue Voucher (e.g. OID101):
                 </Text>
                 <TextInput
@@ -876,7 +1412,7 @@ export default function EstablishmentOrders() {
               <View>
                 <Text style={styles.modalTitle}>Order details</Text>
                 <Text style={styles.modalSubtitle}>
-                  View customer order information & pickup status
+                  View customer order information &amp; pickup status
                 </Text>
               </View>
               <TouchableOpacity
@@ -974,7 +1510,7 @@ export default function EstablishmentOrders() {
                 <View style={styles.viewPriceBox}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.viewLabel}>
-                      Price & Payment Breakdown
+                      Price &amp; Payment Breakdown
                     </Text>
                     <Text style={styles.viewPrice}>{selectedOrder.price}</Text>
                   </View>
@@ -982,7 +1518,7 @@ export default function EstablishmentOrders() {
 
                 <View style={styles.viewSection}>
                   <Text style={styles.viewSectionTitle}>
-                    Order & Expiry Information
+                    Order &amp; Expiry Information
                   </Text>
                   <DetailRow
                     icon="person-outline"
@@ -1017,20 +1553,22 @@ export default function EstablishmentOrders() {
 
                   {selectedOrder.status === "Pending Pickup" && (
                     <>
-                      <TouchableOpacity
-                        style={styles.noShowActionBtn}
-                        activeOpacity={0.85}
-                        onPress={() => setNoShowTargetOrder(selectedOrder)}
-                      >
-                        <Ionicons
-                          name="person-remove-outline"
-                          size={15}
-                          color="#B3261E"
-                        />
-                        <Text style={styles.noShowActionBtnText}>
-                          Confirm No-Show
-                        </Text>
-                      </TouchableOpacity>
+                      {isOrderPastExpiry(selectedOrder) && (
+                        <TouchableOpacity
+                          style={styles.noShowActionBtn}
+                          activeOpacity={0.85}
+                          onPress={() => setNoShowTargetOrder(selectedOrder)}
+                        >
+                          <Ionicons
+                            name="person-remove-outline"
+                            size={15}
+                            color="#B3261E"
+                          />
+                          <Text style={styles.noShowActionBtnText}>
+                            Confirm No-Show
+                          </Text>
+                        </TouchableOpacity>
+                      )}
 
                       <TouchableOpacity
                         style={[
@@ -1090,7 +1628,7 @@ export default function EstablishmentOrders() {
         type={modalAlert.type}
         onClose={() => setModalAlert((prev) => ({ ...prev, visible: false }))}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1151,7 +1689,7 @@ function OrdersTable({
               Time Ordered
             </Text>
             <Text style={[styles.tableHeaderText, styles.tableExpiry]}>
-              Expiry Date & Time
+              Expiry Date &amp; Time
             </Text>
             <Text style={[styles.tableHeaderText, styles.tableStatus]}>
               Status
@@ -1280,7 +1818,7 @@ function OrdersTable({
                       />
                     </TouchableOpacity>
                   )}
-                  {pending && onMarkNoShow && (
+                  {pending && pastExp && onMarkNoShow && (
                     <TouchableOpacity
                       style={styles.noShowSmallBtn}
                       activeOpacity={0.8}
@@ -1421,6 +1959,17 @@ const styles = StyleSheet.create({
   modalOverlayCenter: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", alignItems: "center", padding: 20 },
   qrCard: { width: "100%", maxWidth: 360, backgroundColor: Colors.white, borderRadius: 16, padding: 20 },
   qrInput: { height: 45, borderWidth: 1, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 12, fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2, backgroundColor: Colors.input },
+  liveScannerFrame: { width: "100%", height: 295, borderRadius: 16, overflow: "hidden", backgroundColor: "#000", position: "relative", borderWidth: 1, borderColor: Colors.border },
+  scannerOverlayMask: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.22)" },
+  scannerReticleBox: { width: 200, height: 200, borderRadius: 18, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.45)", position: "relative" },
+  reticleCorner: { position: "absolute", width: 28, height: 28, borderColor: "#4ADE80", borderWidth: 4 },
+  cornerTL: { top: -2, left: -2, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 16 },
+  cornerTR: { top: -2, right: -2, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 16 },
+  cornerBL: { bottom: -2, left: -2, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 16 },
+  cornerBR: { bottom: -2, right: -2, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 16 },
+  scannerLiveBadge: { position: "absolute", bottom: 14, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(18,55,44,0.9)", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  scannerLiveBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.white },
+  torchToggleBtn: { position: "absolute", top: 12, right: 12, width: 38, height: 38, borderRadius: 19, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.3)" },
   viewModal: { width: "100%", maxHeight: "92%", backgroundColor: Colors.background, borderTopLeftRadius: 24, borderTopRightRadius: 24, overflow: "hidden" },
   modalHeader: { minHeight: 70, paddingHorizontal: 18, flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border },
   modalTitle: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary2 },

@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, usePathname } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import React, { useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import {
   DeviceEventEmitter,
   Linking,
@@ -19,10 +19,30 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { api } from "../../../services/api";
 
+export type FoodBankTabName =
+  | "Home"
+  | "Requests"
+  | "Donations"
+  | "Partners"
+  | "Profile";
+
+// Indicates whether a Food Bank tab is rendered inside the persistent _layout.tsx shell
+export const FoodBankShellDirectRenderContext = createContext<boolean>(false);
+
+export const useIsInsideFoodBankShell = () =>
+  useContext(FoodBankShellDirectRenderContext);
+
+// Instant 0ms tab switcher (no full page reload)
+export const switchFoodBankTab = (tab: FoodBankTabName) => {
+  DeviceEventEmitter.emit("fb_switch_tab", { tab });
+};
+
 export const FOODBANK_READ_NOTIFS_KEY = "@reserve_fb_read_notifs";
 export const FOODBANK_DISMISSED_NOTIFS_KEY = "@reserve_fb_dismissed_notifs";
 
-export const getFoodBankStorage = async (key: string): Promise<string | null> => {
+export const getFoodBankStorage = async (
+  key: string
+): Promise<string | null> => {
   if (!key || typeof key !== "string" || key.trim() === "") return null;
   if (Platform.OS === "web") return localStorage.getItem(key);
   try {
@@ -173,7 +193,20 @@ export function FoodBankMapModal({
   );
 }
 
-export function FoodBankHeader({ subtitle }: { subtitle?: string }) {
+export function FoodBankHeader({
+  subtitle,
+  isShellHeader = false,
+  activeTab,
+  onSelectTab,
+}: {
+  subtitle?: string;
+  isShellHeader?: boolean;
+  activeTab?: FoodBankTabName;
+  onSelectTab?: (tab: FoodBankTabName) => void;
+}) {
+  const isInsideShell = useIsInsideFoodBankShell();
+  if (isInsideShell && !isShellHeader) return null;
+
   const pathname = usePathname();
   const [orgName, setOrgName] = useState("Food Bank & NGO Portal");
   const [unreadTotalCount, setUnreadTotalCount] = useState(0);
@@ -253,14 +286,33 @@ export function FoodBankHeader({ subtitle }: { subtitle?: string }) {
     } catch (e) {}
   };
 
-  const isProfileActive = pathname?.includes("/foodbank/profile");
+  const isProfileActive =
+    activeTab === "Profile" || pathname?.includes("/foodbank/profile");
+
+  const handleGoHome = () => {
+    if (onSelectTab) {
+      onSelectTab("Home");
+    } else {
+      switchFoodBankTab("Home");
+      router.replace("/foodbank/dashboard" as any);
+    }
+  };
+
+  const handleGoProfile = () => {
+    if (onSelectTab) {
+      onSelectTab("Profile");
+    } else {
+      switchFoodBankTab("Profile");
+      router.replace("/foodbank/profile" as any);
+    }
+  };
 
   return (
     <View style={styles.header}>
       <TouchableOpacity
         style={styles.brandTouchable}
         activeOpacity={0.75}
-        onPress={() => router.replace("/foodbank/dashboard" as any)}
+        onPress={handleGoHome}
       >
         <View style={styles.brandIconBox}>
           <Ionicons name="heart-outline" size={20} color={Colors.primary} />
@@ -302,7 +354,7 @@ export function FoodBankHeader({ subtitle }: { subtitle?: string }) {
             isProfileActive && styles.profileBtnActive,
           ]}
           activeOpacity={0.8}
-          onPress={() => router.replace("/foodbank/profile" as any)}
+          onPress={handleGoProfile}
         >
           <Ionicons
             name={isProfileActive ? "person" : "person-outline"}
@@ -317,11 +369,27 @@ export function FoodBankHeader({ subtitle }: { subtitle?: string }) {
 
 export function FoodBankBottomNav({
   activeTab,
+  isShellNav = false,
+  onSelectTab,
 }: {
-  activeTab?: "Home" | "Requests" | "Donations" | "Partners" | "Profile";
+  activeTab?: FoodBankTabName;
+  isShellNav?: boolean;
+  onSelectTab?: (tab: FoodBankTabName) => void;
 }) {
+  const isInsideShell = useIsInsideFoodBankShell();
+  if (isInsideShell && !isShellNav) return null;
+
   const insets = useSafeAreaInsets();
   const bottomInsetPad = Platform.OS === "ios" ? Math.max(insets.bottom, 6) : 6;
+
+  const handleTabPress = (tab: FoodBankTabName, fallbackRoute: string) => {
+    if (onSelectTab) {
+      onSelectTab(tab);
+    } else {
+      switchFoodBankTab(tab);
+      router.replace(fallbackRoute as any);
+    }
+  };
 
   return (
     <View
@@ -337,7 +405,7 @@ export function FoodBankBottomNav({
         icon={activeTab === "Home" ? "grid" : "grid-outline"}
         label="Home"
         active={activeTab === "Home"}
-        onPress={() => router.replace("/foodbank/dashboard")}
+        onPress={() => handleTabPress("Home", "/foodbank/dashboard")}
       />
       <BottomNavItem
         icon={
@@ -345,19 +413,19 @@ export function FoodBankBottomNav({
         }
         label="Requests"
         active={activeTab === "Requests"}
-        onPress={() => router.replace("/foodbank/requests")}
+        onPress={() => handleTabPress("Requests", "/foodbank/requests")}
       />
       <BottomNavItem
         icon={activeTab === "Donations" ? "gift" : "gift-outline"}
         label="Donations"
         active={activeTab === "Donations"}
-        onPress={() => router.replace("/foodbank/donations")}
+        onPress={() => handleTabPress("Donations", "/foodbank/donations")}
       />
       <BottomNavItem
         icon={activeTab === "Partners" ? "storefront" : "storefront-outline"}
         label="Merchants"
         active={activeTab === "Partners"}
-        onPress={() => router.replace("/foodbank/partners")}
+        onPress={() => handleTabPress("Partners", "/foodbank/partners")}
       />
     </View>
   );

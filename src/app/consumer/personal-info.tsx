@@ -4,22 +4,23 @@ import { router, Stack } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
 import {
-    DeviceEventEmitter,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  DeviceEventEmitter,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
-    CebuAddressMapPicker,
-    ReserveAlertModal,
-    ReserveModalState,
+  CebuAddressMapPicker,
+  ReserveAlertModal,
+  ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
 import { CONSUMER_LOCATION_KEY } from "../components/ConsumerNav";
 
@@ -52,6 +53,7 @@ export default function PersonalInfo() {
   const [totalSavedKg, setTotalSavedKg] = useState(0);
   const [isLoaded, setIsLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [modalAlert, setModalAlert] = useState<ReserveModalState>({
     visible: false,
@@ -103,6 +105,12 @@ export default function PersonalInfo() {
     }
   };
 
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadInfo();
+    setRefreshing(false);
+  };
+
   const handleSave = async () => {
     if (!fullName.trim()) {
       showAlert("Name Required", "Please enter your full name.", "warning");
@@ -141,6 +149,7 @@ export default function PersonalInfo() {
       await setStorageItem(CONSUMER_LOCATION_KEY, JSON.stringify(payload));
 
       DeviceEventEmitter.emit("app_location_updated", payload);
+      DeviceEventEmitter.emit("consumer_profile_updated");
       if (Platform.OS === "web") {
         window.dispatchEvent(new Event("reserve_location_changed"));
       }
@@ -200,6 +209,14 @@ export default function PersonalInfo() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.content}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.primary}
+              colors={[Colors.primary]}
+            />
+          }
         >
           {/* DETAILED PROFILE OVERVIEW CARD */}
           <View style={styles.profileSummaryCard}>

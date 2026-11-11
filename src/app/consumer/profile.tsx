@@ -1,9 +1,10 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router, Stack, useFocusEffect } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  DeviceEventEmitter,
   Platform,
   RefreshControl,
   ScrollView,
@@ -12,10 +13,21 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import { ReserveConfirmModal } from "../components/CebuRegistrationHelpers";
-import { ConsumerBottomNav } from "../components/ConsumerNav";
+import {
+  ConsumerBottomNav,
+  useIsInsideConsumerShell,
+} from "../components/ConsumerNav";
+
+let cachedProfileMemory = {
+  consId: "1",
+  fullName: "Consumer",
+  email: "Loading...",
+  phone: "",
+  address: "Cebu City",
+  totalSavedKg: 0,
+};
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -55,12 +67,15 @@ const maskPhoneNumber = (rawPhone: string): string => {
 };
 
 export default function Profile() {
-  const [consId, setConsId] = useState("1");
-  const [fullName, setFullName] = useState("Consumer");
-  const [email, setEmail] = useState("Loading...");
-  const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("Cebu City");
-  const [totalSavedKg, setTotalSavedKg] = useState(0);
+  const isInsideShell = useIsInsideConsumerShell();
+  if (!isInsideShell) return null;
+
+  const [consId, setConsId] = useState(cachedProfileMemory.consId);
+  const [fullName, setFullName] = useState(cachedProfileMemory.fullName);
+  const [email, setEmail] = useState(cachedProfileMemory.email);
+  const [phone, setPhone] = useState(cachedProfileMemory.phone);
+  const [address, setAddress] = useState(cachedProfileMemory.address);
+  const [totalSavedKg, setTotalSavedKg] = useState(cachedProfileMemory.totalSavedKg);
   const [logoutConfirmVisible, setLogoutConfirmVisible] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -80,21 +95,53 @@ export default function Profile() {
       );
       if (res.data?.profile) {
         const p = res.data.profile;
-        setConsId(String(p.cons_id || storedId));
-        setFullName(p.full_name || storedName || "Consumer");
-        setEmail(p.email || storedEmail);
-        setPhone(p.phone || "");
-        setAddress(p.address || "Cebu City");
-        setTotalSavedKg(Number(p.total_food_saved || 0));
+        const nextProfile = {
+          consId: String(p.cons_id || storedId),
+          fullName: p.full_name || storedName || "Consumer",
+          email: p.email || storedEmail,
+          phone: p.phone || "",
+          address: p.address || "Cebu City",
+          totalSavedKg: Number(p.total_food_saved || 0),
+        };
+        cachedProfileMemory = nextProfile;
+        setConsId(nextProfile.consId);
+        setFullName(nextProfile.fullName);
+        setEmail(nextProfile.email);
+        setPhone(nextProfile.phone);
+        setAddress(nextProfile.address);
+        setTotalSavedKg(nextProfile.totalSavedKg);
       }
     } catch (e) {}
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadConsumerProfile();
-    }, [loadConsumerProfile])
-  );
+  useEffect(() => {
+    loadConsumerProfile();
+
+    const profSub = DeviceEventEmitter.addListener(
+      "consumer_profile_updated",
+      () => {
+        loadConsumerProfile();
+      }
+    );
+    const locSub = DeviceEventEmitter.addListener(
+      "app_location_updated",
+      () => {
+        loadConsumerProfile();
+      }
+    );
+    const claimsSub = DeviceEventEmitter.addListener(
+      "consumer_claims_updated",
+      () => {
+        loadConsumerProfile();
+      }
+    );
+
+    return () => {
+      profSub.remove();
+      locSub.remove();
+      claimsSub.remove();
+    };
+  }, [loadConsumerProfile]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -109,9 +156,7 @@ export default function Profile() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       {/* FULL-SCREEN SCROLL CONTENT (NO TOP HEADER BAR) */}
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -167,9 +212,7 @@ export default function Profile() {
           </View>
         </View>
 
-        {/* ============================================================
-            TWO MAIN ACCOUNT SETTINGS ROWS / CARDS (OPEN SEPARATE PAGES)
-        ============================================================ */}
+        {/* TWO MAIN ACCOUNT SETTINGS ROWS / CARDS (OPEN SEPARATE PAGES) */}
         <Text style={styles.sectionTitle}>Account Settings</Text>
 
         {/* ROW 1: PERSONAL INFORMATION & ADDRESS */}
@@ -335,9 +378,8 @@ export default function Profile() {
         onCancel={() => setLogoutConfirmVisible(false)}
       />
 
-      {/* FLUSH BOTTOM NAVIGATION BAR */}
       <ConsumerBottomNav activeTab="Profile" />
-    </SafeAreaView>
+    </View>
   );
 }
 

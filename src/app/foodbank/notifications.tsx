@@ -20,6 +20,7 @@ import {
   FOODBANK_DISMISSED_NOTIFS_KEY,
   FOODBANK_READ_NOTIFS_KEY,
   getFoodBankStorage,
+  switchFoodBankTab,
 } from "../components/FoodBankNav";
 
 type FoodBankNotifItem = {
@@ -176,14 +177,24 @@ export default function FoodBankNotifications() {
       setSelectedBroadcast(item);
       return;
     }
-    if (item.target_route) {
-      router.push(item.target_route as any);
-      return;
-    }
-    if (item.type === "request") {
-      router.push("/foodbank/requests");
+
+    const route = String(item.target_route || "");
+    if (route.includes("/partners")) {
+      switchFoodBankTab("Partners");
+    } else if (route.includes("/profile")) {
+      switchFoodBankTab("Profile");
+    } else if (route.includes("/requests") || item.type === "request") {
+      DeviceEventEmitter.emit("fb_requests_updated");
+      switchFoodBankTab("Requests");
     } else {
-      router.push("/foodbank/donations");
+      DeviceEventEmitter.emit("fb_donations_updated");
+      switchFoodBankTab("Donations");
+    }
+
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace("/foodbank/dashboard" as any);
     }
   };
 

@@ -4,25 +4,44 @@ import { router, Stack } from "expo-router";
 import * as SecureStore from "expo-secure-store";
 import { useEffect, useState } from "react";
 import {
-    DeviceEventEmitter,
-    KeyboardAvoidingView,
-    Platform,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Switch,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  DeviceEventEmitter,
+  KeyboardAvoidingView,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
-    CebuAddressMapPicker,
-    ReserveAlertModal,
-    ReserveModalState,
+  CebuAddressMapPicker,
+  ReserveAlertModal,
+  ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
+
+let cachedFbPersonalInfo = {
+  orgId: "1",
+  orgName: "",
+  contactPerson: "",
+  email: "",
+  phone: "",
+  hotline: "",
+  status: "Active",
+  totalReceived: 0,
+  barangay: "",
+  streetDetail: "",
+  address: "Cebu City",
+  latitude: 10.3157,
+  longitude: 123.8854,
+  pushNotif: true,
+  smsAlerts: true,
+  isLoaded: false,
+};
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -41,25 +60,31 @@ const setStorageItem = async (key: string, val: string) => {
 };
 
 export default function FoodBankPersonalInfo() {
-  const [orgId, setOrgId] = useState("1");
-  const [orgName, setOrgName] = useState("");
-  const [contactPerson, setContactPerson] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [hotline, setHotline] = useState("");
-  const [status, setStatus] = useState("Active");
-  const [totalReceived, setTotalReceived] = useState(0);
+  const [orgId, setOrgId] = useState(cachedFbPersonalInfo.orgId);
+  const [orgName, setOrgName] = useState(cachedFbPersonalInfo.orgName);
+  const [contactPerson, setContactPerson] = useState(
+    cachedFbPersonalInfo.contactPerson
+  );
+  const [email, setEmail] = useState(cachedFbPersonalInfo.email);
+  const [phone, setPhone] = useState(cachedFbPersonalInfo.phone);
+  const [hotline, setHotline] = useState(cachedFbPersonalInfo.hotline);
+  const [status, setStatus] = useState(cachedFbPersonalInfo.status);
+  const [totalReceived, setTotalReceived] = useState(
+    cachedFbPersonalInfo.totalReceived
+  );
 
-  const [barangay, setBarangay] = useState("");
-  const [streetDetail, setStreetDetail] = useState("");
-  const [address, setAddress] = useState("Cebu City");
-  const [latitude, setLatitude] = useState(10.3157);
-  const [longitude, setLongitude] = useState(123.8854);
+  const [barangay, setBarangay] = useState(cachedFbPersonalInfo.barangay);
+  const [streetDetail, setStreetDetail] = useState(
+    cachedFbPersonalInfo.streetDetail
+  );
+  const [address, setAddress] = useState(cachedFbPersonalInfo.address);
+  const [latitude, setLatitude] = useState(cachedFbPersonalInfo.latitude);
+  const [longitude, setLongitude] = useState(cachedFbPersonalInfo.longitude);
 
-  const [pushNotif, setPushNotif] = useState(true);
-  const [smsAlerts, setSmsAlerts] = useState(true);
+  const [pushNotif, setPushNotif] = useState(cachedFbPersonalInfo.pushNotif);
+  const [smsAlerts, setSmsAlerts] = useState(cachedFbPersonalInfo.smsAlerts);
 
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(cachedFbPersonalInfo.isLoaded);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -103,28 +128,52 @@ export default function FoodBankPersonalInfo() {
 
       if (profRes.data) {
         const p = profRes.data;
-        setOrgId(String(p.org_id || storedId));
-        setOrgName(p.org_name || "");
-        setContactPerson(p.contact_person || "");
-        setEmail(p.email || storedEmail);
-        setPhone(p.phone || "");
-        setHotline(p.hotline || "");
-        setStatus(p.status || "Active");
-        setTotalReceived(Number(p.total_food_received || 0));
-        setAddress(p.address || "Cebu City");
-
         const parts = (p.address || "").split(",");
-        setStreetDetail(parts[0] ? parts[0].trim() : "");
-        if (parts[1]) {
-          setBarangay(parts[1].replace(/brgy\.?/i, "").trim());
-        }
-        if (p.latitude) setLatitude(Number(p.latitude));
-        if (p.longitude) setLongitude(Number(p.longitude));
+        const nextStreet = parts[0] ? parts[0].trim() : "";
+        const nextBrgy = parts[1]
+          ? parts[1].replace(/brgy\.?/i, "").trim()
+          : "";
+
+        cachedFbPersonalInfo = {
+          ...cachedFbPersonalInfo,
+          orgId: String(p.org_id || storedId),
+          orgName: p.org_name || "",
+          contactPerson: p.contact_person || "",
+          email: p.email || storedEmail,
+          phone: p.phone || "",
+          hotline: p.hotline || "",
+          status: p.status || "Active",
+          totalReceived: Number(p.total_food_received || 0),
+          address: p.address || "Cebu City",
+          streetDetail: nextStreet,
+          barangay: nextBrgy || cachedFbPersonalInfo.barangay,
+          latitude: p.latitude ? Number(p.latitude) : 10.3157,
+          longitude: p.longitude ? Number(p.longitude) : 123.8854,
+          isLoaded: true,
+        };
+
+        setOrgId(cachedFbPersonalInfo.orgId);
+        setOrgName(cachedFbPersonalInfo.orgName);
+        setContactPerson(cachedFbPersonalInfo.contactPerson);
+        setEmail(cachedFbPersonalInfo.email);
+        setPhone(cachedFbPersonalInfo.phone);
+        setHotline(cachedFbPersonalInfo.hotline);
+        setStatus(cachedFbPersonalInfo.status);
+        setTotalReceived(cachedFbPersonalInfo.totalReceived);
+        setAddress(cachedFbPersonalInfo.address);
+        setStreetDetail(cachedFbPersonalInfo.streetDetail);
+        if (nextBrgy) setBarangay(nextBrgy);
+        setLatitude(cachedFbPersonalInfo.latitude);
+        setLongitude(cachedFbPersonalInfo.longitude);
       }
 
       if (settingsRes?.data) {
-        setPushNotif(Boolean(settingsRes.data.pushNotif ?? true));
-        setSmsAlerts(Boolean(settingsRes.data.smsAlerts ?? true));
+        const pNotif = Boolean(settingsRes.data.pushNotif ?? true);
+        const sAlerts = Boolean(settingsRes.data.smsAlerts ?? true);
+        cachedFbPersonalInfo.pushNotif = pNotif;
+        cachedFbPersonalInfo.smsAlerts = sAlerts;
+        setPushNotif(pNotif);
+        setSmsAlerts(sAlerts);
       }
     } catch (e) {
     } finally {
@@ -142,8 +191,14 @@ export default function FoodBankPersonalInfo() {
     key: "pushNotif" | "smsAlerts",
     value: boolean
   ) => {
-    if (key === "pushNotif") setPushNotif(value);
-    if (key === "smsAlerts") setSmsAlerts(value);
+    if (key === "pushNotif") {
+      cachedFbPersonalInfo.pushNotif = value;
+      setPushNotif(value);
+    }
+    if (key === "smsAlerts") {
+      cachedFbPersonalInfo.smsAlerts = value;
+      setSmsAlerts(value);
+    }
 
     try {
       await api.post("accounts/settings/", {
@@ -155,6 +210,7 @@ export default function FoodBankPersonalInfo() {
           smsAlerts: key === "smsAlerts" ? value : smsAlerts,
         },
       });
+      DeviceEventEmitter.emit("fb_profile_updated");
     } catch (e) {}
   };
 
@@ -187,6 +243,18 @@ export default function FoodBankPersonalInfo() {
         latitude: latitude,
         longitude: longitude,
       });
+
+      cachedFbPersonalInfo = {
+        ...cachedFbPersonalInfo,
+        orgName: orgName.trim(),
+        contactPerson: contactPerson.trim(),
+        hotline: hotline.trim(),
+        address: fullAddress,
+        streetDetail,
+        barangay,
+        latitude,
+        longitude,
+      };
 
       await setStorageItem("entity_name", orgName.trim());
       DeviceEventEmitter.emit("fb_profile_updated");

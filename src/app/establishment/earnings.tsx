@@ -1,11 +1,14 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { Stack } from "expo-router";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
+  DeviceEventEmitter,
   Modal,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -14,7 +17,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -23,7 +25,80 @@ import {
 import {
   EstablishmentBottomNav,
   EstablishmentHeader,
+  useIsInsideMerchantShell,
 } from "../components/EstablishmentNav";
+
+type MonthlyEarning = {
+  month: string;
+  amount: number;
+};
+
+type TransactionItem = {
+  id: string;
+  customer: string;
+  date: string;
+  food: string;
+  qty: string;
+  original: string;
+  discounted: string;
+  deposit_paid: string;
+  cash_collected: string;
+  commission_fee: string;
+  net: string;
+  total: string;
+  items_breakdown?: {
+    food_name: string;
+    qty: number;
+    unit: string;
+    unit_price: string;
+    subtotal: string;
+  }[];
+};
+
+type WithdrawalItem = {
+  id: string;
+  withdrawal_id: number;
+  amount: string;
+  raw_amount: number;
+  fee_deducted: string;
+  net_payout: string;
+  channel: string;
+  account_number: string;
+  account_name: string;
+  reference_number: string;
+  status: string;
+  created_at: string;
+  processed_at: string;
+};
+
+const getRollingSixMonths = (): MonthlyEarning[] => {
+  const result: MonthlyEarning[] = [];
+  const now = new Date();
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    result.push({
+      month: d.toLocaleDateString("en-US", { month: "short" }),
+      amount: 0,
+    });
+  }
+  return result;
+};
+
+let cachedEarningsMemory = {
+  totalEarnings: "₱0.00",
+  rawTotalEarnings: 0,
+  walletBalance: "₱0.00",
+  rawWalletBalance: 0,
+  savedOnSpoilage: "₱0.00",
+  transactionsCompleted: 0,
+  monthlyEarnings: getRollingSixMonths(),
+  transactions: [] as TransactionItem[],
+  withdrawals: [] as WithdrawalItem[],
+  planId: 1,
+  commissionPct: 10,
+  defaultPhone: "",
+  defaultAccountName: "",
+};
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
@@ -31,40 +106,61 @@ const getStorageItem = async (key: string): Promise<string | null> => {
 };
 
 export default function EstablishmentEarnings() {
-  const [merchantId, setMerchantId] = useState("1");
-  const [planId, setPlanId] = useState<number>(1);
-  const [commissionPct, setCommissionPct] = useState<number>(10);
-  const [defaultPhone, setDefaultPhone] = useState("");
-  const [defaultContact, setDefaultContact] = useState("");
-  const [search, setSearch] = useState("");
+  const isInsideShell = useIsInsideMerchantShell();
+  if (!isInsideShell) return null;
+
+  const [merchantId, setMerchantId] = useState("");
+  const [totalEarnings, setTotalEarnings] = useState(
+    cachedEarningsMemory.totalEarnings
+  );
+  const [walletBalance, setWalletBalance] = useState(
+    cachedEarningsMemory.walletBalance
+  );
+  const [rawWalletBalance, setRawWalletBalance] = useState(
+    cachedEarningsMemory.rawWalletBalance
+  );
+  const [savedOnSpoilage, setSavedOnSpoilage] = useState(
+    cachedEarningsMemory.savedOnSpoilage
+  );
+  const [transactionsCompleted, setTransactionsCompleted] = useState(
+    cachedEarningsMemory.transactionsCompleted
+  );
+  const [monthlyEarnings, setMonthlyEarnings] = useState<MonthlyEarning[]>(
+    cachedEarningsMemory.monthlyEarnings
+  );
+  const [transactions, setTransactions] = useState<TransactionItem[]>(
+    cachedEarningsMemory.transactions
+  );
+  const [withdrawals, setWithdrawals] = useState<WithdrawalItem[]>(
+    cachedEarningsMemory.withdrawals
+  );
+
+  const [planId, setPlanId] = useState(cachedEarningsMemory.planId);
+  const [commissionPct, setCommissionPct] = useState(
+    cachedEarningsMemory.commissionPct
+  );
+
+  const [activeHistoryTab, setActiveHistoryTab] = useState<
+    "transactions" | "withdrawals"
+  >("transactions");
+  const [selectedTx, setSelectedTx] = useState<TransactionItem | null>(null);
+  const [selectedWithdrawal, setSelectedWithdrawal] =
+    useState<WithdrawalItem | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [totalEarnings, setTotalEarnings] = useState("₱0.00");
-  const [walletBalance, setWalletBalance] = useState("₱0.00");
-  const [rawWalletBal, setRawWalletBal] = useState<number>(0);
-  const [savedSpoilage, setSavedSpoilage] = useState("₱0.00");
-  const [txCompletedCount, setTxCompletedCount] = useState("0");
-  const [monthlyEarnings, setMonthlyEarnings] = useState<
-    { month: string; amount: number }[]
-  >([]);
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [withdrawals, setWithdrawals] = useState<any[]>([]);
-
-  const [withdrawModalOpen, setWithdrawModalOpen] = useState(false);
+  // Automated Xendit Withdrawal Modal State
+  const [withdrawModalVisible, setWithdrawModalVisible] = useState(false);
   const [withdrawChannel, setWithdrawChannel] = useState<"GCash" | "Maya">(
     "GCash"
   );
-  const [withdrawAcctName, setWithdrawAcctName] = useState("");
-  const [withdrawAcctNum, setWithdrawAcctNum] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
-  const [submittingWithdraw, setSubmittingWithdraw] = useState(false);
-
-  const [selectedWithdrawal, setSelectedWithdrawal] = useState<any | null>(
-    null
+  const [accountNumber, setAccountNumber] = useState(
+    cachedEarningsMemory.defaultPhone
   );
-  const [selectedTransaction, setSelectedTransaction] = useState<any | null>(
-    null
+  const [accountName, setAccountName] = useState(
+    cachedEarningsMemory.defaultAccountName
   );
+  const [submittingWithdrawal, setSubmittingWithdrawal] = useState(false);
 
   const [modalAlert, setModalAlert] = useState<ReserveModalState>({
     visible: false,
@@ -79,149 +175,195 @@ export default function EstablishmentEarnings() {
     type: "success" | "error" | "info" | "warning" = "info"
   ) => setModalAlert({ visible: true, title, message, type });
 
-  useEffect(() => {
-    loadEarnings();
-  }, []);
-
-  const loadEarnings = async () => {
+  const loadEarningsData = useCallback(async () => {
     try {
-      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedId = await getStorageItem("profile_id");
       const storedEmail = (await getStorageItem("user_email")) || "";
-      setMerchantId(storedId);
+
+      if (!storedId && !storedEmail) {
+        router.replace("/consumer");
+        return;
+      }
+
+      const resolvedId = storedId || "0";
+      setMerchantId(resolvedId);
+
       const res = await api.get(
-        `listings/merchant-portal/${storedId}/?email=${encodeURIComponent(
+        `listings/merchant-portal/${resolvedId}/?email=${encodeURIComponent(
           storedEmail
         )}`
       );
-      const p = res.data.profile;
-      const e = res.data.earnings;
-      if (p) {
-        if (p.commission_pct !== undefined)
-          setCommissionPct(Number(p.commission_pct));
-        setPlanId(Number(p.plan_id || 1));
-        setDefaultPhone(p.phone !== "Not Provided" ? p.phone : "");
-        setDefaultContact(p.contact_person || p.bus_name || "");
-      }
+
+      const e = res.data?.earnings;
+      const p = res.data?.profile;
+
       if (e) {
-        setTotalEarnings(e.total_earnings || "₱0.00");
-        setWalletBalance(e.wallet_balance || "₱0.00");
-        setRawWalletBal(Number(e.raw_wallet_balance || 0));
-        setSavedSpoilage(e.saved_on_spoilage || "₱0.00");
-        setTxCompletedCount(String(e.transactions_completed ?? 0));
-        setMonthlyEarnings(
+        const nextMonthly =
           Array.isArray(e.monthly_earnings) && e.monthly_earnings.length > 0
-            ? e.monthly_earnings
-            : [
-                { month: "Jun", amount: 0 },
-                { month: "Jul", amount: 0 },
-                { month: "Aug", amount: 0 },
-                { month: "Sep", amount: 0 },
-                { month: "Oct", amount: 0 },
-                { month: "Nov", amount: Number(e.raw_total_earnings || 0) },
-              ]
-        );
-        setTransactions(e.transactions || []);
-        setWithdrawals(e.withdrawals || []);
+            ? e.monthly_earnings.slice(-6)
+            : getRollingSixMonths();
+
+        const nextPhone =
+          p?.phone && p.phone !== "Not Provided" ? String(p.phone) : "";
+        const nextAccName = p?.contact_person || p?.bus_name || "";
+
+        cachedEarningsMemory = {
+          totalEarnings: e.total_earnings || "₱0.00",
+          rawTotalEarnings: Number(e.raw_total_earnings || 0),
+          walletBalance: e.wallet_balance || "₱0.00",
+          rawWalletBalance: Number(e.raw_wallet_balance || 0),
+          savedOnSpoilage: e.saved_on_spoilage || "₱0.00",
+          transactionsCompleted: Number(e.transactions_completed || 0),
+          monthlyEarnings: nextMonthly,
+          transactions: Array.isArray(e.transactions) ? e.transactions : [],
+          withdrawals: Array.isArray(e.withdrawals) ? e.withdrawals : [],
+          planId: Number(p?.plan_id || 1),
+          commissionPct:
+            p?.commission_pct !== undefined ? Number(p.commission_pct) : 10,
+          defaultPhone: nextPhone,
+          defaultAccountName: nextAccName,
+        };
+
+        setTotalEarnings(cachedEarningsMemory.totalEarnings);
+        setWalletBalance(cachedEarningsMemory.walletBalance);
+        setRawWalletBalance(cachedEarningsMemory.rawWalletBalance);
+        setSavedOnSpoilage(cachedEarningsMemory.savedOnSpoilage);
+        setTransactionsCompleted(cachedEarningsMemory.transactionsCompleted);
+        setMonthlyEarnings(cachedEarningsMemory.monthlyEarnings);
+        setTransactions(cachedEarningsMemory.transactions);
+        setWithdrawals(cachedEarningsMemory.withdrawals);
+        setPlanId(cachedEarningsMemory.planId);
+        setCommissionPct(cachedEarningsMemory.commissionPct);
+
+        if (!accountNumber && nextPhone) setAccountNumber(nextPhone);
+        if (!accountName && nextAccName) setAccountName(nextAccName);
       }
     } catch (err) {
-      console.log("Earnings fetch error:", err);
+      console.log("Error loading merchant earnings:", err);
     }
-  };
+  }, [accountName, accountNumber]);
+
+  useEffect(() => {
+    loadEarningsData();
+
+    const ordSub = DeviceEventEmitter.addListener(
+      "merchant_orders_updated",
+      () => {
+        loadEarningsData();
+      }
+    );
+    const profSub = DeviceEventEmitter.addListener(
+      "merchant_profile_updated",
+      () => {
+        loadEarningsData();
+      }
+    );
+
+    return () => {
+      ordSub.remove();
+      profSub.remove();
+    };
+  }, [loadEarningsData]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadEarnings();
+    await loadEarningsData();
     setRefreshing(false);
   };
 
   const openWithdrawModal = () => {
-    setWithdrawChannel("GCash");
-    setWithdrawAcctName(defaultContact);
-    setWithdrawAcctNum(defaultPhone);
-    setWithdrawAmount(rawWalletBal > 0 ? String(rawWalletBal) : "");
-    setWithdrawModalOpen(true);
+    if (rawWalletBalance <= 100) {
+      showModal(
+        "Minimum Balance Required (> ₱100.00)",
+        `Your active wallet balance is currently ${walletBalance}. You can only request a Xendit payout when your requested withdrawal amount is strictly greater than ₱100.00.`,
+        "warning"
+      );
+      return;
+    }
+    setWithdrawAmount(rawWalletBalance.toFixed(2));
+    setWithdrawModalVisible(true);
   };
 
+  const parsedInputAmount = Math.max(0, parseFloat(withdrawAmount || "0") || 0);
+  const isAmountAbove100 = parsedInputAmount > 100;
+  const isAmountWithinBalance = parsedInputAmount <= rawWalletBalance;
+  const isProTier = planId === 2;
+  const computedFee = isProTier
+    ? 0
+    : Math.round(parsedInputAmount * (commissionPct / 100) * 100) / 100;
+  const computedNetPayout = Math.max(0, parsedInputAmount - computedFee);
+
   const handleSubmitWithdrawal = async () => {
-    const amtNum = parseFloat(withdrawAmount || "0");
-    if (!amtNum || amtNum <= 0) {
+    if (!isAmountAbove100) {
       showModal(
-        "Invalid Amount",
-        "Please enter a withdrawal amount greater than ₱0.00.",
+        "Minimum Withdrawal is > ₱100.00",
+        "Your requested withdrawal amount must be strictly greater than ₱100.00 (e.g. ₱101.00 or higher).",
         "warning"
       );
       return;
     }
-    if (amtNum > rawWalletBal) {
+    if (!isAmountWithinBalance) {
       showModal(
-        "Insufficient Wallet Balance",
-        `Your requested amount (₱${amtNum.toFixed(
-          2
-        )}) exceeds your active wallet balance (${walletBalance}).`,
-        "error"
+        "Exceeds Wallet Balance",
+        `Please enter an amount up to your available wallet balance (${walletBalance}).`,
+        "warning"
       );
       return;
     }
-    if (!withdrawAcctName.trim() || !withdrawAcctNum.trim()) {
+    if (!accountNumber.trim() || !accountName.trim()) {
       showModal(
-        "Missing E-Wallet Info",
-        `Please enter both your ${withdrawChannel} account name and account number.`,
+        "Account Details Required",
+        `Please provide both your ${withdrawChannel} mobile number and registered account name.`,
         "warning"
       );
       return;
     }
 
-    setSubmittingWithdraw(true);
+    setSubmittingWithdrawal(true);
     try {
-      const res = await api.post(`listings/merchant-portal/${merchantId}/`, {
+      const activeId =
+        merchantId || (await getStorageItem("profile_id")) || "0";
+      const storedEmail = (await getStorageItem("user_email")) || "";
+
+      const res = await api.post(`listings/merchant-portal/${activeId}/`, {
         action: "request_withdrawal",
+        email: storedEmail,
         channel: withdrawChannel,
-        account_name: withdrawAcctName.trim(),
-        account_number: withdrawAcctNum.trim(),
-        amount: amtNum,
+        amount: parsedInputAmount,
+        account_number: accountNumber.trim(),
+        account_name: accountName.trim(),
       });
-      setWithdrawModalOpen(false);
-      await loadEarnings();
+
+      setWithdrawModalVisible(false);
+      await loadEarningsData();
+      setActiveHistoryTab("withdrawals");
+      DeviceEventEmitter.emit("merchant_orders_updated");
+      DeviceEventEmitter.emit("merchant_notifs_updated");
+
       showModal(
-        "Withdrawal Requested!",
-        res.data?.message || "Your withdrawal request has been sent to Admin.",
+        "Automated Xendit Payout Disbursed!",
+        res.data?.message ||
+          "Your payout has been automatically disbursed via Xendit and recorded in the Admin ledger!",
         "success"
       );
     } catch (e: any) {
       showModal(
-        "Withdrawal Failed",
-        e.response?.data?.error || "Unable to request withdrawal.",
+        "Withdrawal Error",
+        e.response?.data?.error || "Could not process automated withdrawal.",
         "error"
       );
     } finally {
-      setSubmittingWithdraw(false);
+      setSubmittingWithdrawal(false);
     }
   };
 
-  const filteredTransactions = transactions.filter((transaction) => {
-    const searchValue = search.toLowerCase();
-    return (
-      (transaction.food || "").toLowerCase().includes(searchValue) ||
-      (transaction.id || "").toLowerCase().includes(searchValue) ||
-      (transaction.customer || "").toLowerCase().includes(searchValue) ||
-      (transaction.total || "").toLowerCase().includes(searchValue)
-    );
-  });
-
   const maxChartAmount = Math.max(
-    500,
-    ...monthlyEarnings.map((m) => Number(m.amount || 0))
+    ...monthlyEarnings.map((m) => Number(m.amount || 0)),
+    100
   );
 
-  const parsedWithdrawAmt = parseFloat(withdrawAmount || "0") || 0;
-  const withdrawFee =
-    planId === 2 ? 0 : parsedWithdrawAmt * (commissionPct / 100);
-  const withdrawNet = Math.max(0, parsedWithdrawAmt - withdrawFee);
-
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <EstablishmentHeader />
 
       <ScrollView
@@ -237,346 +379,503 @@ export default function EstablishmentEarnings() {
         }
       >
         <View style={styles.pageHeader}>
-          <Text style={styles.pageTitle}>My Earnings Analytics</Text>
-          <Text style={styles.pageSubtitle}>
-            Track revenue, wallet balances, and tap any row to view full summaries
+          <Text style={styles.pageTitle}>Revenue &amp; Automated Payouts</Text>
+          <Text style={styles.pageSubTitle}>
+            Track rescued food revenue, active wallet deposits, and instant
+            Xendit GCash / Maya disbursements
           </Text>
         </View>
 
+        {/* ACTIVE WALLET HERO CARD */}
+        <View style={styles.walletHeroCard}>
+          <View style={styles.walletTopRow}>
+            <View>
+              <Text style={styles.walletLabel}>
+                ACTIVE WALLET BALANCE (10% DEPOSITS)
+              </Text>
+              <Text style={styles.walletAmount}>{walletBalance}</Text>
+            </View>
+            <View style={styles.tierPill}>
+              <Ionicons
+                name={isProTier ? "sparkles" : "pricetag-outline"}
+                size={13}
+                color={Colors.white}
+              />
+              <Text style={styles.tierPillText}>
+                {isProTier
+                  ? "Pro Tier • 0% Fee"
+                  : `Free Tier • ${commissionPct}% Fee`}
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.walletHint}>
+            Online 10% reservation deposits are credited here upon pickup
+            confirmation. Automated Xendit withdrawals require a requested
+            amount strictly greater than ₱100.00.
+          </Text>
+
+          <TouchableOpacity
+            style={[
+              styles.withdrawButton,
+              rawWalletBalance <= 100 && { opacity: 0.75 },
+            ]}
+            activeOpacity={0.85}
+            onPress={openWithdrawModal}
+          >
+            <Ionicons name="flash-outline" size={18} color={Colors.primary2} />
+            <Text style={styles.withdrawButtonText}>
+              {rawWalletBalance > 100
+                ? "Withdraw via Xendit (GCash / Maya)"
+                : "Minimum > ₱100.00 Required to Withdraw"}
+            </Text>
+            <Ionicons
+              name="arrow-forward"
+              size={16}
+              color={Colors.primary2}
+            />
+          </TouchableOpacity>
+        </View>
+
+        {/* SUMMARY STATS GRID */}
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
             <View style={styles.statIcon}>
-              <Ionicons name="cash-outline" size={20} color={Colors.primary} />
+              <Ionicons
+                name="trending-up-outline"
+                size={19}
+                color={Colors.primary}
+              />
             </View>
-            <View style={styles.statContent}>
-              <Text style={styles.statNumber}>{totalEarnings}</Text>
-              <Text style={styles.statLabel}>Total Earnings</Text>
-            </View>
-          </View>
-
-          <View style={[styles.statCard, styles.statCardGreen]}>
-            <View style={[styles.statIcon, styles.statIconGreen]}>
-              <Ionicons name="wallet-outline" size={20} color={Colors.white} />
-            </View>
-            <View style={styles.statContent}>
-              <Text style={[styles.statNumber, styles.statNumberWhite]}>
-                {walletBalance}
-              </Text>
-              <Text style={[styles.statLabel, styles.statLabelWhite]}>
-                Active Wallet Balance
-              </Text>
-            </View>
+            <Text style={styles.statValue}>{totalEarnings}</Text>
+            <Text style={styles.statLabel}>Total Net Revenue</Text>
           </View>
 
           <View style={styles.statCard}>
             <View style={styles.statIcon}>
-              <Ionicons name="leaf-outline" size={20} color={Colors.primary} />
-            </View>
-            <View style={styles.statContent}>
-              <Text style={styles.statNumber}>{savedSpoilage}</Text>
-              <Text style={styles.statLabel}>Saved on Spoilage</Text>
-            </View>
-          </View>
-
-          <View style={[styles.statCard, styles.statCardGreenLight]}>
-            <View style={[styles.statIcon, styles.statIconGreenLight]}>
               <Ionicons
-                name="checkmark-circle-outline"
-                size={20}
+                name="shield-checkmark-outline"
+                size={19}
                 color={Colors.primary}
               />
             </View>
-            <View style={styles.statContent}>
-              <Text style={styles.statNumber}>{txCompletedCount}</Text>
-              <Text style={styles.statLabel}>Transactions Completed</Text>
+            <Text style={styles.statValue}>{savedOnSpoilage}</Text>
+            <Text style={styles.statLabel}>Saved on Spoilage</Text>
+          </View>
+
+          <View style={styles.statCard}>
+            <View style={styles.statIcon}>
+              <Ionicons
+                name="bag-check-outline"
+                size={19}
+                color={Colors.primary}
+              />
             </View>
+            <Text style={styles.statValue}>{transactionsCompleted}</Text>
+            <Text style={styles.statLabel}>Completed Pickups</Text>
           </View>
         </View>
 
-        {/* DYNAMIC MONTHLY EARNINGS CHART */}
+        {/* DYNAMIC ROLLING 6-MONTH REVENUE CHART */}
         <View style={styles.chartCard}>
-          <View style={styles.cardHeader}>
+          <View style={styles.chartHeader}>
             <View>
-              <Text style={styles.cardTitle}>Monthly Earnings Trend</Text>
-              <Text style={styles.cardSubtitle}>
-                Live database revenue performance
+              <Text style={styles.sectionTitle}>Monthly Revenue Trend</Text>
+              <Text style={styles.sectionSubtitle}>
+                Rolling 6-month net earnings from rescued surplus
               </Text>
             </View>
             <View style={styles.chartBadge}>
-              <Text style={styles.chartBadgeText}>{totalEarnings}</Text>
+              <Text style={styles.chartBadgeText}>Last 6 Months</Text>
             </View>
           </View>
 
-          <View style={styles.chartArea}>
-            <View style={styles.yAxis}>
-              <Text style={styles.axisText}>₱{Math.round(maxChartAmount)}</Text>
-              <Text style={styles.axisText}>
-                ₱{Math.round(maxChartAmount * 0.75)}
-              </Text>
-              <Text style={styles.axisText}>
-                ₱{Math.round(maxChartAmount * 0.5)}
-              </Text>
-              <Text style={styles.axisText}>
-                ₱{Math.round(maxChartAmount * 0.25)}
-              </Text>
-              <Text style={styles.axisText}>₱0</Text>
-            </View>
-
-            <View style={styles.graphContainer}>
-              <View style={[styles.gridLine, { top: 5 }]} />
-              <View style={[styles.gridLine, { top: 38 }]} />
-              <View style={[styles.gridLine, { top: 72 }]} />
-              <View style={[styles.gridLine, { top: 106 }]} />
-              <View style={[styles.gridLine, { top: 140 }]} />
-
-              <View style={styles.bars}>
-                {monthlyEarnings.map((m, i) => {
-                  const barH = Math.max(
-                    8,
-                    Math.min(130, (Number(m.amount || 0) / maxChartAmount) * 130)
-                  );
-                  return (
+          <View style={styles.barChartRow}>
+            {monthlyEarnings.map((item, index) => {
+              const val = Number(item.amount || 0);
+              const heightPct = Math.max(
+                8,
+                Math.round((val / maxChartAmount) * 110)
+              );
+              const isLatest = index === monthlyEarnings.length - 1;
+              return (
+                <View key={item.month + index} style={styles.barCol}>
+                  <Text style={styles.barValueText}>
+                    {val > 0 ? `₱${Math.round(val)}` : "₱0"}
+                  </Text>
+                  <View style={styles.barTrack}>
                     <View
-                      key={`${m.month}-${i}`}
                       style={[
-                        styles.bar,
+                        styles.barFill,
                         {
-                          height: barH,
-                          backgroundColor:
-                            Number(m.amount) > 0 ? Colors.button : "#CBD5E1",
+                          height: heightPct,
+                          backgroundColor: isLatest
+                            ? Colors.primary
+                            : "#9BB9A9",
                         },
                       ]}
                     />
-                  );
-                })}
-              </View>
-
-              <View style={styles.xAxis}>
-                {monthlyEarnings.map((m, i) => (
-                  <Text key={`${m.month}-lbl-${i}`} style={styles.axisText}>
-                    {m.month}
-                  </Text>
-                ))}
-              </View>
-            </View>
-          </View>
-          <Text style={styles.chartFooter}>
-            Net merchant earnings across completed rescues
-          </Text>
-        </View>
-
-        {/* ACTIVE WALLET & CLICKABLE WITHDRAWALS TABLE */}
-        <View style={styles.walletCard}>
-          <View style={styles.walletHeader}>
-            <View>
-              <Text style={styles.cardTitle}>Active Wallet</Text>
-              <Text style={styles.cardSubtitle}>
-                {planId === 2
-                  ? "Pro Tier: 0% Commission on Withdrawals"
-                  : `Free Tier: ${commissionPct}% Platform Fee Deducted on Withdrawals`}
-              </Text>
-            </View>
-            <View style={styles.walletIcon}>
-              <Ionicons name="wallet-outline" size={20} color={Colors.primary} />
-            </View>
-          </View>
-
-          <View style={styles.walletBalance}>
-            <Text style={styles.walletAmount}>{walletBalance}</Text>
-            <Text style={styles.walletLabel}>Available for Disbursement</Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.withdrawButton}
-            activeOpacity={0.8}
-            onPress={openWithdrawModal}
-          >
-            <Ionicons
-              name="arrow-up-circle-outline"
-              size={18}
-              color={Colors.white}
-            />
-            <Text style={styles.withdrawText}>Request Withdrawal</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.withdrawTitle}>
-            Requested Withdrawals (Tap a row to view full summary)
-          </Text>
-          <View style={styles.miniTable}>
-            <View style={styles.miniHeader}>
-              <Text style={styles.miniHeaderText}>Req ID</Text>
-              <Text style={styles.miniHeaderText}>Channel</Text>
-              <Text style={styles.miniHeaderText}>Net Payout</Text>
-              <Text style={styles.miniHeaderText}>Status</Text>
-              <Text style={styles.miniHeaderText}>Action</Text>
-            </View>
-
-            {withdrawals.length > 0 ? (
-              withdrawals.map((w) => (
-                <TouchableOpacity
-                  key={w.id}
-                  style={styles.miniRow}
-                  activeOpacity={0.75}
-                  onPress={() => setSelectedWithdrawal(w)}
-                >
-                  <Text style={[styles.miniText, { fontFamily: "PoppinsSemiBold" }]}>
-                    {w.id}
-                  </Text>
-                  <Text style={styles.miniText}>{w.channel || "GCash"}</Text>
-                  <Text style={[styles.miniText, { color: Colors.primary, fontFamily: "PoppinsSemiBold" }]}>
-                    {w.net_payout || w.amount}
-                  </Text>
-                  <View style={styles.miniStatus}>
-                    <View
-                      style={[
-                        styles.miniStatusDot,
-                        w.status === "Pending" && { backgroundColor: "#D97706" },
-                        w.status === "Rejected" && { backgroundColor: "#B3261E" },
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.miniStatusText,
-                        w.status === "Pending" && { color: "#D97706" },
-                        w.status === "Rejected" && { color: "#B3261E" },
-                      ]}
-                    >
-                      {w.status}
-                    </Text>
                   </View>
-                  <View style={{ flex: 1, alignItems: "center" }}>
-                    <Ionicons name="eye-outline" size={16} color={Colors.primary} />
-                  </View>
-                </TouchableOpacity>
-              ))
-            ) : (
-              <View style={styles.miniRow}>
-                <Text style={[styles.miniText, { flex: 5 }]}>
-                  No withdrawals requested yet.
-                </Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* CLICKABLE TRANSACTION HISTORY TABLE */}
-        <View style={styles.transactionSection}>
-          <View style={styles.transactionHeader}>
-            <Text style={styles.sectionTitle}>Transaction History</Text>
-            <Text style={styles.cardSubtitle}>
-              Tap any transaction row to inspect its full breakdown
-            </Text>
-          </View>
-
-          <View style={styles.searchContainer}>
-            <Ionicons name="search-outline" size={18} color={Colors.icon} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search voucher ID, food item, or buyer..."
-              placeholderTextColor={Colors.placeholder}
-              style={styles.searchInput}
-            />
-            {search.length > 0 && (
-              <TouchableOpacity onPress={() => setSearch("")}>
-                <Ionicons name="close-circle" size={18} color={Colors.icon} />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-            <View style={styles.transactionTable}>
-              <View style={styles.tableHeader}>
-                <Text style={styles.tableHeaderText}>Order ID</Text>
-                <Text style={styles.tableHeaderText}>Food Item(s)</Text>
-                <Text style={styles.tableHeaderText}>Qty Sold</Text>
-                <Text style={styles.tableHeaderText}>Discounted</Text>
-                <Text style={styles.tableHeaderText}>Net Earning</Text>
-                <Text style={styles.tableHeaderText}>Action</Text>
-              </View>
-
-              {filteredTransactions.length > 0 ? (
-                filteredTransactions.map((tx, index) => (
-                  <TouchableOpacity
-                    key={`${tx.id || tx.food}-${index}`}
-                    style={styles.tableRow}
-                    activeOpacity={0.75}
-                    onPress={() => setSelectedTransaction(tx)}
+                  <Text
+                    style={[
+                      styles.barMonthText,
+                      isLatest && {
+                        fontFamily: "PoppinsBold",
+                        color: Colors.primary2,
+                      },
+                    ]}
                   >
-                    <Text style={[styles.tableText, { fontFamily: "PoppinsSemiBold", color: Colors.primary }]}>
-                      {tx.id || `TX-${index + 1}`}
-                    </Text>
-                    <Text style={styles.tableText} numberOfLines={1}>
-                      {tx.food}
-                    </Text>
-                    <Text style={styles.tableText}>{tx.qty}</Text>
-                    <Text style={styles.tableText}>{tx.discounted}</Text>
-                    <Text style={[styles.tableText, styles.totalEarningText]}>
-                      {tx.total}
-                    </Text>
-                    <View style={{ width: 135, alignItems: "center" }}>
-                      <View style={styles.viewPillBtn}>
-                        <Ionicons name="eye-outline" size={14} color={Colors.white} />
-                        <Text style={styles.viewPillBtnText}>View</Text>
-                      </View>
-                    </View>
-                  </TouchableOpacity>
-                ))
-              ) : (
-                <View style={styles.noTransactions}>
-                  <Ionicons
-                    name="receipt-outline"
-                    size={26}
-                    color={Colors.primary}
-                  />
-                  <Text style={styles.noTransactionsTitle}>
-                    No transactions found
-                  </Text>
-                  <Text style={styles.noTransactionsText}>
-                    Completed order pickups will appear here.
+                    {item.month}
                   </Text>
                 </View>
-              )}
-            </View>
-          </ScrollView>
+              );
+            })}
+          </View>
         </View>
+
+        {/* HISTORY TOGGLE TABS: COMPLETED TRANSACTIONS VS. WITHDRAWAL REQUESTS */}
+        <View style={styles.tabsRow}>
+          <TouchableOpacity
+            style={[
+              styles.tabBtn,
+              activeHistoryTab === "transactions" && styles.tabBtnActive,
+            ]}
+            onPress={() => setActiveHistoryTab("transactions")}
+          >
+            <Text
+              style={[
+                styles.tabBtnText,
+                activeHistoryTab === "transactions" && styles.tabBtnTextActive,
+              ]}
+            >
+              Completed Sales ({transactions.length})
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.tabBtn,
+              activeHistoryTab === "withdrawals" && styles.tabBtnActive,
+            ]}
+            onPress={() => setActiveHistoryTab("withdrawals")}
+          >
+            <Text
+              style={[
+                styles.tabBtnText,
+                activeHistoryTab === "withdrawals" && styles.tabBtnTextActive,
+              ]}
+            >
+              Xendit Payouts ({withdrawals.length})
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {activeHistoryTab === "transactions" ? (
+          transactions.length > 0 ? (
+            transactions.map((tx, idx) => (
+              <TouchableOpacity
+                key={tx.id || idx}
+                style={styles.txCard}
+                activeOpacity={0.85}
+                onPress={() => setSelectedTx(tx)}
+              >
+                <View style={styles.txIconBox}>
+                  <Ionicons
+                    name="receipt-outline"
+                    size={19}
+                    color={Colors.primary}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.txTopLine}>
+                    <Text style={styles.txTitle} numberOfLines={1}>
+                      {tx.food}
+                    </Text>
+                    <Text style={styles.txNetAmount}>{tx.total}</Text>
+                  </View>
+                  <Text style={styles.txMeta}>
+                    Voucher {tx.id} • {tx.customer} ({tx.qty})
+                  </Text>
+                  <Text style={styles.txDate}>{tx.date}</Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color={Colors.icon}
+                />
+              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyCard}>
+              <Ionicons
+                name="receipt-outline"
+                size={28}
+                color={Colors.primary}
+              />
+              <Text style={styles.emptyTitle}>No completed sales yet</Text>
+              <Text style={styles.emptyDescription}>
+                Released orders and verified pickups will appear here with full
+                revenue breakdowns.
+              </Text>
+            </View>
+          )
+        ) : withdrawals.length > 0 ? (
+          withdrawals.map((w) => (
+            <TouchableOpacity
+              key={w.id}
+              style={styles.txCard}
+              activeOpacity={0.85}
+              onPress={() => setSelectedWithdrawal(w)}
+            >
+              <View style={styles.txIconBox}>
+                <Ionicons
+                  name="checkmark-done-circle-outline"
+                  size={20}
+                  color={Colors.primary}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={styles.txTopLine}>
+                  <Text style={styles.txTitle}>
+                    {w.id} • {w.channel} ({w.account_number})
+                  </Text>
+                  <View style={[styles.statusBadge, styles.statusApproved]}>
+                    <Text
+                      style={[styles.statusBadgeText, { color: "#15803D" }]}
+                    >
+                      {w.status || "Settled"}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.txMeta}>
+                  Gross: {w.amount} • Fee: {w.fee_deducted} • Net Disbursed:{" "}
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsBold",
+                      color: Colors.primary,
+                    }}
+                  >
+                    {w.net_payout}
+                  </Text>
+                </Text>
+                {w.reference_number ? (
+                  <Text
+                    style={[
+                      styles.txDate,
+                      { color: Colors.primary, fontFamily: "PoppinsSemiBold" },
+                    ]}
+                  >
+                    Xendit Ref #: {w.reference_number}
+                  </Text>
+                ) : null}
+                <Text style={styles.txDate}>
+                  Disbursed: {w.processed_at || w.created_at}
+                </Text>
+              </View>
+              <Ionicons name="eye-outline" size={17} color={Colors.primary} />
+            </TouchableOpacity>
+          ))
+        ) : (
+          <View style={styles.emptyCard}>
+            <Ionicons name="wallet-outline" size={28} color={Colors.primary} />
+            <Text style={styles.emptyTitle}>No Xendit payouts yet</Text>
+            <Text style={styles.emptyDescription}>
+              Automated Xendit GCash and Maya disbursements and
+              their official invoice reference numbers are logged here.
+            </Text>
+          </View>
+        )}
 
         <View style={{ height: 24 }} />
       </ScrollView>
 
-      {/* REQUEST WITHDRAWAL MODAL */}
+      <EstablishmentBottomNav activeTab="Earnings" />
+
+      {/* TRANSACTION BREAKDOWN MODAL */}
       <Modal
-        visible={withdrawModalOpen}
+        visible={!!selectedTx}
         transparent
         animationType="fade"
-        onRequestClose={() => setWithdrawModalOpen(false)}
+        onRequestClose={() => setSelectedTx(null)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-              <Text style={styles.modalTitle}>Request Wallet Withdrawal</Text>
-              <TouchableOpacity onPress={() => setWithdrawModalOpen(false)}>
+        <View style={styles.modalOverlayCenter}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSelectedTx(null)}
+          />
+          {selectedTx && (
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeaderRow}>
+                <View>
+                  <Text style={styles.modalTitle}>
+                    Transaction Breakdown ({selectedTx.id})
+                  </Text>
+                  <Text style={styles.modalSubtitle}>{selectedTx.date}</Text>
+                </View>
+                <TouchableOpacity onPress={() => setSelectedTx(null)}>
+                  <Ionicons name="close" size={22} color={Colors.primary2} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.breakdownBox}>
+                <BreakdownRow label="Customer" value={selectedTx.customer} />
+                <BreakdownRow label="Items Rescued" value={selectedTx.food} />
+                <BreakdownRow label="Quantity" value={selectedTx.qty} />
+                <BreakdownRow
+                  label="Original Retail Price"
+                  value={selectedTx.original}
+                />
+                <BreakdownRow
+                  label="Discounted Sale Total"
+                  value={selectedTx.discounted}
+                />
+                <BreakdownRow
+                  label="10% Online Deposit"
+                  value={selectedTx.deposit_paid}
+                />
+                <BreakdownRow
+                  label="90% Cash Collected at Pickup"
+                  value={selectedTx.cash_collected}
+                />
+                <BreakdownRow
+                  label="Platform Commission Fee"
+                  value={selectedTx.commission_fee}
+                />
+                <View style={styles.breakdownDivider} />
+                <BreakdownRow
+                  label="Net Store Earnings"
+                  value={selectedTx.total}
+                  bold
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setSelectedTx(null)}
+              >
+                <Text style={styles.modalCloseBtnText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* VIEW AUTOMATED PAYOUT RECEIPT MODAL */}
+      <Modal
+        visible={!!selectedWithdrawal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSelectedWithdrawal(null)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSelectedWithdrawal(null)}
+          />
+          {selectedWithdrawal && (
+            <View style={styles.modalCard}>
+              <View style={styles.modalHeaderRow}>
+                <View>
+                  <Text style={styles.modalTitle}>
+                    Xendit Payout Receipt ({selectedWithdrawal.id})
+                  </Text>
+                  <Text style={styles.modalSubtitle}>
+                    Automated E-Wallet Disbursement Record
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => setSelectedWithdrawal(null)}>
+                  <Ionicons name="close" size={22} color={Colors.primary2} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.breakdownBox}>
+                <BreakdownRow
+                  label="Xendit Reference #"
+                  value={selectedWithdrawal.reference_number || "Recorded"}
+                />
+                <BreakdownRow
+                  label="Disbursement Channel"
+                  value={selectedWithdrawal.channel}
+                />
+                <BreakdownRow
+                  label="Recipient Account #"
+                  value={selectedWithdrawal.account_number}
+                />
+                <BreakdownRow
+                  label="Recipient Name"
+                  value={selectedWithdrawal.account_name}
+                />
+                <BreakdownRow
+                  label="Date Disbursed"
+                  value={
+                    selectedWithdrawal.processed_at ||
+                    selectedWithdrawal.created_at
+                  }
+                />
+                <View style={styles.breakdownDivider} />
+                <BreakdownRow
+                  label="Gross Requested"
+                  value={selectedWithdrawal.amount}
+                />
+                <BreakdownRow
+                  label="Platform Commission Fee"
+                  value={`-${selectedWithdrawal.fee_deducted}`}
+                />
+                <BreakdownRow
+                  label="Net Disbursed via Xendit"
+                  value={selectedWithdrawal.net_payout}
+                  bold
+                />
+              </View>
+
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setSelectedWithdrawal(null)}
+              >
+                <Text style={styles.modalCloseBtnText}>Close Receipt</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </Modal>
+
+      {/* AUTOMATED XENDIT WITHDRAWAL MODAL */}
+      <Modal
+        visible={withdrawModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setWithdrawModalVisible(false)}
+      >
+        <View style={styles.modalOverlayBottom}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setWithdrawModalVisible(false)}
+          />
+          <View style={styles.bottomSheetCard}>
+            <View style={styles.modalHeaderRow}>
+              <View>
+                <Text style={styles.modalTitle}>
+                  Automated Xendit Wallet Payout
+                </Text>
+                <Text style={styles.modalSubtitle}>
+                  Available Balance: {walletBalance} (Min. &gt; ₱100.00)
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setWithdrawModalVisible(false)}>
                 <Ionicons name="close" size={22} color={Colors.primary2} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.cardSubtitle}>
-              Available Wallet Balance:{" "}
-              <Text style={{ fontFamily: "PoppinsBold", color: Colors.primary }}>
-                {walletBalance}
-              </Text>
-            </Text>
-
-            <Text style={styles.inputLabel}>Preferred E-Wallet for Disbursement *</Text>
-            <View style={{ flexDirection: "row", gap: 10, marginBottom: 6 }}>
+            <Text style={styles.inputLabel}>Select E-Wallet Channel *</Text>
+            <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
               {(["GCash", "Maya"] as const).map((ch) => {
                 const active = withdrawChannel === ch;
                 return (
                   <TouchableOpacity
                     key={ch}
                     style={[
-                      styles.channelBtn,
-                      active && styles.channelBtnActive,
+                      styles.channelPill,
+                      active && styles.channelPillActive,
                     ]}
                     onPress={() => setWithdrawChannel(ch)}
                   >
@@ -587,8 +886,8 @@ export default function EstablishmentEarnings() {
                     />
                     <Text
                       style={[
-                        styles.channelBtnText,
-                        active && { color: Colors.white, fontFamily: "PoppinsSemiBold" },
+                        styles.channelPillText,
+                        active && { color: Colors.white },
                       ]}
                     >
                       {ch}
@@ -598,158 +897,100 @@ export default function EstablishmentEarnings() {
               })}
             </View>
 
-            <Text style={styles.inputLabel}>Registered Account Name *</Text>
+            <Text style={styles.inputLabel}>
+              Withdrawal Amount (₱) — Must be &gt; ₱100.00 *
+            </Text>
             <TextInput
-              style={styles.modalInput}
-              value={withdrawAcctName}
-              onChangeText={setWithdrawAcctName}
-              placeholder="e.g. Juan Dela Cruz"
-              placeholderTextColor={Colors.placeholder}
-            />
-
-            <Text style={styles.inputLabel}>{withdrawChannel} Account Number *</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={withdrawAcctNum}
-              onChangeText={setWithdrawAcctNum}
-              keyboardType="phone-pad"
-              placeholder="e.g. 09171234567"
-              placeholderTextColor={Colors.placeholder}
-            />
-
-            <Text style={styles.inputLabel}>Amount to Withdraw (₱) *</Text>
-            <TextInput
-              style={styles.modalInput}
               value={withdrawAmount}
               onChangeText={setWithdrawAmount}
               keyboardType="numeric"
-              placeholder="e.g. 250.00"
+              placeholder="Enter amount > 100.00"
               placeholderTextColor={Colors.placeholder}
+              style={[
+                styles.textInput,
+                !isAmountAbove100 && { borderColor: "#B3261E" },
+              ]}
+            />
+            {!isAmountAbove100 && (
+              <Text style={styles.minWarningText}>
+                Requested withdrawal amount must be strictly greater than
+                ₱100.00.
+              </Text>
+            )}
+
+            <Text style={styles.inputLabel}>
+              {withdrawChannel} Mobile Number *
+            </Text>
+            <TextInput
+              value={accountNumber}
+              onChangeText={setAccountNumber}
+              keyboardType="phone-pad"
+              placeholder="e.g. 09171234567"
+              placeholderTextColor={Colors.placeholder}
+              style={styles.textInput}
+            />
+
+            <Text style={styles.inputLabel}>
+              Registered {withdrawChannel} Account Name *
+            </Text>
+            <TextInput
+              value={accountName}
+              onChangeText={setAccountName}
+              placeholder="Full name registered on E-Wallet"
+              placeholderTextColor={Colors.placeholder}
+              style={styles.textInput}
             />
 
             <View style={styles.breakdownBox}>
-              <SummaryLine
+              <BreakdownRow
                 label="Requested Withdrawal"
-                value={`₱${parsedWithdrawAmt.toFixed(2)}`}
+                value={`₱${parsedInputAmount.toFixed(2)}`}
               />
-              <SummaryLine
+              <BreakdownRow
                 label={
-                  planId === 2
-                    ? "Pro Tier Platform Fee (0%)"
-                    : `Free Tier Deduction (${commissionPct}%)`
+                  isProTier
+                    ? "Platform Fee (Premium Pro 0%)"
+                    : `Platform Fee (Free Tier ${commissionPct}%)`
                 }
-                value={`-₱${withdrawFee.toFixed(2)}`}
-                valueColor="#B3261E"
+                value={`-₱${computedFee.toFixed(2)}`}
               />
               <View style={styles.breakdownDivider} />
-              <SummaryLine
-                label={`Net Disbursement to ${withdrawChannel}`}
-                value={`₱${withdrawNet.toFixed(2)}`}
+              <BreakdownRow
+                label="Instant Net Xendit Payout"
+                value={`₱${computedNetPayout.toFixed(2)}`}
                 bold
-                valueColor={Colors.primary}
               />
             </View>
 
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setWithdrawModalOpen(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalSubmitBtn}
-                onPress={handleSubmitWithdrawal}
-                disabled={submittingWithdraw}
-              >
-                <Text style={styles.modalSubmitText}>
-                  {submittingWithdraw ? "Submitting..." : "Submit Withdrawal"}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* VIEW WITHDRAWAL SUMMARY MODAL */}
-      <Modal
-        visible={!!selectedWithdrawal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSelectedWithdrawal(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>
-              Withdrawal Request Summary ({selectedWithdrawal?.id})
-            </Text>
-            {selectedWithdrawal && (
-              <View style={{ gap: 8, marginTop: 8 }}>
-                <SummaryLine label="Status" value={selectedWithdrawal.status} bold />
-                <SummaryLine label="Disbursement E-Wallet" value={selectedWithdrawal.channel || "GCash"} />
-                <SummaryLine label="Account Name" value={selectedWithdrawal.account_name || defaultContact} />
-                <SummaryLine label="Account Number" value={selectedWithdrawal.account_number || defaultPhone} />
-                <SummaryLine label="Requested Gross Amount" value={selectedWithdrawal.amount} />
-                <SummaryLine label={`Platform Fee Deducted (${commissionPct}%)`} value={selectedWithdrawal.fee_deducted || "₱0.00"} valueColor="#B3261E" />
-                <SummaryLine label="Net Payout Amount" value={selectedWithdrawal.net_payout || selectedWithdrawal.amount} bold valueColor={Colors.primary} />
-                <SummaryLine
-                  label="Official Transfer Ref #"
-                  value={selectedWithdrawal.reference_number || "Pending Admin Transfer"}
-                  bold
-                />
-                <SummaryLine label="Date Requested" value={selectedWithdrawal.created_at || "Recent"} />
-              </View>
-            )}
             <TouchableOpacity
-              style={[styles.modalSubmitBtn, { flex: 0, marginTop: 18 }]}
-              onPress={() => setSelectedWithdrawal(null)}
+              style={[
+                styles.submitPayoutBtn,
+                (!isAmountAbove100 || !isAmountWithinBalance) && {
+                  opacity: 0.5,
+                },
+              ]}
+              activeOpacity={0.85}
+              onPress={handleSubmitWithdrawal}
+              disabled={
+                submittingWithdrawal ||
+                !isAmountAbove100 ||
+                !isAmountWithinBalance
+              }
             >
-              <Text style={styles.modalSubmitText}>Close Summary</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* VIEW TRANSACTION SUMMARY MODAL */}
-      <Modal
-        visible={!!selectedTransaction}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSelectedTransaction(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>
-              Transaction Summary ({selectedTransaction?.id || "Order"})
-            </Text>
-            {selectedTransaction && (
-              <View style={{ gap: 8, marginTop: 8 }}>
-                <SummaryLine label="Customer" value={selectedTransaction.customer || "Verified Consumer"} />
-                <SummaryLine label="Date Completed" value={selectedTransaction.date || "Recent"} />
-                <SummaryLine label="Food Item(s)" value={selectedTransaction.food} bold />
-                <SummaryLine label="Quantity Sold" value={selectedTransaction.qty} />
-                <SummaryLine label="Original Retail Value" value={selectedTransaction.original} />
-                <SummaryLine label="Discounted Sale Total" value={selectedTransaction.discounted} />
-                {selectedTransaction.deposit_paid && (
-                  <SummaryLine label={`${commissionPct}% Online Deposit Credited`} value={selectedTransaction.deposit_paid} />
-                )}
-                {selectedTransaction.cash_collected && (
-                  <SummaryLine label={`${100 - commissionPct}% Cash Collected at Pickup`} value={selectedTransaction.cash_collected} />
-                )}
-                <View style={styles.breakdownDivider} />
-                <SummaryLine
-                  label="Net Establishment Earning"
-                  value={selectedTransaction.total}
-                  bold
-                  valueColor={Colors.primary}
-                />
-              </View>
-            )}
-            <TouchableOpacity
-              style={[styles.modalSubmitBtn, { flex: 0, marginTop: 18 }]}
-              onPress={() => setSelectedTransaction(null)}
-            >
-              <Text style={styles.modalSubmitText}>Close Summary</Text>
+              {submittingWithdrawal ? (
+                <ActivityIndicator size="small" color={Colors.white} />
+              ) : (
+                <>
+                  <Ionicons
+                    name="flash-outline"
+                    size={18}
+                    color={Colors.white}
+                  />
+                  <Text style={styles.submitPayoutBtnText}>
+                    Disburse ₱{computedNetPayout.toFixed(2)} Now via Xendit
+                  </Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -762,35 +1003,41 @@ export default function EstablishmentEarnings() {
         type={modalAlert.type}
         onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
       />
-
-      <EstablishmentBottomNav activeTab="Earnings" />
-    </SafeAreaView>
+    </View>
   );
 }
 
-function SummaryLine({
+function BreakdownRow({
   label,
   value,
   bold = false,
-  valueColor = Colors.primary2,
 }: {
   label: string;
   value: string;
   bold?: boolean;
-  valueColor?: string;
 }) {
   return (
-    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-      <Text style={{ fontFamily: bold ? "PoppinsBold" : "PoppinsRegular", fontSize: 11.5, color: Colors.primary1 }}>
-        {label}:
+    <View
+      style={{
+        flexDirection: "row",
+        justifyContent: "space-between",
+        marginBottom: 6,
+      }}
+    >
+      <Text
+        style={{
+          fontFamily: bold ? "PoppinsBold" : "PoppinsRegular",
+          fontSize: 11.5,
+          color: bold ? Colors.primary2 : Colors.primary1,
+        }}
+      >
+        {label}
       </Text>
       <Text
         style={{
           fontFamily: bold ? "PoppinsBold" : "PoppinsSemiBold",
-          fontSize: bold ? 12.5 : 11.5,
-          color: valueColor,
-          maxWidth: "58%",
-          textAlign: "right",
+          fontSize: bold ? 13 : 11.5,
+          color: bold ? Colors.primary : Colors.primary2,
         }}
       >
         {value}
@@ -803,80 +1050,395 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scrollContent: { paddingHorizontal: 17, paddingTop: 18, paddingBottom: 28 },
   pageHeader: { marginBottom: 16 },
-  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, lineHeight: 31, color: Colors.primary2 },
-  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 2 },
-  sectionTitle: { fontFamily: "PoppinsSemiBold", fontSize: 16, color: Colors.primary2 },
-  statsGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginBottom: 16 },
-  statCard: { width: "48.5%", minHeight: 85, borderRadius: 14, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, padding: 14, flexDirection: "row", alignItems: "center" },
-  statCardGreen: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  statCardGreenLight: { backgroundColor: "#E7EEE9", borderColor: "#D5E3D9" },
-  statIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginRight: 11 },
-  statIconGreen: { backgroundColor: Colors.button },
-  statIconGreenLight: { backgroundColor: Colors.white },
-  statContent: { flex: 1 },
-  statNumber: { fontFamily: "PoppinsBold", fontSize: 18, color: Colors.primary2, lineHeight: 24 },
-  statNumberWhite: { color: Colors.white },
-  statLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 1 },
-  statLabelWhite: { color: "rgba(255,255,255,0.8)" },
-  chartCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 14, height: 245, marginBottom: 16 },
-  cardHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
-  cardTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2 },
-  cardSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 1 },
-  chartBadge: { backgroundColor: "#E7F0E9", borderRadius: 10, paddingHorizontal: 10, paddingVertical: 5 },
-  chartBadgeText: { fontFamily: "PoppinsMedium", fontSize: 11, color: Colors.button },
-  chartArea: { flex: 1, flexDirection: "row" },
-  yAxis: { width: 52, justifyContent: "space-between", paddingBottom: 20 },
-  axisText: { fontFamily: "PoppinsRegular", fontSize: 9.5, color: Colors.primary1 },
-  graphContainer: { flex: 1, position: "relative", marginLeft: 4 },
-  gridLine: { position: "absolute", left: 0, right: 0, height: 1, backgroundColor: Colors.border },
-  bars: { position: "absolute", left: 4, right: 4, bottom: 20, height: 145, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-around" },
-  bar: { width: 22, backgroundColor: Colors.button, borderTopLeftRadius: 5, borderTopRightRadius: 5 },
-  xAxis: { position: "absolute", left: 0, right: 0, bottom: 0, height: 18, flexDirection: "row", justifyContent: "space-around", alignItems: "center" },
-  chartFooter: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1, textAlign: "center", marginTop: 4 },
-  walletCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 16, marginBottom: 22 },
-  walletHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 12 },
-  walletIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center" },
-  walletBalance: { backgroundColor: "#E7F0E9", borderRadius: 12, alignItems: "center", paddingVertical: 14, marginBottom: 12 },
-  walletAmount: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
-  walletLabel: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 2 },
-  withdrawButton: { minHeight: 45, backgroundColor: Colors.button, borderRadius: 12, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, marginBottom: 16 },
-  withdrawText: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.white },
-  withdrawTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2, marginBottom: 8 },
-  miniTable: { borderWidth: 1, borderColor: Colors.border, borderRadius: 10, overflow: "hidden" },
-  miniHeader: { flexDirection: "row", backgroundColor: "#F7F9F7", paddingHorizontal: 8, paddingVertical: 9 },
-  miniHeaderText: { flex: 1, fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.primary2, textAlign: "center" },
-  miniRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 8, paddingVertical: 11, borderTopWidth: 1, borderTopColor: Colors.border },
-  miniText: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary2, textAlign: "center" },
-  miniStatus: { flex: 1, flexDirection: "row", justifyContent: "center", alignItems: "center" },
-  miniStatusDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.button, marginRight: 4 },
-  miniStatusText: { fontFamily: "PoppinsMedium", fontSize: 10.5, color: Colors.button },
-  transactionSection: { marginBottom: 12 },
-  transactionHeader: { marginBottom: 10 },
-  searchContainer: { minHeight: 45, borderRadius: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, flexDirection: "row", alignItems: "center", paddingHorizontal: 12, marginBottom: 12 },
-  searchInput: { flex: 1, fontFamily: "PoppinsRegular", fontSize: 13, color: Colors.primary2, marginLeft: 8, paddingVertical: 8 },
-  transactionTable: { width: 820, backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, overflow: "hidden" },
-  tableHeader: { height: 42, backgroundColor: "#F7F9F7", flexDirection: "row", alignItems: "center", paddingHorizontal: 10, borderBottomWidth: 1, borderBottomColor: Colors.border },
-  tableHeaderText: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, width: 135, textAlign: "center" },
-  tableRow: { minHeight: 52, flexDirection: "row", alignItems: "center", paddingHorizontal: 10, borderBottomWidth: 1, borderBottomColor: Colors.border, backgroundColor: Colors.white },
-  tableText: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary2, width: 135, textAlign: "center" },
-  totalEarningText: { fontFamily: "PoppinsSemiBold", color: Colors.primary },
-  viewPillBtn: { flexDirection: "row", alignItems: "center", gap: 4, backgroundColor: Colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
-  viewPillBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.white },
-  noTransactions: { alignItems: "center", justifyContent: "center", paddingVertical: 45, backgroundColor: Colors.white },
-  noTransactionsTitle: { fontFamily: "PoppinsSemiBold", fontSize: 15, color: Colors.primary2, marginTop: 10 },
-  noTransactionsText: { fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary1, marginTop: 3 },
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center", padding: 18 },
-  modalCard: { width: "100%", maxWidth: 420, backgroundColor: Colors.white, borderRadius: 18, padding: 20 },
-  modalTitle: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary2 },
-  inputLabel: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2, marginTop: 10, marginBottom: 4 },
-  modalInput: { height: 44, borderWidth: 1, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 12, fontFamily: "PoppinsRegular", fontSize: 12.5, color: Colors.primary2, backgroundColor: Colors.input },
-  channelBtn: { flex: 1, height: 42, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.input, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  channelBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  channelBtnText: { fontFamily: "PoppinsMedium", fontSize: 12.5, color: Colors.primary2 },
-  breakdownBox: { backgroundColor: "#F2F7F4", borderRadius: 12, padding: 12, marginTop: 14, borderWidth: 1, borderColor: Colors.border, gap: 6 },
-  breakdownDivider: { height: 1, backgroundColor: Colors.border, marginVertical: 4 },
-  modalCancelBtn: { flex: 1, height: 44, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
-  modalCancelText: { fontFamily: "PoppinsMedium", fontSize: 12.5, color: Colors.primary1 },
-  modalSubmitBtn: { flex: 1.3, height: 44, borderRadius: 10, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center" },
-  modalSubmitText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.white },
+  pageTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 24,
+    color: Colors.primary2,
+  },
+  pageSubTitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11.5,
+    color: Colors.primary1,
+    marginTop: 2,
+  },
+  walletHeroCard: {
+    backgroundColor: Colors.primary,
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
+  },
+  walletTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  walletLabel: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
+    color: "rgba(255,255,255,0.8)",
+    letterSpacing: 0.5,
+  },
+  walletAmount: {
+    fontFamily: "PoppinsBold",
+    fontSize: 28,
+    color: Colors.white,
+    marginTop: 2,
+  },
+  tierPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  tierPillText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
+    color: Colors.white,
+  },
+  walletHint: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    color: "rgba(255,255,255,0.85)",
+    marginTop: 8,
+    marginBottom: 14,
+    lineHeight: 15,
+  },
+  withdrawButton: {
+    height: 44,
+    backgroundColor: Colors.white,
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+  },
+  withdrawButtonText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 12,
+    color: Colors.primary2,
+  },
+  statsGrid: { flexDirection: "row", gap: 8, marginBottom: 16 },
+  statCard: {
+    flex: 1,
+    backgroundColor: Colors.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 12,
+  },
+  statIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: "#E8EFEA",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  statValue: {
+    fontFamily: "PoppinsBold",
+    fontSize: 15,
+    color: Colors.primary2,
+  },
+  statLabel: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10,
+    color: Colors.primary1,
+    marginTop: 2,
+  },
+  chartCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 16,
+    marginBottom: 18,
+  },
+  chartHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  sectionTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 15,
+    color: Colors.primary2,
+  },
+  sectionSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    color: Colors.primary1,
+  },
+  chartBadge: {
+    backgroundColor: "#E8EFEA",
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  chartBadgeText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 10,
+    color: Colors.primary,
+  },
+  barChartRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+    height: 155,
+    paddingTop: 18,
+  },
+  barCol: { flex: 1, alignItems: "center" },
+  barValueText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 9,
+    color: Colors.primary1,
+    marginBottom: 4,
+  },
+  barTrack: {
+    width: 24,
+    height: 110,
+    backgroundColor: "#F2F5F3",
+    borderRadius: 6,
+    justifyContent: "flex-end",
+    overflow: "hidden",
+  },
+  barFill: { width: "100%", borderRadius: 6 },
+  barMonthText: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    color: Colors.primary1,
+    marginTop: 6,
+  },
+  tabsRow: {
+    flexDirection: "row",
+    backgroundColor: "#EBEFEB",
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 12,
+  },
+  tabBtn: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 9,
+    alignItems: "center",
+  },
+  tabBtnActive: { backgroundColor: Colors.white },
+  tabBtnText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 11.5,
+    color: Colors.primary1,
+  },
+  tabBtnTextActive: {
+    fontFamily: "PoppinsSemiBold",
+    color: Colors.primary2,
+  },
+  txCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 13,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 11,
+    marginBottom: 10,
+  },
+  txIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#E8EFEA",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  txTopLine: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
+  },
+  txTitle: {
+    flex: 1,
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 13,
+    color: Colors.primary2,
+  },
+  txNetAmount: {
+    fontFamily: "PoppinsBold",
+    fontSize: 13.5,
+    color: Colors.primary,
+  },
+  txMeta: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    color: Colors.primary1,
+    marginTop: 2,
+  },
+  txDate: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10,
+    color: Colors.placeholder,
+    marginTop: 2,
+  },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
+  statusApproved: { backgroundColor: "#DCFCE7" },
+  statusRejected: { backgroundColor: "#FBE4E1" },
+  statusPending: { backgroundColor: "#FEF3C7" },
+  statusBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 9.5 },
+  emptyCard: {
+    backgroundColor: Colors.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingVertical: 36,
+    paddingHorizontal: 20,
+    alignItems: "center",
+  },
+  emptyTitle: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 13.5,
+    color: Colors.primary2,
+    marginTop: 8,
+  },
+  emptyDescription: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    color: Colors.primary1,
+    textAlign: "center",
+    marginTop: 3,
+  },
+  modalOverlayCenter: {
+    flex: 1,
+    backgroundColor: "rgba(18,55,44,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalOverlayBottom: {
+    flex: 1,
+    backgroundColor: "rgba(18,55,44,0.5)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 380,
+    backgroundColor: Colors.white,
+    borderRadius: 18,
+    padding: 18,
+  },
+  bottomSheetCard: {
+    width: "100%",
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    padding: 18,
+    paddingBottom: 28,
+  },
+  modalHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  modalTitle: {
+    fontFamily: "PoppinsBold",
+    fontSize: 16,
+    color: Colors.primary2,
+  },
+  modalSubtitle: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11,
+    color: Colors.primary1,
+  },
+  breakdownBox: {
+    backgroundColor: "#F7F9F7",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    padding: 12,
+    marginVertical: 10,
+  },
+  breakdownDivider: {
+    height: 1,
+    backgroundColor: Colors.border,
+    marginVertical: 6,
+  },
+  modalCloseBtn: {
+    height: 44,
+    backgroundColor: Colors.button,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  modalCloseBtnText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 12,
+    color: Colors.white,
+  },
+  inputLabel: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11,
+    color: Colors.primary2,
+    marginBottom: 5,
+  },
+  textInput: {
+    height: 44,
+    backgroundColor: Colors.input,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    paddingHorizontal: 12,
+    fontFamily: "PoppinsRegular",
+    fontSize: 12,
+    color: Colors.primary2,
+    marginBottom: 8,
+  },
+  minWarningText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 10,
+    color: "#B3261E",
+    marginTop: -4,
+    marginBottom: 8,
+  },
+  channelPill: {
+    flex: 1,
+    height: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    backgroundColor: Colors.input,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  channelPillActive: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  channelPillText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 12,
+    color: Colors.primary2,
+  },
+  submitPayoutBtn: {
+    height: 46,
+    backgroundColor: Colors.button,
+    borderRadius: 11,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 6,
+  },
+  submitPayoutBtnText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 12.5,
+    color: Colors.white,
+  },
 });

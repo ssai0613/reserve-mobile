@@ -24,6 +24,26 @@ import {
   ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
 
+let cachedMerchantPersonalInfo = {
+  merchantId: "1",
+  busName: "",
+  merchType: "Bakeshop",
+  contactPerson: "",
+  email: "",
+  phone: "",
+  hotline: "",
+  expiryDate: "Verified",
+  barangay: "",
+  streetDetail: "",
+  address: "Cebu City",
+  latitude: 10.3157,
+  longitude: 123.8854,
+  pushNotif: true,
+  smsAlerts: true,
+  autoDonateExpiry: true,
+  isLoaded: false,
+};
+
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
   return await SecureStore.getItemAsync(key);
@@ -41,25 +61,43 @@ const setStorageItem = async (key: string, val: string) => {
 };
 
 export default function MerchantPersonalInfo() {
-  const [merchantId, setMerchantId] = useState("1");
-  const [busName, setBusName] = useState("");
-  const [merchType, setMerchType] = useState("Bakeshop");
-  const [contactPerson, setContactPerson] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [hotline, setHotline] = useState("");
-  const [expiryDate, setExpiryDate] = useState("Verified");
-  const [barangay, setBarangay] = useState("");
-  const [streetDetail, setStreetDetail] = useState("");
-  const [address, setAddress] = useState("Cebu City");
-  const [latitude, setLatitude] = useState(10.3157);
-  const [longitude, setLongitude] = useState(123.8854);
+  const [merchantId, setMerchantId] = useState(
+    cachedMerchantPersonalInfo.merchantId
+  );
+  const [busName, setBusName] = useState(cachedMerchantPersonalInfo.busName);
+  const [merchType, setMerchType] = useState(
+    cachedMerchantPersonalInfo.merchType
+  );
+  const [contactPerson, setContactPerson] = useState(
+    cachedMerchantPersonalInfo.contactPerson
+  );
+  const [email, setEmail] = useState(cachedMerchantPersonalInfo.email);
+  const [phone, setPhone] = useState(cachedMerchantPersonalInfo.phone);
+  const [hotline, setHotline] = useState(cachedMerchantPersonalInfo.hotline);
+  const [expiryDate, setExpiryDate] = useState(
+    cachedMerchantPersonalInfo.expiryDate
+  );
+  const [barangay, setBarangay] = useState(cachedMerchantPersonalInfo.barangay);
+  const [streetDetail, setStreetDetail] = useState(
+    cachedMerchantPersonalInfo.streetDetail
+  );
+  const [address, setAddress] = useState(cachedMerchantPersonalInfo.address);
+  const [latitude, setLatitude] = useState(cachedMerchantPersonalInfo.latitude);
+  const [longitude, setLongitude] = useState(
+    cachedMerchantPersonalInfo.longitude
+  );
 
-  const [pushNotif, setPushNotif] = useState(true);
-  const [smsAlerts, setSmsAlerts] = useState(true);
-  const [autoDonateExpiry, setAutoDonateExpiry] = useState(true);
+  const [pushNotif, setPushNotif] = useState(
+    cachedMerchantPersonalInfo.pushNotif
+  );
+  const [smsAlerts, setSmsAlerts] = useState(
+    cachedMerchantPersonalInfo.smsAlerts
+  );
+  const [autoDonateExpiry, setAutoDonateExpiry] = useState(
+    cachedMerchantPersonalInfo.autoDonateExpiry
+  );
 
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(cachedMerchantPersonalInfo.isLoaded);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -103,29 +141,55 @@ export default function MerchantPersonalInfo() {
 
       const p = portalRes.data?.profile;
       if (p) {
-        setMerchantId(String(p.merch_id || storedId));
-        setBusName(p.bus_name || "");
-        setMerchType(p.merch_type || "Bakeshop");
-        setContactPerson(p.contact_person || "");
-        setEmail(p.email || storedEmail);
-        setPhone(p.phone !== "Not Provided" ? p.phone || "" : "");
-        setHotline(p.hotline !== "N/A" ? p.hotline || "" : "");
-        setExpiryDate(p.expiry_date || "Verified");
-        setAddress(p.address || "Cebu City");
-
         const parts = (p.address || "").split(",");
-        setStreetDetail(parts[0] ? parts[0].trim() : "");
-        if (parts[1]) {
-          setBarangay(parts[1].replace(/brgy\.?/i, "").trim());
-        }
-        if (p.latitude) setLatitude(Number(p.latitude));
-        if (p.longitude) setLongitude(Number(p.longitude));
+        const nextStreet = parts[0] ? parts[0].trim() : "";
+        const nextBrgy = parts[1]
+          ? parts[1].replace(/brgy\.?/i, "").trim()
+          : "";
+
+        cachedMerchantPersonalInfo = {
+          ...cachedMerchantPersonalInfo,
+          merchantId: String(p.merch_id || storedId),
+          busName: p.bus_name || "",
+          merchType: p.merch_type || "Bakeshop",
+          contactPerson: p.contact_person || "",
+          email: p.email || storedEmail,
+          phone: p.phone !== "Not Provided" ? p.phone || "" : "",
+          hotline: p.hotline !== "N/A" ? p.hotline || "" : "",
+          expiryDate: p.expiry_date || "Verified",
+          address: p.address || "Cebu City",
+          streetDetail: nextStreet,
+          barangay: nextBrgy || cachedMerchantPersonalInfo.barangay,
+          latitude: p.latitude ? Number(p.latitude) : 10.3157,
+          longitude: p.longitude ? Number(p.longitude) : 123.8854,
+          isLoaded: true,
+        };
+
+        setMerchantId(cachedMerchantPersonalInfo.merchantId);
+        setBusName(cachedMerchantPersonalInfo.busName);
+        setMerchType(cachedMerchantPersonalInfo.merchType);
+        setContactPerson(cachedMerchantPersonalInfo.contactPerson);
+        setEmail(cachedMerchantPersonalInfo.email);
+        setPhone(cachedMerchantPersonalInfo.phone);
+        setHotline(cachedMerchantPersonalInfo.hotline);
+        setExpiryDate(cachedMerchantPersonalInfo.expiryDate);
+        setAddress(cachedMerchantPersonalInfo.address);
+        setStreetDetail(cachedMerchantPersonalInfo.streetDetail);
+        if (nextBrgy) setBarangay(nextBrgy);
+        setLatitude(cachedMerchantPersonalInfo.latitude);
+        setLongitude(cachedMerchantPersonalInfo.longitude);
       }
 
       if (settingsRes?.data) {
-        setPushNotif(Boolean(settingsRes.data.pushNotif ?? true));
-        setSmsAlerts(Boolean(settingsRes.data.smsAlerts ?? true));
-        setAutoDonateExpiry(Boolean(settingsRes.data.autoDonateExpiry ?? true));
+        const pNotif = Boolean(settingsRes.data.pushNotif ?? true);
+        const sAlerts = Boolean(settingsRes.data.smsAlerts ?? true);
+        const aDonate = Boolean(settingsRes.data.autoDonateExpiry ?? true);
+        cachedMerchantPersonalInfo.pushNotif = pNotif;
+        cachedMerchantPersonalInfo.smsAlerts = sAlerts;
+        cachedMerchantPersonalInfo.autoDonateExpiry = aDonate;
+        setPushNotif(pNotif);
+        setSmsAlerts(sAlerts);
+        setAutoDonateExpiry(aDonate);
       }
     } catch (e) {
     } finally {
@@ -143,9 +207,18 @@ export default function MerchantPersonalInfo() {
     key: "pushNotif" | "smsAlerts" | "autoDonateExpiry",
     value: boolean
   ) => {
-    if (key === "pushNotif") setPushNotif(value);
-    if (key === "smsAlerts") setSmsAlerts(value);
-    if (key === "autoDonateExpiry") setAutoDonateExpiry(value);
+    if (key === "pushNotif") {
+      cachedMerchantPersonalInfo.pushNotif = value;
+      setPushNotif(value);
+    }
+    if (key === "smsAlerts") {
+      cachedMerchantPersonalInfo.smsAlerts = value;
+      setSmsAlerts(value);
+    }
+    if (key === "autoDonateExpiry") {
+      cachedMerchantPersonalInfo.autoDonateExpiry = value;
+      setAutoDonateExpiry(value);
+    }
 
     try {
       await api.post("accounts/settings/", {
@@ -159,6 +232,7 @@ export default function MerchantPersonalInfo() {
             key === "autoDonateExpiry" ? value : autoDonateExpiry,
         },
       });
+      DeviceEventEmitter.emit("merchant_profile_updated");
     } catch (e) {}
   };
 
@@ -191,6 +265,18 @@ export default function MerchantPersonalInfo() {
         latitude: latitude,
         longitude: longitude,
       });
+
+      cachedMerchantPersonalInfo = {
+        ...cachedMerchantPersonalInfo,
+        busName: busName.trim(),
+        contactPerson: contactPerson.trim(),
+        hotline: hotline.trim(),
+        address: fullAddress,
+        streetDetail,
+        barangay,
+        latitude,
+        longitude,
+      };
 
       await setStorageItem("entity_name", busName.trim());
       DeviceEventEmitter.emit("merchant_profile_updated");

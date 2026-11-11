@@ -1,9 +1,9 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { Stack, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  DeviceEventEmitter,
   FlatList,
   Image,
   Linking,
@@ -16,7 +16,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -28,6 +27,7 @@ import {
   FoodBankHeader,
   FoodBankMapModal,
   getFoodBankStorage,
+  useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
 
 export type DonationOffer = {
@@ -57,9 +57,14 @@ export type DonationOffer = {
 
 type Tab = "available" | "ongoing" | "history";
 
+let cachedFbOffersMemory: DonationOffer[] = [];
+
 export default function FoodBankDonationsScreen() {
-  const [offers, setOffers] = useState<DonationOffer[]>([]);
-  const [loading, setLoading] = useState(true);
+  const isInsideShell = useIsInsideFoodBankShell();
+  if (!isInsideShell) return null;
+
+  const [offers, setOffers] = useState<DonationOffer[]>(cachedFbOffersMemory);
+  const [loading, setLoading] = useState(cachedFbOffersMemory.length === 0);
   const [refreshing, setRefreshing] = useState(false);
 
   const [tab, setTab] = useState<Tab>("available");
@@ -111,7 +116,9 @@ export default function FoodBankDonationsScreen() {
           email
         )}`
       );
-      setOffers(Array.isArray(res.data) ? res.data : []);
+      const nextOffers = Array.isArray(res.data) ? res.data : [];
+      cachedFbOffersMemory = nextOffers;
+      setOffers(nextOffers);
     } catch (e) {
       console.log("Load offers error:", e);
     } finally {
@@ -120,11 +127,24 @@ export default function FoodBankDonationsScreen() {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
+  useEffect(() => {
+    loadOffers();
+
+    const donSub = DeviceEventEmitter.addListener(
+      "fb_donations_updated",
+      () => {
+        loadOffers();
+      }
+    );
+    const profSub = DeviceEventEmitter.addListener("fb_profile_updated", () => {
       loadOffers();
-    }, [loadOffers])
-  );
+    });
+
+    return () => {
+      donSub.remove();
+      profSub.remove();
+    };
+  }, [loadOffers]);
 
   const tabOf = (status: string): Tab => {
     if (status === "Active" || status === "Available") return "available";
@@ -191,6 +211,8 @@ export default function FoodBankDonationsScreen() {
           });
           setDetail(null);
           await loadOffers();
+          DeviceEventEmitter.emit("fb_donations_updated");
+          DeviceEventEmitter.emit("fb_notifs_updated");
           showModal(
             action === "accept"
               ? "Donation Accepted (Ongoing)!"
@@ -214,9 +236,7 @@ export default function FoodBankDonationsScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <FoodBankHeader />
 
       <View style={styles.topSection}>
@@ -657,7 +677,7 @@ export default function FoodBankDonationsScreen() {
       />
 
       <FoodBankBottomNav activeTab="Donations" />
-    </SafeAreaView>
+    </View>
   );
 }
 

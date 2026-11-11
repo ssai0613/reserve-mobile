@@ -1,10 +1,12 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Stack } from "expo-router";
+import * as ExpoLocation from "expo-location";
+import { router } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   DeviceEventEmitter,
   Image,
   Linking,
@@ -19,7 +21,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { WebView } from "react-native-webview";
 import { api } from "../../../services/api";
 import {
@@ -27,8 +28,10 @@ import {
   ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
 import {
+  CONSUMER_LOCATION_KEY,
   ConsumerBottomNav,
   ConsumerHeader,
+  useIsInsideConsumerShell,
 } from "../components/ConsumerNav";
 
 type ReviewItem = {
@@ -85,9 +88,30 @@ type Establishment = {
 
 const CART_STORAGE_KEY = "@reserve_cart";
 
+let cachedListingsMemory: FoodItem[] = [];
+let cachedEstablishmentsMemory: Establishment[] = [];
+let cachedConsumerFirstName = "Consumer";
+
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
   return await SecureStore.getItemAsync(key);
+};
+
+const formatDynamicDateFallback = (offsetHours = 0) => {
+  const dt = new Date(Date.now() + offsetHours * 3600 * 1000);
+  const datePart = dt.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const timePart = dt
+    .toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    })
+    .replace(/\u202f/g, " ");
+  return { datePart, timePart, combined: `${datePart}, ${timePart}` };
 };
 
 const parseSafeDate = (dateStr: string, timeStr?: string) => {
@@ -183,13 +207,25 @@ const LiveCountdown = ({
   textStyle?: any;
 }) => {
   const [data, setData] = useState(() =>
-    getLivePricingData(prepDate, expiryDate, expiryTime, initialPrice, floorPrice)
+    getLivePricingData(
+      prepDate,
+      expiryDate,
+      expiryTime,
+      initialPrice,
+      floorPrice
+    )
   );
 
   useEffect(() => {
     const timer = setInterval(() => {
       setData(
-        getLivePricingData(prepDate, expiryDate, expiryTime, initialPrice, floorPrice)
+        getLivePricingData(
+          prepDate,
+          expiryDate,
+          expiryTime,
+          initialPrice,
+          floorPrice
+        )
       );
     }, 1000);
 
@@ -235,6 +271,109 @@ export function ShopLocationMapModal({
   const safeLat = Number(lat) || 10.3157;
   const safeLng = Number(lng) || 123.8854;
 
+  const [userCoords, setUserCoords] = useState<{
+    lat: number;
+    lng: number;
+  } | null>(null);
+  const [locLoading, setLocLoading] = useState(false);
+  const [permissionNotice, setPermissionNotice] = useState<string | null>(null);
+
+  const requestConsumerLiveLocation = useCallback(async () => {
+    setLocLoading(true);
+    setPermissionNotice(null);
+
+    try {
+      if (Platform.OS === "web") {
+        if (typeof navigator !== "undefined" && navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              setUserCoords({
+                lat: Number(pos.coords.latitude.toFixed(6)),
+                lng: Number(pos.coords.longitude.toFixed(6)),
+              });
+              setLocLoading(false);
+            },
+            async () => {
+              const saved = localStorage.getItem(CONSUMER_LOCATION_KEY);
+              if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed.lat && parsed.lng) {
+                  setUserCoords({
+                    lat: Number(parsed.lat),
+                    lng: Number(parsed.lng),
+                  });
+                }
+              }
+              setPermissionNotice(
+                "Browser GPS permission was denied. Showing directions from your saved Cebu City pin. Allow location access in your browser to use live GPS."
+              );
+              setLocLoading(false);
+            },
+            { enableHighAccuracy: true, timeout: 10000 }
+          );
+          return;
+        }
+      } else {
+        const { status } =
+          await ExpoLocation.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          const saved = await getStorageItem(CONSUMER_LOCATION_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed.lat && parsed.lng) {
+              setUserCoords({
+                lat: Number(parsed.lat),
+                lng: Number(parsed.lng),
+              });
+            }
+          }
+          setPermissionNotice(
+            "GPS Location permission is required for live turn-by-turn directions. Please grant location permission."
+          );
+          setLocLoading(false);
+          return;
+        }
+
+        const currentPos = await ExpoLocation.getCurrentPositionAsync({
+          accuracy: ExpoLocation.Accuracy.High,
+        });
+        setUserCoords({
+          lat: Number(currentPos.coords.latitude.toFixed(6)),
+          lng: Number(currentPos.coords.longitude.toFixed(6)),
+        });
+        setLocLoading(false);
+        return;
+      }
+    } catch (e) {
+      try {
+        const saved = await getStorageItem(CONSUMER_LOCATION_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.lat && parsed.lng) {
+            setUserCoords({
+              lat: Number(parsed.lat),
+              lng: Number(parsed.lng),
+            });
+          }
+        }
+      } catch (err) {}
+      setPermissionNotice(
+        "Could not acquire live GPS signal. Showing route from your pinned Cebu City address."
+      );
+      setLocLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (visible) {
+      requestConsumerLiveLocation();
+    }
+  }, [visible, requestConsumerLiveLocation]);
+
+  const originLat = userCoords?.lat || 10.3157;
+  const originLng = userCoords?.lng || 123.8854;
+  const hasOrigin = Boolean(userCoords);
+
   const mapHtml = `
     <!DOCTYPE html>
     <html>
@@ -242,47 +381,153 @@ export function ShopLocationMapModal({
       <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-      <style>html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; -webkit-touch-callout: none; }</style>
+      <style>
+        html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; font-family: sans-serif; -webkit-touch-callout: none; }
+        .route-badge {
+          position: absolute;
+          top: 10px;
+          left: 50%;
+          transform: translateX(-50%);
+          z-index: 1000;
+          background: #12372C;
+          color: #FFFFFF;
+          padding: 6px 12px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 700;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+          white-space: nowrap;
+        }
+      </style>
     </head>
     <body>
+      <div id="routeInfo" class="route-badge">Calculating live route...</div>
       <div id="map"></div>
       <script>
-        var map = L.map('map', { zoomControl: true, tap: false }).setView([${safeLat}, ${safeLng}], 16);
+        var shopLat = ${safeLat};
+        var shopLng = ${safeLng};
+        var userLat = ${originLat};
+        var userLng = ${originLng};
+        var hasUser = ${hasOrigin ? "true" : "false"};
+
+        var map = L.map('map', { zoomControl: true, tap: false }).setView([shopLat, shopLng], 15);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
           attribution: '© OpenStreetMap'
         }).addTo(map);
-        var marker = L.marker([${safeLat}, ${safeLng}]).addTo(map);
-        marker.bindPopup("<b>${shopName.replace(/"/g, "")}</b><br>${address.replace(/"/g, "")}").openPopup();
+
+        var shopIcon = L.divIcon({
+          html: '<div style="background:#1B4D3E;color:#fff;width:30px;height:30px;border-radius:15px;display:flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">🏪</div>',
+          className: '',
+          iconSize: [30, 30],
+          iconAnchor: [15, 15]
+        });
+
+        var userIcon = L.divIcon({
+          html: '<div style="background:#2563EB;color:#fff;width:28px;height:28px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-weight:bold;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,0.3);">📍</div>',
+          className: '',
+          iconSize: [28, 28],
+          iconAnchor: [14, 14]
+        });
+
+        var shopMarker = L.marker([shopLat, shopLng], { icon: shopIcon }).addTo(map);
+        shopMarker.bindPopup("<b>${shopName.replace(/"/g, "")}</b><br>${address.replace(/"/g, "")}");
+
+        function haversineKm(lat1, lon1, lat2, lon2) {
+          var R = 6371;
+          var dLat = (lat2 - lat1) * Math.PI / 180;
+          var dLon = (lon2 - lon1) * Math.PI / 180;
+          var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+          return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        if (hasUser) {
+          var userMarker = L.marker([userLat, userLng], { icon: userIcon }).addTo(map);
+          userMarker.bindPopup("<b>Your Location</b>");
+
+          var osrmUrl = "https://router.project-osrm.org/route/v1/driving/" +
+            userLng + "," + userLat + ";" + shopLng + "," + shopLat +
+            "?overview=full&geometries=geojson";
+
+          fetch(osrmUrl)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+              if (data && data.routes && data.routes.length > 0) {
+                var route = data.routes[0];
+                var distKm = (route.distance / 1000).toFixed(1);
+                var mins = Math.max(1, Math.round(route.duration / 60));
+                document.getElementById('routeInfo').innerText =
+                  "Live Route: " + distKm + " km • ~" + mins + " min drive";
+
+                var routeLine = L.geoJSON(route.geometry, {
+                  style: { color: '#1B4D3E', weight: 5, opacity: 0.85 }
+                }).addTo(map);
+                map.fitBounds(routeLine.getBounds(), { padding: [36, 36] });
+              } else {
+                throw new Error("No OSRM route");
+              }
+            })
+            .catch(function() {
+              var directKm = haversineKm(userLat, userLng, shopLat, shopLng).toFixed(1);
+              document.getElementById('routeInfo').innerText =
+                "Direct Distance: " + directKm + " km from your location";
+              var line = L.polyline([[userLat, userLng], [shopLat, shopLng]], {
+                color: '#1B4D3E', weight: 4, dashArray: '6, 8'
+              }).addTo(map);
+              map.fitBounds(line.getBounds(), { padding: [40, 40] });
+            });
+        } else {
+          document.getElementById('routeInfo').innerText = "Waiting for GPS permission...";
+          shopMarker.openPopup();
+        }
       </script>
     </body>
     </html>
   `;
 
-  const openExternalMaps = () => {
-    const googleUrl = `https://www.google.com/maps/search/?api=1&query=${safeLat},${safeLng}`;
-    const iosUrl = `maps:0,0?q=${encodeURIComponent(shopName)}@${safeLat},${safeLng}`;
+  const openExternalDirections = () => {
+    const originParam = userCoords
+      ? `&origin=${userCoords.lat},${userCoords.lng}`
+      : "";
+    const googleDirectionsUrl = `https://www.google.com/maps/dir/?api=1${originParam}&destination=${safeLat},${safeLng}&travelmode=driving`;
+    const iosDirectionsUrl = userCoords
+      ? `maps://?saddr=${userCoords.lat},${userCoords.lng}&daddr=${safeLat},${safeLng}&dirflg=d`
+      : `maps:0,0?q=${encodeURIComponent(shopName)}@${safeLat},${safeLng}`;
+
     if (Platform.OS === "web") {
-      window.open(googleUrl, "_blank");
+      window.open(googleDirectionsUrl, "_blank");
     } else if (Platform.OS === "ios") {
-      Linking.openURL(iosUrl).catch(() => Linking.openURL(googleUrl));
+      Linking.openURL(iosDirectionsUrl).catch(() =>
+        Linking.openURL(googleDirectionsUrl)
+      );
     } else {
-      Linking.openURL(googleUrl);
+      Linking.openURL(googleDirectionsUrl);
     }
   };
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
       <View style={styles.modalOverlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
         <View style={styles.modalSheet}>
           <View style={styles.modalHeader}>
             <View style={{ flex: 1 }}>
               <Text style={styles.modalTitle} numberOfLines={1}>
-                {shopName}
+                Directions to {shopName}
               </Text>
               <Text
-                style={{ fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 }}
+                style={{
+                  fontFamily: "PoppinsRegular",
+                  fontSize: 10,
+                  color: Colors.primary1,
+                }}
                 numberOfLines={1}
               >
                 {address} ({safeLat.toFixed(4)}° N, {safeLng.toFixed(4)}° E)
@@ -293,12 +538,78 @@ export function ShopLocationMapModal({
             </TouchableOpacity>
           </View>
 
-          <View style={{ height: 280, width: "100%", backgroundColor: "#E8EFEA" }}>
-            {Platform.OS === "web" ? (
+          {permissionNotice && (
+            <View
+              style={{
+                backgroundColor: "#FEF3C7",
+                paddingHorizontal: 14,
+                paddingVertical: 8,
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <Text
+                style={{
+                  flex: 1,
+                  fontFamily: "PoppinsMedium",
+                  fontSize: 10,
+                  color: "#B45309",
+                }}
+              >
+                {permissionNotice}
+              </Text>
+              <TouchableOpacity
+                style={{
+                  backgroundColor: Colors.primary,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 6,
+                }}
+                onPress={requestConsumerLiveLocation}
+              >
+                <Text
+                  style={{
+                    fontFamily: "PoppinsSemiBold",
+                    fontSize: 9.5,
+                    color: Colors.white,
+                  }}
+                >
+                  Allow GPS
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <View
+            style={{ height: 300, width: "100%", backgroundColor: "#E8EFEA" }}
+          >
+            {locLoading ? (
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                }}
+              >
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text
+                  style={{
+                    fontFamily: "PoppinsMedium",
+                    fontSize: 11,
+                    color: Colors.primary2,
+                  }}
+                >
+                  Requesting GPS location &amp; building route...
+                </Text>
+              </View>
+            ) : Platform.OS === "web" ? (
               React.createElement("iframe", {
                 srcDoc: mapHtml,
                 style: { width: "100%", height: "100%", border: "none" },
-                title: "Shop Map",
+                title: "Shop Live Directions Map",
               })
             ) : (
               <WebView
@@ -315,17 +626,26 @@ export function ShopLocationMapModal({
 
           <View style={{ padding: 14, flexDirection: "row", gap: 10 }}>
             <TouchableOpacity
-              style={[styles.addToCartButton, { flex: 1, marginTop: 0, backgroundColor: Colors.primary }]}
-              onPress={openExternalMaps}
+              style={[
+                styles.addToCartButton,
+                { flex: 1, marginTop: 0, backgroundColor: Colors.primary },
+              ]}
+              onPress={openExternalDirections}
             >
-              <Ionicons name="navigate-outline" size={16} color={Colors.white} />
-              <Text style={styles.addToCartText}>Open in Maps App</Text>
+              <Ionicons
+                name="navigate-outline"
+                size={16}
+                color={Colors.white}
+              />
+              <Text style={styles.addToCartText}>
+                Start Turn-by-Turn Navigation
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[
                 styles.addToCartButton,
                 {
-                  flex: 0.45,
+                  flex: 0.38,
                   marginTop: 0,
                   backgroundColor: Colors.input,
                   borderWidth: 1,
@@ -334,7 +654,9 @@ export function ShopLocationMapModal({
               ]}
               onPress={onClose}
             >
-              <Text style={[styles.addToCartText, { color: Colors.primary2 }]}>Close</Text>
+              <Text style={[styles.addToCartText, { color: Colors.primary2 }]}>
+                Close
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -344,19 +666,25 @@ export function ShopLocationMapModal({
 }
 
 export default function Homepage() {
-  const [consumerName, setConsumerName] = useState("Consumer");
+  const isInsideShell = useIsInsideConsumerShell();
+  if (!isInsideShell) return null;
+
+  const [consumerName, setConsumerName] = useState(cachedConsumerFirstName);
   const [searchText, setSearchText] = useState("");
   const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null);
   const [quantity, setQuantity] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [liveListings, setLiveListings] = useState<FoodItem[]>([]);
-  const [dynamicEstablishments, setDynamicEstablishments] = useState<Establishment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [liveListings, setLiveListings] =
+    useState<FoodItem[]>(cachedListingsMemory);
+  const [dynamicEstablishments, setDynamicEstablishments] = useState<
+    Establishment[]
+  >(cachedEstablishmentsMemory);
+  const [loading, setLoading] = useState(cachedListingsMemory.length === 0);
   const [modalLivePrice, setModalLivePrice] = useState(0);
 
-  // Selected Merchant Storefront Profile Modal + Map Modal
-  const [selectedMerchant, setSelectedMerchant] = useState<Establishment | null>(null);
+  const [selectedMerchant, setSelectedMerchant] =
+    useState<Establishment | null>(null);
   const [mapModalTarget, setMapModalTarget] = useState<{
     name: string;
     address: string;
@@ -387,8 +715,23 @@ export default function Homepage() {
         fetchMarketplaceListings();
       }
     );
+    const profListener = DeviceEventEmitter.addListener(
+      "consumer_profile_updated",
+      () => {
+        loadConsumerIdentity();
+      }
+    );
+    const claimsListener = DeviceEventEmitter.addListener(
+      "consumer_claims_updated",
+      () => {
+        fetchMarketplaceListings();
+      }
+    );
+
     return () => {
       locListener.remove();
+      profListener.remove();
+      claimsListener.remove();
     };
   }, []);
 
@@ -401,15 +744,30 @@ export default function Homepage() {
   const loadConsumerIdentity = async () => {
     try {
       const storedName = await getStorageItem("entity_name");
-      const storedId = (await getStorageItem("profile_id")) || "1";
+      const storedId = await getStorageItem("profile_id");
       const storedEmail = (await getStorageItem("user_email")) || "";
-      if (storedName) setConsumerName(storedName.split(" ")[0]);
 
+      if (!storedId && !storedEmail) {
+        router.replace("/consumer");
+        return;
+      }
+
+      if (storedName) {
+        const first = storedName.split(" ")[0];
+        cachedConsumerFirstName = first;
+        setConsumerName(first);
+      }
+
+      const resolvedId = storedId || "0";
       const res = await api.get(
-        `listings/consumer-portal/${storedId}/?email=${encodeURIComponent(storedEmail)}`
+        `listings/consumer-portal/${resolvedId}/?email=${encodeURIComponent(
+          storedEmail
+        )}`
       );
       if (res.data?.profile?.full_name) {
-        setConsumerName(res.data.profile.full_name.split(" ")[0]);
+        const first = res.data.profile.full_name.split(" ")[0];
+        cachedConsumerFirstName = first;
+        setConsumerName(first);
       }
     } catch (e) {}
   };
@@ -431,15 +789,24 @@ export default function Homepage() {
 
   const fetchMarketplaceListings = async () => {
     try {
-      setLoading(true);
-      const storedId = (await getStorageItem("profile_id")) || "1";
+      if (cachedListingsMemory.length === 0) setLoading(true);
+      const storedId = (await getStorageItem("profile_id")) || "0";
       const storedEmail = (await getStorageItem("user_email")) || "";
       const response = await api.get(
-        `listings/?consumer=${storedId}&email=${encodeURIComponent(storedEmail)}`
+        `listings/?consumer=${storedId}&email=${encodeURIComponent(
+          storedEmail
+        )}`
       );
 
-      const formatted: FoodItem[] = (Array.isArray(response.data) ? response.data : [])
-        .filter((item: any) => Number(item.qty_available ?? item.quantity ?? 0) > 0)
+      const fallbackPrep = formatDynamicDateFallback(-2);
+      const fallbackExp = formatDynamicDateFallback(24);
+
+      const formatted: FoodItem[] = (
+        Array.isArray(response.data) ? response.data : []
+      )
+        .filter(
+          (item: any) => Number(item.qty_available ?? item.quantity ?? 0) > 0
+        )
         .map((item: any, index: number) => {
           const orig = Number(item.original_price || item.orig_price || 0);
           const current = Number(item.price || item.discounted_price || 0);
@@ -448,14 +815,16 @@ export default function Homepage() {
             orig > current && orig > 0
               ? Math.round(((orig - current) / orig) * 100)
               : 0;
-          const expDateStr = item.expiry_date || "Oct 25, 2026";
-          const expTimeStr = item.expiry_time || "11:59 PM";
+          const expDateStr = item.expiry_date || fallbackExp.datePart;
+          const expTimeStr = item.expiry_time || fallbackExp.timePart;
 
           return {
             id: String(item.prod_id || item.id || `fallback-${index}`),
             name: item.prod_name || "Surplus Item",
-            description: item.prod_desc || "Fresh surplus food item available for rescue.",
-            merchantId: Number(item.merchant_id || item.merchant || 1),
+            description:
+              item.prod_desc ||
+              "Fresh surplus food item available for rescue.",
+            merchantId: Number(item.merchant_id || item.merchant || 0),
             establishment: item.merchant_name || "Partner Merchant",
             merchantAddress: item.merchant_address || "Cebu City, Philippines",
             merchantLat: Number(item.merchant_lat || 10.3157),
@@ -474,7 +843,7 @@ export default function Homepage() {
             preparationDate:
               item.safely_anchor_time ||
               item.preparation_date ||
-              "Oct 20, 2026, 08:00 AM",
+              fallbackPrep.combined,
             expiryDate: expDateStr,
             expiryTime: expTimeStr,
             storageCondition: item.storage_condition || "Ambient (25°C)",
@@ -483,7 +852,7 @@ export default function Homepage() {
               "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=700&q=80",
             category:
               typeof item.category === "string" ? item.category : "Surplus",
-            distance: item.distance || "0.8 km",
+            distance: item.distance || "Within Cebu City",
             expiryTimestamp: parseSafeDate(expDateStr, expTimeStr),
           };
         });
@@ -491,6 +860,7 @@ export default function Homepage() {
       formatted.sort(
         (a: FoodItem, b: FoodItem) => a.expiryTimestamp - b.expiryTimestamp
       );
+      cachedListingsMemory = formatted;
       setLiveListings(formatted);
 
       const estMap = new Map<string, Establishment>();
@@ -511,7 +881,9 @@ export default function Homepage() {
           });
         }
       });
-      setDynamicEstablishments(Array.from(estMap.values()));
+      const estArr = Array.from(estMap.values());
+      cachedEstablishmentsMemory = estArr;
+      setDynamicEstablishments(estArr);
     } catch (error) {
       console.log("Error fetching marketplace listings:", error);
     } finally {
@@ -543,6 +915,7 @@ export default function Homepage() {
       }
 
       await AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
+      DeviceEventEmitter.emit("consumer_cart_updated");
 
       setSelectedFood(null);
       setQuantity(1);
@@ -694,7 +1067,7 @@ export default function Homepage() {
           <View style={styles.distanceRow}>
             <Ionicons name="location-outline" size={12} color={Colors.icon} />
             <Text style={styles.distanceText} numberOfLines={1}>
-              {item.distance} away • Tap to view shop & map
+              {item.distance} away • Tap to view shop &amp; live route
             </Text>
           </View>
         </View>
@@ -732,10 +1105,7 @@ export default function Homepage() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
-      {/* STATUS-BAR-SAFE HEADER WITH FUSED NOTIFICATION BELL */}
+    <View style={styles.container}>
       <ConsumerHeader />
 
       <ScrollView
@@ -827,7 +1197,8 @@ export default function Homepage() {
               <View>
                 <Text style={styles.sectionTitle}>Partner Establishments</Text>
                 <Text style={styles.sectionSubtitle}>
-                  Tap a store to view its rating, active listings & map location.
+                  Tap a store to view its rating, active listings &amp; live GPS
+                  directions.
                 </Text>
               </View>
             </View>
@@ -869,7 +1240,10 @@ export default function Homepage() {
 
                 <ScrollView
                   showsVerticalScrollIndicator={false}
-                  contentContainerStyle={[styles.modalScroll, { paddingBottom: 150 }]}
+                  contentContainerStyle={[
+                    styles.modalScroll,
+                    { paddingBottom: 150 },
+                  ]}
                 >
                   <Image
                     source={{ uri: selectedFood.image }}
@@ -885,7 +1259,9 @@ export default function Homepage() {
                     }}
                   >
                     {selectedFood.discount > 0 ? (
-                      <View style={[styles.modalDiscountBadge, { marginTop: 0 }]}>
+                      <View
+                        style={[styles.modalDiscountBadge, { marginTop: 0 }]}
+                      >
                         <Text style={styles.discountText}>
                           {selectedFood.discount}% OFF
                         </Text>
@@ -931,7 +1307,9 @@ export default function Homepage() {
                       </Text>
                     </View>
                     {selectedFood.originalPrice >
-                      (modalLivePrice > 0 ? modalLivePrice : selectedFood.price) && (
+                      (modalLivePrice > 0
+                        ? modalLivePrice
+                        : selectedFood.price) && (
                       <Text style={styles.modalOriginalPrice}>
                         ₱{selectedFood.originalPrice.toFixed(2)}
                       </Text>
@@ -949,7 +1327,8 @@ export default function Homepage() {
                         textStyle={{ fontSize: 16, fontFamily: "PoppinsBold" }}
                       />
                       <Text style={styles.modalTimerLabel}>
-                        Exp: {selectedFood.expiryDate} • {selectedFood.expiryTime}
+                        Exp: {selectedFood.expiryDate} •{" "}
+                        {selectedFood.expiryTime}
                       </Text>
                       <Text style={styles.modalStorageText}>
                         Prepared: {selectedFood.preparationDate} • Storage:{" "}
@@ -1023,7 +1402,10 @@ export default function Homepage() {
                         {selectedFood.establishment} •{" "}
                         {"⭐".repeat(
                           selectedFood.merchantReviewCount > 0
-                            ? Math.max(1, Math.round(selectedFood.merchantAvgRating))
+                            ? Math.max(
+                                1,
+                                Math.round(selectedFood.merchantAvgRating)
+                              )
                             : 5
                         )}{" "}
                         ({selectedFood.merchantReviewCount})
@@ -1049,8 +1431,14 @@ export default function Homepage() {
                         })
                       }
                     >
-                      <Ionicons name="map-outline" size={14} color={Colors.primary} />
-                      <Text style={styles.showMapBtnText}>Show Shop in Maps</Text>
+                      <Ionicons
+                        name="navigate-outline"
+                        size={14}
+                        color={Colors.primary}
+                      />
+                      <Text style={styles.showMapBtnText}>
+                        Show Shop in Maps
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </ScrollView>
@@ -1058,14 +1446,21 @@ export default function Homepage() {
                 <View style={styles.stickyActionBar}>
                   <View style={styles.quantityRow}>
                     <Text style={styles.quantityLabel}>
-                      Quantity ({selectedFood.quantity} {selectedFood.unit} available)
+                      Quantity ({selectedFood.quantity} {selectedFood.unit}{" "}
+                      available)
                     </Text>
                     <View style={styles.quantitySelector}>
                       <TouchableOpacity
                         style={styles.quantityButton}
-                        onPress={() => setQuantity((prev) => Math.max(1, prev - 1))}
+                        onPress={() =>
+                          setQuantity((prev) => Math.max(1, prev - 1))
+                        }
                       >
-                        <Ionicons name="remove" size={16} color={Colors.primary} />
+                        <Ionicons
+                          name="remove"
+                          size={16}
+                          color={Colors.primary}
+                        />
                       </TouchableOpacity>
                       <Text style={styles.quantityText}>{quantity}</Text>
                       <TouchableOpacity
@@ -1085,7 +1480,11 @@ export default function Homepage() {
                     style={styles.addToCartButton}
                     onPress={() => addToCart(selectedFood, quantity)}
                   >
-                    <Ionicons name="cart-outline" size={18} color={Colors.white} />
+                    <Ionicons
+                      name="cart-outline"
+                      size={18}
+                      color={Colors.white}
+                    />
                     <Text style={styles.addToCartText}>Add to Rescue Cart</Text>
                   </TouchableOpacity>
                 </View>
@@ -1123,7 +1522,8 @@ export default function Homepage() {
                       }}
                       numberOfLines={1}
                     >
-                      {selectedMerchant.address} • {selectedMerchant.distance} away
+                      {selectedMerchant.address} • {selectedMerchant.distance}{" "}
+                      away
                     </Text>
                   </View>
                   <TouchableOpacity
@@ -1136,7 +1536,10 @@ export default function Homepage() {
 
                 <ScrollView
                   showsVerticalScrollIndicator={false}
-                  contentContainerStyle={[styles.modalScroll, { paddingBottom: 40 }]}
+                  contentContainerStyle={[
+                    styles.modalScroll,
+                    { paddingBottom: 40 },
+                  ]}
                 >
                   <View style={styles.merchantProfileHeaderCard}>
                     <Image
@@ -1150,7 +1553,10 @@ export default function Homepage() {
                       <Text style={styles.ratingInlineText}>
                         {"⭐".repeat(
                           selectedMerchant.reviewCount > 0
-                            ? Math.max(1, Math.round(selectedMerchant.avgRating))
+                            ? Math.max(
+                                1,
+                                Math.round(selectedMerchant.avgRating)
+                              )
                             : 5
                         )}{" "}
                         (
@@ -1174,7 +1580,8 @@ export default function Homepage() {
                           }}
                           numberOfLines={2}
                         >
-                          {selectedMerchant.address} ({selectedMerchant.distance})
+                          {selectedMerchant.address} (
+                          {selectedMerchant.distance})
                         </Text>
                       </View>
                     </View>
@@ -1189,7 +1596,9 @@ export default function Homepage() {
                         marginBottom: 8,
                       }}
                     >
-                      <Text style={styles.sectionTitle}>Store Map Location</Text>
+                      <Text style={styles.sectionTitle}>
+                        Store Map Location
+                      </Text>
                       <TouchableOpacity
                         style={styles.showMapBtn}
                         onPress={() => {
@@ -1204,11 +1613,13 @@ export default function Homepage() {
                         }}
                       >
                         <Ionicons
-                          name="expand-outline"
+                          name="navigate-outline"
                           size={13}
                           color={Colors.primary}
                         />
-                        <Text style={styles.showMapBtnText}>Full Map</Text>
+                        <Text style={styles.showMapBtnText}>
+                          Show Shop in Maps (Live Route)
+                        </Text>
                       </TouchableOpacity>
                     </View>
 
@@ -1226,13 +1637,19 @@ export default function Homepage() {
                       {Platform.OS === "web" ? (
                         React.createElement("iframe", {
                           srcDoc: getMerchantMapHtml(selectedMerchant),
-                          style: { width: "100%", height: "100%", border: "none" },
+                          style: {
+                            width: "100%",
+                            height: "100%",
+                            border: "none",
+                          },
                           title: "Merchant Map",
                         })
                       ) : (
                         <WebView
                           originWhitelist={["*"]}
-                          source={{ html: getMerchantMapHtml(selectedMerchant) }}
+                          source={{
+                            html: getMerchantMapHtml(selectedMerchant),
+                          }}
                           style={{ flex: 1 }}
                           scrollEnabled={false}
                           bounces={false}
@@ -1250,7 +1667,8 @@ export default function Homepage() {
                     <View style={styles.foodGrid}>
                       {liveListings
                         .filter(
-                          (item) => item.establishment === selectedMerchant.name
+                          (item) =>
+                            item.establishment === selectedMerchant.name
                         )
                         .map((item) => (
                           <FoodCard key={item.id} item={item} />
@@ -1264,7 +1682,6 @@ export default function Homepage() {
         </View>
       </Modal>
 
-      {/* SHOP LOCATION MAP MODAL */}
       <ShopLocationMapModal
         visible={!!mapModalTarget}
         shopName={mapModalTarget?.name || ""}
@@ -1282,9 +1699,8 @@ export default function Homepage() {
         onClose={() => setModalAlert((p) => ({ ...p, visible: false }))}
       />
 
-      {/* FLUSH BOTTOM NAVIGATION BAR */}
       <ConsumerBottomNav activeTab="Home" />
-    </SafeAreaView>
+    </View>
   );
 }
 

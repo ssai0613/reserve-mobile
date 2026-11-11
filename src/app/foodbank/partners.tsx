@@ -1,9 +1,9 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { router, Stack, useFocusEffect } from "expo-router";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
+  DeviceEventEmitter,
   FlatList,
   Image,
   KeyboardAvoidingView,
@@ -18,7 +18,6 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -29,6 +28,8 @@ import {
   FoodBankHeader,
   FoodBankMapModal,
   getFoodBankStorage,
+  switchFoodBankTab,
+  useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
 
 type ActiveListing = {
@@ -69,6 +70,8 @@ type PartnerMerchant = {
   active_listings: ActiveListing[];
 };
 
+let cachedFbPartnersMemory: PartnerMerchant[] = [];
+
 const initials = (name: string) =>
   (name || "M")
     .split(/\s+/)
@@ -78,8 +81,13 @@ const initials = (name: string) =>
     .join("");
 
 export default function FoodBankPartnersScreen() {
-  const [partners, setPartners] = useState<PartnerMerchant[]>([]);
-  const [loading, setLoading] = useState(true);
+  const isInsideShell = useIsInsideFoodBankShell();
+  if (!isInsideShell) return null;
+
+  const [partners, setPartners] = useState<PartnerMerchant[]>(
+    cachedFbPartnersMemory
+  );
+  const [loading, setLoading] = useState(cachedFbPartnersMemory.length === 0);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
 
@@ -131,7 +139,9 @@ export default function FoodBankPartnersScreen() {
           email
         )}`
       );
-      setPartners(res.data?.partners || []);
+      const nextPartners = res.data?.partners || [];
+      cachedFbPartnersMemory = nextPartners;
+      setPartners(nextPartners);
     } catch (e) {
       console.log("Partners load error:", e);
     } finally {
@@ -140,11 +150,28 @@ export default function FoodBankPartnersScreen() {
     }
   }, []);
 
-  useFocusEffect(
-    useCallback(() => {
+  useEffect(() => {
+    loadPartners();
+
+    const profSub = DeviceEventEmitter.addListener("fb_profile_updated", () => {
       loadPartners();
-    }, [loadPartners])
-  );
+    });
+    const reqSub = DeviceEventEmitter.addListener("fb_requests_updated", () => {
+      loadPartners();
+    });
+    const donSub = DeviceEventEmitter.addListener(
+      "fb_donations_updated",
+      () => {
+        loadPartners();
+      }
+    );
+
+    return () => {
+      profSub.remove();
+      reqSub.remove();
+      donSub.remove();
+    };
+  }, [loadPartners]);
 
   const visiblePartners = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -241,13 +268,15 @@ export default function FoodBankPartnersScreen() {
       setSelectedMerchant(null);
       setSelectedItemsMap({});
       await loadPartners();
+      DeviceEventEmitter.emit("fb_requests_updated");
+      DeviceEventEmitter.emit("fb_notifs_updated");
 
       showModal(
         "Donation Appeal Submitted!",
         res.data?.message ||
           `Your request has been sent to ${selectedMerchant.name}. You can track its status or withdraw it on the Requests page.`,
         "success",
-        () => router.replace("/foodbank/requests")
+        () => switchFoodBankTab("Requests")
       );
     } catch (err: any) {
       showModal(
@@ -263,9 +292,7 @@ export default function FoodBankPartnersScreen() {
   const selectedCount = Object.keys(selectedItemsMap).length;
 
   return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
-
+    <View style={styles.container}>
       <FoodBankHeader />
 
       <View style={styles.topSection}>
@@ -393,9 +420,7 @@ export default function FoodBankPartnersScreen() {
         />
       )}
 
-      {/* =========================================================
-          MODAL 1: MERCHANT STOREFRONT + ACTIVE LISTINGS + BULK SELECT
-      ========================================================= */}
+      {/* MODAL 1: MERCHANT STOREFRONT + ACTIVE LISTINGS + BULK SELECT */}
       <Modal
         visible={!!selectedMerchant && !requestFormVisible}
         transparent
@@ -677,9 +702,7 @@ export default function FoodBankPartnersScreen() {
         </View>
       </Modal>
 
-      {/* =========================================================
-          MODAL 2: BULK REQUEST FORM (REASON & ADDITIONAL INFO)
-      ========================================================= */}
+      {/* MODAL 2: BULK REQUEST FORM (REASON & ADDITIONAL INFO) */}
       <Modal
         visible={requestFormVisible}
         transparent
@@ -801,7 +824,7 @@ export default function FoodBankPartnersScreen() {
       />
 
       <FoodBankBottomNav activeTab="Partners" />
-    </SafeAreaView>
+    </View>
   );
 }
 
