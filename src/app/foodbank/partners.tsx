@@ -28,6 +28,7 @@ import {
   FoodBankHeader,
   FoodBankMapModal,
   getFoodBankStorage,
+  setFoodBankStorage,
   switchFoodBankTab,
   useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
@@ -71,6 +72,7 @@ type PartnerMerchant = {
 };
 
 let cachedFbPartnersMemory: PartnerMerchant[] = [];
+let cachedPartnersRadiusKm = 10;
 
 const initials = (name: string) =>
   (name || "M")
@@ -87,26 +89,23 @@ export default function FoodBankPartnersScreen() {
   const [partners, setPartners] = useState<PartnerMerchant[]>(
     cachedFbPartnersMemory
   );
+  const [radiusKm, setRadiusKm] = useState<number>(cachedPartnersRadiusKm);
   const [loading, setLoading] = useState(cachedFbPartnersMemory.length === 0);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
 
-  // Selected Merchant Storefront Modal
   const [selectedMerchant, setSelectedMerchant] =
     useState<PartnerMerchant | null>(null);
 
-  // Bulk Request Selection Map: { [commerce_id]: requestedQty }
   const [selectedItemsMap, setSelectedItemsMap] = useState<{
     [commerceId: number]: number;
   }>({});
 
-  // Request Form Modal (Reason + Additional Info)
   const [requestFormVisible, setRequestFormVisible] = useState(false);
   const [requestReason, setRequestReason] = useState("");
   const [additionalInfo, setAdditionalInfo] = useState("");
   const [submittingRequest, setSubmittingRequest] = useState(false);
 
-  // Map Modal Target
   const [mapTarget, setMapTarget] = useState<{
     name: string;
     address: string;
@@ -134,6 +133,11 @@ export default function FoodBankPartnersScreen() {
     try {
       const orgId = (await getFoodBankStorage("profile_id")) || "1";
       const email = (await getFoodBankStorage("user_email")) || "";
+      const storedRad = await getFoodBankStorage("gov_radius_km");
+      if (storedRad && Number(storedRad) > 0) {
+        setRadiusKm(Number(storedRad));
+      }
+
       const res = await api.get(
         `donations/partners/?org_id=${orgId}&email=${encodeURIComponent(
           email
@@ -142,6 +146,14 @@ export default function FoodBankPartnersScreen() {
       const nextPartners = res.data?.partners || [];
       cachedFbPartnersMemory = nextPartners;
       setPartners(nextPartners);
+
+      const apiRadius = Number(res.data?.radius_km || 0);
+      if (apiRadius > 0) {
+        cachedPartnersRadiusKm = apiRadius;
+        setRadiusKm(apiRadius);
+        await setFoodBankStorage("gov_radius_km", String(apiRadius));
+        DeviceEventEmitter.emit("fb_radius_updated", { radiusKm: apiRadius });
+      }
     } catch (e) {
       console.log("Partners load error:", e);
     } finally {
@@ -165,11 +177,21 @@ export default function FoodBankPartnersScreen() {
         loadPartners();
       }
     );
+    const radSub = DeviceEventEmitter.addListener(
+      "fb_radius_updated",
+      (payload?: { radiusKm?: number }) => {
+        if (payload?.radiusKm) {
+          cachedPartnersRadiusKm = payload.radiusKm;
+          setRadiusKm(payload.radiusKm);
+        }
+      }
+    );
 
     return () => {
       profSub.remove();
       reqSub.remove();
       donSub.remove();
+      radSub.remove();
     };
   }, [loadPartners]);
 
@@ -274,7 +296,7 @@ export default function FoodBankPartnersScreen() {
       showModal(
         "Donation Appeal Submitted!",
         res.data?.message ||
-          `Your request has been sent to ${selectedMerchant.name}. You can track its status or withdraw it on the Requests page.`,
+          `Your request has been sent to ${selectedMerchant.name}. You can track its status or open its QR Voucher on the Requests page.`,
         "success",
         () => switchFoodBankTab("Requests")
       );
@@ -296,9 +318,11 @@ export default function FoodBankPartnersScreen() {
       <FoodBankHeader />
 
       <View style={styles.topSection}>
-        <Text style={styles.pageTitle}>Merchants Within 10km</Text>
+        <Text style={styles.pageTitle}>Merchants Within {radiusKm}km</Text>
         <Text style={styles.pageSubtitle}>
-          Tap any merchant profile to inspect their location, contact info, and active listings for single or bulk donation requests
+          Tap any Bakeshop or Market Vendor within {radiusKm}km to inspect their
+          location, contact info, and active listings for single or bulk
+          requests
         </Text>
 
         <View style={styles.searchContainer}>
@@ -347,10 +371,11 @@ export default function FoodBankPartnersScreen() {
                 />
               </View>
               <Text style={styles.emptyTitle}>
-                No merchants found within 10km
+                No merchants found within {radiusKm}km
               </Text>
               <Text style={styles.emptyDescription}>
-                Try adjusting your search or check your pinned Cebu City location in Profile.
+                Try adjusting your search or check your pinned Cebu City
+                location in Profile.
               </Text>
             </View>
           }
@@ -452,10 +477,9 @@ export default function FoodBankPartnersScreen() {
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={{ padding: 16, paddingBottom: 30 }}
                 >
-                  {/* MERCHANT CONTACT & LOCATION CARD */}
                   <View style={styles.infoBox}>
                     <Text style={styles.boxHeading}>
-                      Store Location & Contact Information
+                      Store Location &amp; Contact Information
                     </Text>
                     <DetailRow
                       icon="location-outline"
@@ -558,13 +582,13 @@ export default function FoodBankPartnersScreen() {
                     </View>
                   </View>
 
-                  {/* ACTIVE LISTINGS FOR SINGLE OR BULK REQUEST */}
                   <Text style={styles.sectionLabel}>
                     Active Surplus Listings (
                     {selectedMerchant.active_listings.length})
                   </Text>
                   <Text style={styles.helperSubtext}>
-                    Select one or multiple active listings below and set the quantity you need for your bulk donation request:
+                    Select one or multiple active listings below and set the
+                    quantity you need for your bulk donation request:
                   </Text>
 
                   {selectedMerchant.active_listings.length > 0 ? (
@@ -668,7 +692,8 @@ export default function FoodBankPartnersScreen() {
                         No active listings right now
                       </Text>
                       <Text style={styles.emptyDescription}>
-                        This merchant does not have active surplus listings at the moment.
+                        This merchant does not have active surplus listings at
+                        the moment.
                       </Text>
                     </View>
                   )}
@@ -787,7 +812,10 @@ export default function FoodBankPartnersScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.proceedRequestBtn, { flex: 1.4, marginTop: 0 }]}
+                  style={[
+                    styles.proceedRequestBtn,
+                    { flex: 1.4, marginTop: 0 },
+                  ]}
                   onPress={handleSubmitBulkRequest}
                   disabled={submittingRequest}
                 >

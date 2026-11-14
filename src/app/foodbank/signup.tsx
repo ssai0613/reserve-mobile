@@ -22,6 +22,7 @@ import {
   RegistrationOtpModal,
   ReserveAlertModal,
   ReserveModalState,
+  TermsAndConditionsModal,
 } from "../components/CebuRegistrationHelpers";
 
 export default function FoodBankSignup() {
@@ -50,11 +51,11 @@ export default function FoodBankSignup() {
 
   const [accreditationFile, setAccreditationFile] = useState<any>(null);
   const [isAgreed, setIsAgreed] = useState(false);
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpCode, setOtpCode] = useState("");
-  const [devOtpHint, setDevOtpHint] = useState("");
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
 
   const [modalAlert, setModalAlert] = useState<ReserveModalState>({
@@ -78,15 +79,17 @@ export default function FoodBankSignup() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 1,
+        quality: 0.8,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
+        const rawName = asset.fileName || "accreditation_cert.jpg";
+        const safeJpgName = rawName.replace(/\.(heic|heif)$/i, ".jpg");
         setAccreditationFile({
           uri: asset.uri,
-          name: asset.fileName || "accreditation_cert.jpg",
-          mimeType: asset.mimeType || "image/jpeg",
+          name: safeJpgName,
+          mimeType: "image/jpeg",
           file: (asset as any).file,
         });
       }
@@ -139,22 +142,17 @@ export default function FoodBankSignup() {
       return;
     }
     if (!isAgreed) {
-      showModal(
-        "Terms of Service",
-        "You must agree to the Terms of Service for Food Bank Partners.",
-        "warning"
-      );
+      setTermsModalVisible(true);
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await api.post("accounts/send-otp/", {
+      await api.post("accounts/send-otp/", {
         email: email.trim(),
         phone: phone.trim(),
         channel: "email",
       });
-      setDevOtpHint(res.data?.dev_otp_preview || "");
       setOtpCode("");
       setOtpModalVisible(true);
     } catch (err: any) {
@@ -247,9 +245,10 @@ export default function FoodBankSignup() {
     } catch (error: any) {
       const errorData = error.response?.data;
       const errorMessage =
-        typeof errorData === "object" && errorData !== null
+        errorData?.error ||
+        (typeof errorData === "object" && errorData !== null
           ? Object.values(errorData).flat().join("\n")
-          : "Registration failed.";
+          : "Registration failed.");
       showModal("Registration Error", errorMessage, "error");
     } finally {
       setIsLoading(false);
@@ -388,7 +387,6 @@ export default function FoodBankSignup() {
             </View>
           </View>
 
-          {/* INLINE PHONE OTP VERIFIER */}
           <PhoneOtpVerifier
             label="Contact Person Number (SMS OTP Required) *"
             phone={phone}
@@ -461,7 +459,6 @@ export default function FoodBankSignup() {
             </View>
           </View>
 
-          {/* CONFIRM PASSWORD FIELD */}
           <View style={styles.fieldContainer}>
             <Text style={styles.label}>Confirm Password *</Text>
             <View
@@ -549,7 +546,7 @@ export default function FoodBankSignup() {
           <TouchableOpacity
             style={styles.termsContainer}
             activeOpacity={0.7}
-            onPress={() => setIsAgreed(!isAgreed)}
+            onPress={() => setTermsModalVisible(true)}
           >
             <View
               style={[
@@ -562,9 +559,9 @@ export default function FoodBankSignup() {
               )}
             </View>
             <Text style={styles.termsText}>
-              I have read and agree to the{" "}
-              <Text style={styles.termsLink}>Terms of Service</Text> for Food
-              Bank Partners.
+              I accept the{" "}
+              <Text style={styles.termsLink}>Terms and Conditions</Text> for
+              Food Bank Partners (Tap to read &amp; accept).
             </Text>
           </TouchableOpacity>
 
@@ -594,6 +591,16 @@ export default function FoodBankSignup() {
         </View>
       </ScrollView>
 
+      <TermsAndConditionsModal
+        visible={termsModalVisible}
+        role="FoodBank"
+        onAccept={() => {
+          setIsAgreed(true);
+          setTermsModalVisible(false);
+        }}
+        onClose={() => setTermsModalVisible(false)}
+      />
+
       <RegistrationOtpModal
         visible={otpModalVisible}
         email={email}
@@ -604,7 +611,6 @@ export default function FoodBankSignup() {
         onResend={handleRequestOtp}
         onClose={() => setOtpModalVisible(false)}
         isVerifying={isVerifyingOtp}
-        devOtpHint={devOtpHint}
       />
 
       <ReserveAlertModal
@@ -614,7 +620,11 @@ export default function FoodBankSignup() {
         type={modalAlert.type}
         onClose={() => {
           const cb = modalAlert.onConfirm;
-          setModalAlert((prev) => ({ ...prev, visible: false, onConfirm: null }));
+          setModalAlert((prev) => ({
+            ...prev,
+            visible: false,
+            onConfirm: null,
+          }));
           if (cb) cb();
         }}
       />

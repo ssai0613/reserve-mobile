@@ -24,13 +24,11 @@ export type MerchantTabName =
   | "Impact"
   | "Profile";
 
-// Indicates whether a Merchant tab is rendered inside the persistent _layout.tsx shell
 export const MerchantShellDirectRenderContext = createContext<boolean>(false);
 
 export const useIsInsideMerchantShell = () =>
   useContext(MerchantShellDirectRenderContext);
 
-// Instant 0ms tab switcher (no full page reload)
 export const switchMerchantTab = (tab: MerchantTabName) => {
   DeviceEventEmitter.emit("merchant_switch_tab", { tab });
 };
@@ -103,13 +101,15 @@ export function EstablishmentHeader({
 
   const loadHeaderData = async () => {
     try {
-      const storedId = (await getAppStorage("profile_id")) || "1";
+      const storedId = (await getAppStorage("profile_id")) || "0";
       const storedEmail = (await getAppStorage("user_email")) || "";
       const storedName = (await getAppStorage("entity_name")) || "";
       const storedType = (await getAppStorage("merch_type")) || "Establishment";
 
       if (storedName) setBusName(storedName);
       if (storedType) setMerchType(storedType);
+
+      if (storedId === "0" && !storedEmail) return;
 
       const [notifRes, annRes, rawReadIds, rawDismissedIds] = await Promise.all([
         api
@@ -144,10 +144,17 @@ export function EstablishmentHeader({
         } catch (e) {}
       }
 
-      const rawNotifs = Array.isArray(notifRes.data)
-        ? notifRes.data
-        : notifRes.data?.notifications || [];
-      const rawAnns = Array.isArray(annRes.data) ? annRes.data : [];
+      const rawNotifs = (
+        Array.isArray(notifRes.data)
+          ? notifRes.data
+          : notifRes.data?.notifications || []
+      ).sort(
+        (a: any, b: any) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0)
+      );
+
+      const rawAnns = (Array.isArray(annRes.data) ? annRes.data : []).sort(
+        (a: any, b: any) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0)
+      );
 
       const activeNotifs = rawNotifs.filter(
         (n: any) => !dismissedSet.has(String(n.id))
@@ -204,7 +211,6 @@ export function EstablishmentHeader({
         </View>
       </TouchableOpacity>
 
-      {/* FUSED SINGLE NOTIFICATION BELL + PROFILE BUTTON */}
       <View style={styles.headerActions}>
         <TouchableOpacity
           style={styles.headerIconBtn}

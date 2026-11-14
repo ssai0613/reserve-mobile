@@ -1040,11 +1040,14 @@ export default function EstablishmentListing() {
         cancelText: "",
         onConfirm: hideAlert,
       });
-    } catch (error) {
+    } catch (error: any) {
+      const backendMessage =
+        error?.response?.data?.error ||
+        "Cannot remove this listing while it has pending customer orders awaiting pickup.";
       setAlertConfig({
         visible: true,
-        title: "Delete Failed",
-        message: "Could not delete listing.",
+        title: "Cannot Remove Listing",
+        message: backendMessage,
         confirmText: "Okay",
         cancelText: "",
         onConfirm: hideAlert,

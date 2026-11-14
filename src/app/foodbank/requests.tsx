@@ -29,6 +29,8 @@ import {
   FoodBankHeader,
   FoodBankMapModal,
   getFoodBankStorage,
+  setFoodBankStorage,
+  switchFoodBankTab,
   useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
 
@@ -45,6 +47,9 @@ type RequestLine = {
 type ConsolidatedRequest = {
   donation_req_id: number;
   batch_code: string;
+  voucher_code?: string;
+  qr_payload?: string;
+  radius_km?: number;
   food_name: string;
   food_type: string;
   qty_needed: number;
@@ -66,17 +71,31 @@ type ConsolidatedRequest = {
   items_breakdown: RequestLine[];
 };
 
-const FALLBACK_TYPES = [
-  "Bread & Pastries",
-  "Fruits & Vegetables",
-  "Leafy Greens",
-  "Root Crops",
-  "Cooked Meals",
-  "Other",
-];
+type LiveMerchantListing = {
+  prod_id: number;
+  commerce_id: number;
+  name: string;
+  category: string;
+  qty_available: number;
+  unit_name: string;
+  expiry_date: string;
+  expiry_time: string;
+  expiry_display: string;
+  image: string;
+};
+
+type LivePartnerMerchant = {
+  merchant_id: number;
+  name: string;
+  type: string;
+  address: string;
+  distance: string;
+  active_listings_count: number;
+  active_listings: LiveMerchantListing[];
+};
 
 let cachedFbRequestsMemory: ConsolidatedRequest[] = [];
-let cachedFbFoodTypesMemory: string[] = FALLBACK_TYPES;
+let cachedRequestsRadiusKm = 10;
 
 export default function FoodBankRequestsScreen() {
   const isInsideShell = useIsInsideFoodBankShell();
@@ -85,7 +104,7 @@ export default function FoodBankRequestsScreen() {
   const [requests, setRequests] = useState<ConsolidatedRequest[]>(
     cachedFbRequestsMemory
   );
-  const [foodTypes, setFoodTypes] = useState<string[]>(cachedFbFoodTypesMemory);
+  const [radiusKm, setRadiusKm] = useState<number>(cachedRequestsRadiusKm);
   const [loading, setLoading] = useState(cachedFbRequestsMemory.length === 0);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -97,13 +116,23 @@ export default function FoodBankRequestsScreen() {
   const [selectedReq, setSelectedReq] = useState<ConsolidatedRequest | null>(
     null
   );
+  const [qrAppealTarget, setQrAppealTarget] =
+    useState<ConsolidatedRequest | null>(null);
 
-  const [newModalOpen, setNewModalOpen] = useState(false);
-  const [newType, setNewType] = useState(FALLBACK_TYPES[0]);
-  const [newQty, setNewQty] = useState("10");
-  const [newReason, setNewReason] = useState("");
-  const [newAdditional, setNewAdditional] = useState("");
-  const [submittingNew, setSubmittingNew] = useState(false);
+  const [pickerModalOpen, setPickerModalOpen] = useState(false);
+  const [loadingPartners, setLoadingPartners] = useState(false);
+  const [liveMerchants, setLiveMerchants] = useState<LivePartnerMerchant[]>([]);
+  const [sectorFilter, setSectorFilter] = useState<
+    "All" | "Bakeshop" | "Market Vendor"
+  >("All");
+  const [chosenMerchant, setChosenMerchant] =
+    useState<LivePartnerMerchant | null>(null);
+  const [selectedItemsMap, setSelectedItemsMap] = useState<{
+    [commerceId: number]: number;
+  }>({});
+  const [appealReason, setAppealReason] = useState("");
+  const [appealAdditional, setAppealAdditional] = useState("");
+  const [submittingAppeal, setSubmittingAppeal] = useState(false);
 
   const [mapTarget, setMapTarget] = useState<{
     name: string;
@@ -145,6 +174,12 @@ export default function FoodBankRequestsScreen() {
     try {
       const orgId = (await getFoodBankStorage("profile_id")) || "1";
       const email = (await getFoodBankStorage("user_email")) || "";
+      const storedRad = await getFoodBankStorage("gov_radius_km");
+      if (storedRad && Number(storedRad) > 0) {
+        cachedRequestsRadiusKm = Number(storedRad);
+        setRadiusKm(Number(storedRad));
+      }
+
       const [reqRes, typesRes] = await Promise.all([
         api.get(
           `donations/requests/?org_id=${orgId}&email=${encodeURIComponent(
@@ -153,12 +188,20 @@ export default function FoodBankRequestsScreen() {
         ),
         api.get("donations/food-types/").catch(() => null),
       ]);
-      const nextReqs = Array.isArray(reqRes.data) ? reqRes.data : [];
+      const nextReqs: ConsolidatedRequest[] = Array.isArray(reqRes.data)
+        ? reqRes.data
+        : [];
       cachedFbRequestsMemory = nextReqs;
       setRequests(nextReqs);
-      if (typesRes?.data?.food_types?.length) {
-        cachedFbFoodTypesMemory = typesRes.data.food_types;
-        setFoodTypes(typesRes.data.food_types);
+
+      const apiRadius = Number(
+        typesRes?.data?.radius_km ?? nextReqs[0]?.radius_km ?? 0
+      );
+      if (apiRadius > 0) {
+        cachedRequestsRadiusKm = apiRadius;
+        setRadiusKm(apiRadius);
+        await setFoodBankStorage("gov_radius_km", String(apiRadius));
+        DeviceEventEmitter.emit("fb_radius_updated", { radiusKm: apiRadius });
       }
     } catch (e) {
       console.log("Load requests error:", e);
@@ -174,8 +217,167 @@ export default function FoodBankRequestsScreen() {
     const reqSub = DeviceEventEmitter.addListener("fb_requests_updated", () => {
       loadRequests();
     });
-    return () => reqSub.remove();
+    const radSub = DeviceEventEmitter.addListener(
+      "fb_radius_updated",
+      (payload?: { radiusKm?: number }) => {
+        if (payload?.radiusKm) {
+          cachedRequestsRadiusKm = payload.radiusKm;
+          setRadiusKm(payload.radiusKm);
+        }
+      }
+    );
+    return () => {
+      reqSub.remove();
+      radSub.remove();
+    };
   }, [loadRequests]);
+
+  const openLiveSurplusPicker = async () => {
+    setPickerModalOpen(true);
+    setChosenMerchant(null);
+    setSelectedItemsMap({});
+    setAppealReason("");
+    setAppealAdditional("");
+    setLoadingPartners(true);
+    try {
+      const orgId = (await getFoodBankStorage("profile_id")) || "1";
+      const email = (await getFoodBankStorage("user_email")) || "";
+      const res = await api.get(
+        `donations/partners/?org_id=${orgId}&email=${encodeURIComponent(email)}`
+      );
+      const apiRadius = Number(res.data?.radius_km || 0);
+      if (apiRadius > 0) {
+        cachedRequestsRadiusKm = apiRadius;
+        setRadiusKm(apiRadius);
+        await setFoodBankStorage("gov_radius_km", String(apiRadius));
+      }
+      const allPartners: LivePartnerMerchant[] = res.data?.partners || [];
+      const withStock = allPartners.filter(
+        (p) =>
+          Array.isArray(p.active_listings) && p.active_listings.length > 0
+      );
+      setLiveMerchants(withStock);
+      if (withStock.length > 0) {
+        setChosenMerchant(withStock[0]);
+      }
+    } catch (e) {
+      console.log("Live surplus picker load error:", e);
+    } finally {
+      setLoadingPartners(false);
+    }
+  };
+
+  const filteredLiveMerchants = useMemo(() => {
+    return liveMerchants.filter((m) => {
+      if (sectorFilter === "All") return true;
+      const t = (m.type || "").toLowerCase();
+      if (sectorFilter === "Bakeshop") return t.includes("bake");
+      return t.includes("market");
+    });
+  }, [liveMerchants, sectorFilter]);
+
+  const handleSelectMerchantInPicker = (m: LivePartnerMerchant) => {
+    setChosenMerchant(m);
+    setSelectedItemsMap({});
+  };
+
+  const togglePickListing = (listing: LiveMerchantListing) => {
+    setSelectedItemsMap((prev) => {
+      const next = { ...prev };
+      if (next[listing.commerce_id] !== undefined) {
+        delete next[listing.commerce_id];
+      } else {
+        next[listing.commerce_id] = Math.min(5, listing.qty_available);
+      }
+      return next;
+    });
+  };
+
+  const adjustPickedQty = (listing: LiveMerchantListing, delta: number) => {
+    setSelectedItemsMap((prev) => {
+      const current = prev[listing.commerce_id] || 1;
+      const nextQty = Math.max(
+        1,
+        Math.min(listing.qty_available, current + delta)
+      );
+      return { ...prev, [listing.commerce_id]: nextQty };
+    });
+  };
+
+  const handleSubmitInventoryAppeal = async () => {
+    if (!chosenMerchant) {
+      showModal(
+        "Select a Store",
+        "Please select a Bakeshop or Market Vendor with active surplus listings.",
+        "warning"
+      );
+      return;
+    }
+
+    const pickedListings = chosenMerchant.active_listings.filter(
+      (l) => selectedItemsMap[l.commerce_id] !== undefined
+    );
+    if (pickedListings.length === 0) {
+      showModal(
+        "Select Active Items",
+        "Please check at least one active Bakeshop or Market Vendor listing to request.",
+        "warning"
+      );
+      return;
+    }
+
+    if (!appealReason.trim()) {
+      showModal(
+        "Reason Required",
+        "Please enter the beneficiary group or reason for this surplus request.",
+        "warning"
+      );
+      return;
+    }
+
+    setSubmittingAppeal(true);
+    try {
+      const orgId = (await getFoodBankStorage("profile_id")) || "1";
+      const email = (await getFoodBankStorage("user_email")) || "";
+
+      const itemsPayload = pickedListings.map((l) => ({
+        prod_id: l.prod_id,
+        commerce_id: l.commerce_id,
+        food_name: l.name,
+        qty_needed: selectedItemsMap[l.commerce_id],
+      }));
+
+      const res = await api.post("donations/requests/", {
+        org_id: orgId,
+        email,
+        merchant_id: chosenMerchant.merchant_id,
+        reason: appealReason.trim(),
+        additional_info: appealAdditional.trim(),
+        items: itemsPayload,
+      });
+
+      setPickerModalOpen(false);
+      setSelectedItemsMap({});
+      await loadRequests();
+      DeviceEventEmitter.emit("fb_requests_updated");
+      DeviceEventEmitter.emit("fb_notifs_updated");
+
+      showModal(
+        "Inventory Appeal Sent!",
+        res.data?.message ||
+          `Your request (${res.data?.batch_code}) has been sent to ${chosenMerchant.name}. Once approved, your QR Pickup Voucher will activate here.`,
+        "success"
+      );
+    } catch (e: any) {
+      showModal(
+        "Request Failed",
+        e.response?.data?.error || "Could not submit your donation appeal.",
+        "error"
+      );
+    } finally {
+      setSubmittingAppeal(false);
+    }
+  };
 
   const visibleRequests = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -209,7 +411,7 @@ export default function FoodBankRequestsScreen() {
       visible: true,
       title:
         action === "withdraw"
-          ? "Withdraw Donation Request?"
+          ? "Withdraw Donation Appeal?"
           : "Mark Handshake as Successful?",
       message:
         action === "withdraw"
@@ -248,77 +450,33 @@ export default function FoodBankRequestsScreen() {
     });
   };
 
-  const handlePostGeneralRequest = async () => {
-    const qtyNum = parseInt(newQty || "0", 10);
-    if (!newType || !qtyNum || qtyNum <= 0) {
-      showModal(
-        "Missing Details",
-        "Please select a food category and enter a valid quantity.",
-        "warning"
-      );
-      return;
-    }
-    if (!newReason.trim()) {
-      showModal(
-        "Reason Required",
-        "Please provide the reason or beneficiary purpose for this request.",
-        "warning"
-      );
-      return;
-    }
-
-    setSubmittingNew(true);
-    try {
-      const orgId = (await getFoodBankStorage("profile_id")) || "1";
-      const email = (await getFoodBankStorage("user_email")) || "";
-      await api.post("donations/requests/", {
-        org_id: orgId,
-        email,
-        food_type: newType,
-        qty_needed: qtyNum,
-        reason: newReason.trim(),
-        additional_info: newAdditional.trim(),
-      });
-      setNewModalOpen(false);
-      setNewReason("");
-      setNewAdditional("");
-      await loadRequests();
-      DeviceEventEmitter.emit("fb_requests_updated");
-      DeviceEventEmitter.emit("fb_notifs_updated");
-      showModal(
-        "General Request Posted!",
-        "Partner merchants can now see and fulfill your request.",
-        "success"
-      );
-    } catch (e: any) {
-      showModal("Post Failed", "Could not post request.", "error");
-    } finally {
-      setSubmittingNew(false);
-    }
-  };
+  const pickedCount = Object.keys(selectedItemsMap).length;
 
   return (
     <View style={styles.container}>
       <FoodBankHeader />
 
       <View style={styles.topSection}>
-        <Text style={styles.pageTitle}>My Donation Requests</Text>
+        <Text style={styles.pageTitle}>My Donation Appeals</Text>
         <Text style={styles.pageSubtitle}>
-          Track your appeals, view merchant contact details, or withdraw pending requests
+          Request live surplus inventory from verified Bakeshops &amp; Market
+          Vendors within {radiusKm}km and present your QR Voucher at pickup
         </Text>
 
         <TouchableOpacity
           style={styles.createButton}
           activeOpacity={0.85}
-          onPress={() => setNewModalOpen(true)}
+          onPress={openLiveSurplusPicker}
         >
           <View style={styles.createIcon}>
-            <Ionicons name="add" size={22} color={Colors.white} />
+            <Ionicons name="storefront-outline" size={20} color={Colors.white} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.createTitle}>Post General Food Request</Text>
+            <Text style={styles.createTitle}>
+              Request from {radiusKm}km Active Surplus
+            </Text>
             <Text style={styles.createSubtitle}>
-              Or tap "Merchants" tab below to bulk-request specific active listings
+              Select live Bakeshop &amp; Market Vendor items currently in stock
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color={Colors.white} />
@@ -328,7 +486,7 @@ export default function FoodBankRequestsScreen() {
           <Ionicons name="search-outline" size={18} color={Colors.icon} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search request code, food item, or merchant..."
+            placeholder="Search appeal code (BREQ), food item, or store..."
             placeholderTextColor={Colors.placeholder}
             value={search}
             onChangeText={setSearch}
@@ -361,7 +519,7 @@ export default function FoodBankRequestsScreen() {
                     active && styles.filterChipTextActive,
                   ]}
                 >
-                  {tab}
+                  {tab === "Ongoing" ? "Ongoing (QR)" : tab}
                 </Text>
               </TouchableOpacity>
             );
@@ -399,9 +557,10 @@ export default function FoodBankRequestsScreen() {
                   color={Colors.primary}
                 />
               </View>
-              <Text style={styles.emptyTitle}>No donation requests found</Text>
+              <Text style={styles.emptyTitle}>No donation appeals found</Text>
               <Text style={styles.emptyDescription}>
-                Visit the Merchants tab to select active listings or post a general food request above.
+                Tap &quot;Request from {radiusKm}km Active Surplus&quot; above
+                to select live Bakeshop or Market Vendor items.
               </Text>
             </View>
           }
@@ -445,7 +604,7 @@ export default function FoodBankRequestsScreen() {
 
                   {item.reason ? (
                     <Text style={styles.reasonSnippet} numberOfLines={1}>
-                      Reason: "{item.reason}"
+                      Reason: &quot;{item.reason}&quot;
                     </Text>
                   ) : null}
                 </View>
@@ -467,7 +626,7 @@ export default function FoodBankRequestsScreen() {
                       { color: Colors.primary, fontFamily: "PoppinsSemiBold" },
                     ]}
                   >
-                    View Summary & Contact
+                    View Summary &amp; Contact
                   </Text>
                 </TouchableOpacity>
 
@@ -482,7 +641,7 @@ export default function FoodBankRequestsScreen() {
                       color="#B3261E"
                     />
                     <Text style={[styles.uiActionBtnText, { color: "#B3261E" }]}>
-                      Withdraw Request
+                      Withdraw Appeal
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -490,10 +649,10 @@ export default function FoodBankRequestsScreen() {
                 {item.status === "Ongoing" && (
                   <TouchableOpacity
                     style={styles.uiActionBtn}
-                    onPress={() => handleWithdrawOrComplete(item, "complete")}
+                    onPress={() => setQrAppealTarget(item)}
                   >
                     <Ionicons
-                      name="checkmark-done-circle-outline"
+                      name="qr-code-outline"
                       size={16}
                       color={Colors.button}
                     />
@@ -503,7 +662,7 @@ export default function FoodBankRequestsScreen() {
                         { color: Colors.button, fontFamily: "PoppinsSemiBold" },
                       ]}
                     >
-                      Mark Successful
+                      Show QR Voucher ({item.batch_code})
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -527,7 +686,7 @@ export default function FoodBankRequestsScreen() {
                 <View style={styles.modalHeader}>
                   <View>
                     <Text style={styles.modalTitle}>
-                      Request Summary ({selectedReq.batch_code})
+                      Appeal Summary ({selectedReq.batch_code})
                     </Text>
                     <Text style={styles.modalSubtitle}>
                       Status: {selectedReq.status}
@@ -544,10 +703,9 @@ export default function FoodBankRequestsScreen() {
                 <ScrollView
                   contentContainerStyle={{ padding: 16, paddingBottom: 30 }}
                 >
-                  {/* MERCHANT CONTACT INFORMATION */}
                   <View style={styles.infoBox}>
                     <Text style={styles.boxHeading}>
-                      Merchant Store & Contact Information
+                      Merchant Store &amp; Contact Information
                     </Text>
                     <DetailRow
                       icon="storefront-outline"
@@ -653,10 +811,9 @@ export default function FoodBankRequestsScreen() {
                     </View>
                   </View>
 
-                  {/* REQUESTED ITEMS BREAKDOWN */}
                   <View style={styles.infoBox}>
                     <Text style={styles.boxHeading}>
-                      Requested Items & Expiry Details
+                      Requested Items &amp; Expiry Details
                     </Text>
                     {(Array.isArray(selectedReq.items_breakdown) &&
                     selectedReq.items_breakdown.length > 0
@@ -682,7 +839,7 @@ export default function FoodBankRequestsScreen() {
                             {line.unit_name})
                           </Text>
                           <Text style={styles.explicitExpiry}>
-                            Expiry Date & Time:{" "}
+                            Expiry Date &amp; Time:{" "}
                             {line.expiry_display || "Standard Window"}
                           </Text>
                         </View>
@@ -690,10 +847,9 @@ export default function FoodBankRequestsScreen() {
                     ))}
                   </View>
 
-                  {/* REASON & ADDITIONAL NOTES */}
                   <View style={styles.infoBox}>
                     <Text style={styles.boxHeading}>
-                      Reason & Additional Information
+                      Reason &amp; Additional Information
                     </Text>
                     <Text style={styles.noteLabel}>Reason:</Text>
                     <Text style={styles.noteBox}>
@@ -725,27 +881,63 @@ export default function FoodBankRequestsScreen() {
                         color="#B3261E"
                       />
                       <Text style={styles.withdrawBigBtnText}>
-                        Withdraw Request
+                        Withdraw Appeal
                       </Text>
                     </TouchableOpacity>
                   )}
 
                   {selectedReq.status === "Ongoing" && (
-                    <TouchableOpacity
-                      style={styles.completeBigBtn}
-                      onPress={() =>
-                        handleWithdrawOrComplete(selectedReq, "complete")
-                      }
-                    >
-                      <Ionicons
-                        name="checkmark-done-circle"
-                        size={18}
-                        color={Colors.white}
-                      />
-                      <Text style={styles.completeBigBtnText}>
-                        Handshake Done — Mark as Successful
-                      </Text>
-                    </TouchableOpacity>
+                    <View style={{ gap: 10 }}>
+                      <TouchableOpacity
+                        style={[
+                          styles.completeBigBtn,
+                          { backgroundColor: Colors.primary },
+                        ]}
+                        onPress={() => {
+                          const target = selectedReq;
+                          setSelectedReq(null);
+                          setQrAppealTarget(target);
+                        }}
+                      >
+                        <Ionicons
+                          name="qr-code-outline"
+                          size={18}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.completeBigBtnText}>
+                          Show QR Pickup Voucher ({selectedReq.batch_code})
+                        </Text>
+                      </TouchableOpacity>
+
+                      <View style={{ flexDirection: "row", gap: 10 }}>
+                        <TouchableOpacity
+                          style={[styles.withdrawBigBtn, { flex: 1 }]}
+                          onPress={() =>
+                            handleWithdrawOrComplete(selectedReq, "withdraw")
+                          }
+                        >
+                          <Text style={styles.withdrawBigBtnText}>
+                            Release Appeal
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={[styles.completeBigBtn, { flex: 1.4 }]}
+                          onPress={() =>
+                            handleWithdrawOrComplete(selectedReq, "complete")
+                          }
+                        >
+                          <Ionicons
+                            name="checkmark-done-circle"
+                            size={18}
+                            color={Colors.white}
+                          />
+                          <Text style={styles.completeBigBtnText}>
+                            Mark Received
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
                   )}
                 </ScrollView>
               </>
@@ -754,12 +946,110 @@ export default function FoodBankRequestsScreen() {
         </View>
       </Modal>
 
-      {/* MODAL 2: POST GENERAL REQUEST */}
+      {/* OFFICIAL QR APPEAL PICKUP VOUCHER MODAL */}
       <Modal
-        visible={newModalOpen}
+        visible={!!qrAppealTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setQrAppealTarget(null)}
+      >
+        <View style={styles.qrModalCenter}>
+          <View style={styles.qrVoucherCard}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                width: "100%",
+                marginBottom: 8,
+              }}
+            >
+              <Text style={styles.modalTitle}>Official Appeal QR Voucher</Text>
+              <TouchableOpacity onPress={() => setQrAppealTarget(null)}>
+                <Ionicons name="close" size={22} color={Colors.primary2} />
+              </TouchableOpacity>
+            </View>
+
+            {qrAppealTarget && (
+              <>
+                <Text
+                  style={{
+                    fontFamily: "PoppinsRegular",
+                    fontSize: 11,
+                    color: Colors.primary1,
+                    textAlign: "center",
+                    marginBottom: 12,
+                  }}
+                >
+                  Present this QR code to{" "}
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsBold",
+                      color: Colors.primary2,
+                    }}
+                  >
+                    {qrAppealTarget.merchant_name}
+                  </Text>{" "}
+                  so they can scan and verify your bulk appeal handoff:
+                </Text>
+
+                <View style={styles.qrImageWrapper}>
+                  <Image
+                    source={{
+                      uri: `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
+                        `RESERVE:${qrAppealTarget.batch_code}`
+                      )}`,
+                    }}
+                    style={{ width: 200, height: 200 }}
+                  />
+                </View>
+
+                <View style={styles.voucherCodePill}>
+                  <Text style={styles.voucherCodePillLabel}>
+                    APPEAL VOUCHER CODE
+                  </Text>
+                  <Text style={styles.voucherCodePillValue}>
+                    {qrAppealTarget.batch_code}
+                  </Text>
+                </View>
+
+                <Text
+                  style={{
+                    fontFamily: "PoppinsSemiBold",
+                    fontSize: 12.5,
+                    color: Colors.primary2,
+                    marginTop: 8,
+                    textAlign: "center",
+                  }}
+                  numberOfLines={2}
+                >
+                  {qrAppealTarget.food_type}
+                </Text>
+                <Text style={styles.explicitExpiry}>
+                  Pickup Window: {qrAppealTarget.expiry_display}
+                </Text>
+
+                <TouchableOpacity
+                  style={[
+                    styles.completeBigBtn,
+                    { width: "100%", marginTop: 14 },
+                  ]}
+                  onPress={() => setQrAppealTarget(null)}
+                >
+                  <Text style={styles.completeBigBtnText}>Done</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* MODAL 2 (OPTION 2): LIVE BAKESHOP & MARKET VENDOR SURPLUS PICKER */}
+      <Modal
+        visible={pickerModalOpen}
         transparent
         animationType="slide"
-        onRequestClose={() => setNewModalOpen(false)}
+        onRequestClose={() => setPickerModalOpen(false)}
       >
         <KeyboardAvoidingView
           style={styles.modalOverlay}
@@ -767,90 +1057,311 @@ export default function FoodBankRequestsScreen() {
         >
           <View style={styles.modalSheet}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Post General Food Request</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalTitle}>
+                  Request Live {radiusKm}km Surplus
+                </Text>
+                <Text style={styles.modalSubtitle}>
+                  Select active items from Bakeshops &amp; Market Vendors within{" "}
+                  {radiusKm}km
+                </Text>
+              </View>
               <TouchableOpacity
                 style={styles.closeBtn}
-                onPress={() => setNewModalOpen(false)}
+                onPress={() => setPickerModalOpen(false)}
               >
                 <Ionicons name="close" size={20} color={Colors.primary2} />
               </TouchableOpacity>
             </View>
 
             <ScrollView
-              contentContainerStyle={{ padding: 16, paddingBottom: 30 }}
+              contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
               keyboardShouldPersistTaps="handled"
             >
-              <Text style={styles.noteLabel}>Select Food Category *</Text>
-              <View style={styles.typeGrid}>
-                {foodTypes.map((t) => {
-                  const active = newType === t;
+              <View style={styles.sectorRow}>
+                {(["All", "Bakeshop", "Market Vendor"] as const).map((sec) => {
+                  const active = sectorFilter === sec;
                   return (
                     <TouchableOpacity
-                      key={t}
+                      key={sec}
                       style={[
-                        styles.typeChip,
-                        active && styles.typeChipActive,
+                        styles.sectorChip,
+                        active && styles.sectorChipActive,
                       ]}
-                      onPress={() => setNewType(t)}
+                      onPress={() => {
+                        setSectorFilter(sec);
+                        const matching = liveMerchants.filter((m) => {
+                          if (sec === "All") return true;
+                          const t = (m.type || "").toLowerCase();
+                          return sec === "Bakeshop"
+                            ? t.includes("bake")
+                            : t.includes("market");
+                        });
+                        setChosenMerchant(matching[0] || null);
+                        setSelectedItemsMap({});
+                      }}
                     >
                       <Text
                         style={[
-                          styles.typeChipText,
-                          active && styles.typeChipTextActive,
+                          styles.sectorChipText,
+                          active && styles.sectorChipTextActive,
                         ]}
                       >
-                        {t}
+                        {sec === "All" ? "All Sectors" : `${sec}s`}
                       </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
 
-              <Text style={styles.noteLabel}>Quantity Needed *</Text>
-              <TextInput
-                style={styles.singleInput}
-                keyboardType="numeric"
-                value={newQty}
-                onChangeText={setNewQty}
-                placeholder="e.g. 20"
-              />
+              {loadingPartners ? (
+                <View style={{ paddingVertical: 30, alignItems: "center" }}>
+                  <ActivityIndicator size="large" color={Colors.primary} />
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsMedium",
+                      fontSize: 11.5,
+                      color: Colors.primary1,
+                      marginTop: 8,
+                    }}
+                  >
+                    Loading active Bakeshop &amp; Market inventory within{" "}
+                    {radiusKm}km...
+                  </Text>
+                </View>
+              ) : filteredLiveMerchants.length === 0 ? (
+                <View style={styles.emptyCard}>
+                  <Text style={styles.emptyTitle}>
+                    No active surplus within {radiusKm}km in this sector
+                  </Text>
+                  <Text style={styles.emptyDescription}>
+                    Check the Donations tab for posted bundles or browse all
+                    partner stores in the Merchants tab.
+                  </Text>
+                  <TouchableOpacity
+                    style={[
+                      styles.actionPillBtn,
+                      {
+                        marginTop: 12,
+                        paddingHorizontal: 14,
+                        flex: 0,
+                      },
+                    ]}
+                    onPress={() => {
+                      setPickerModalOpen(false);
+                      switchFoodBankTab("Partners");
+                    }}
+                  >
+                    <Text style={styles.actionPillBtnText}>
+                      Open Merchants Tab →
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <>
+                  <Text style={styles.noteLabel}>
+                    1. Select Partner Store ({filteredLiveMerchants.length} with
+                    active stock):
+                  </Text>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={{ gap: 8, marginBottom: 14 }}
+                  >
+                    {filteredLiveMerchants.map((m) => {
+                      const isCurrent =
+                        chosenMerchant?.merchant_id === m.merchant_id;
+                      return (
+                        <TouchableOpacity
+                          key={m.merchant_id}
+                          style={[
+                            styles.merchantPillCard,
+                            isCurrent && styles.merchantPillCardActive,
+                          ]}
+                          onPress={() => handleSelectMerchantInPicker(m)}
+                        >
+                          <Text
+                            style={[
+                              styles.merchantPillName,
+                              isCurrent && { color: Colors.white },
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {m.name}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.merchantPillMeta,
+                              isCurrent && { color: "#D8E3DD" },
+                            ]}
+                          >
+                            {m.type} • {m.distance} ({m.active_listings.length}{" "}
+                            items)
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
 
-              <Text style={styles.noteLabel}>Reason for Request *</Text>
-              <TextInput
-                style={styles.textAreaInput}
-                multiline
-                value={newReason}
-                onChangeText={setNewReason}
-                placeholder="e.g. Weekly community pantry in Brgy. Guadalupe..."
-                placeholderTextColor={Colors.placeholder}
-              />
+                  {chosenMerchant && (
+                    <>
+                      <Text style={styles.noteLabel}>
+                        2. Select Active Surplus Items from{" "}
+                        {chosenMerchant.name}:
+                      </Text>
 
-              <Text style={styles.noteLabel}>
-                Additional Information (Optional)
-              </Text>
-              <TextInput
-                style={styles.textAreaInput}
-                multiline
-                value={newAdditional}
-                onChangeText={setNewAdditional}
-                placeholder="Preferred pickup hours or transport details..."
-                placeholderTextColor={Colors.placeholder}
-              />
+                      {chosenMerchant.active_listings.map((listing) => {
+                        const isSelected =
+                          selectedItemsMap[listing.commerce_id] !== undefined;
+                        const reqQty =
+                          selectedItemsMap[listing.commerce_id] || 1;
 
-              <TouchableOpacity
-                style={[styles.completeBigBtn, { marginTop: 12 }]}
-                onPress={handlePostGeneralRequest}
-                disabled={submittingNew}
-              >
-                <Ionicons
-                  name="megaphone-outline"
-                  size={18}
-                  color={Colors.white}
-                />
-                <Text style={styles.completeBigBtnText}>
-                  {submittingNew ? "POSTING..." : "Submit Food Request"}
-                </Text>
-              </TouchableOpacity>
+                        return (
+                          <View
+                            key={listing.commerce_id}
+                            style={[
+                              styles.pickerListingCard,
+                              isSelected && styles.pickerListingCardSelected,
+                            ]}
+                          >
+                            <TouchableOpacity
+                              style={styles.pickerListingTop}
+                              activeOpacity={0.85}
+                              onPress={() => togglePickListing(listing)}
+                            >
+                              <View
+                                style={[
+                                  styles.checkbox,
+                                  isSelected && styles.checkboxActive,
+                                ]}
+                              >
+                                {isSelected && (
+                                  <Ionicons
+                                    name="checkmark"
+                                    size={14}
+                                    color={Colors.white}
+                                  />
+                                )}
+                              </View>
+                              <Image
+                                source={{ uri: listing.image }}
+                                style={styles.pickerListingImg}
+                              />
+                              <View style={{ flex: 1 }}>
+                                <Text
+                                  style={styles.lineItemName}
+                                  numberOfLines={1}
+                                >
+                                  {listing.name}
+                                </Text>
+                                <Text
+                                  style={{
+                                    fontFamily: "PoppinsRegular",
+                                    fontSize: 11,
+                                    color: Colors.primary1,
+                                  }}
+                                >
+                                  {listing.category} • Available:{" "}
+                                  {listing.qty_available} {listing.unit_name}
+                                </Text>
+                                <Text style={styles.explicitExpiry}>
+                                  Exp: {listing.expiry_date} •{" "}
+                                  {listing.expiry_time}
+                                </Text>
+                              </View>
+                            </TouchableOpacity>
+
+                            {isSelected && (
+                              <View style={styles.qtyStepperBar}>
+                                <Text style={styles.qtyStepperLabel}>
+                                  Quantity Needed (Max {listing.qty_available}{" "}
+                                  {listing.unit_name}):
+                                </Text>
+                                <View style={styles.stepperBox}>
+                                  <TouchableOpacity
+                                    style={styles.stepperBtn}
+                                    onPress={() =>
+                                      adjustPickedQty(listing, -1)
+                                    }
+                                  >
+                                    <Ionicons
+                                      name="remove"
+                                      size={16}
+                                      color={Colors.primary}
+                                    />
+                                  </TouchableOpacity>
+                                  <Text style={styles.stepperVal}>
+                                    {reqQty}
+                                  </Text>
+                                  <TouchableOpacity
+                                    style={styles.stepperBtn}
+                                    onPress={() =>
+                                      adjustPickedQty(listing, 1)
+                                    }
+                                  >
+                                    <Ionicons
+                                      name="add"
+                                      size={16}
+                                      color={Colors.primary}
+                                    />
+                                  </TouchableOpacity>
+                                </View>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+
+                      <Text style={[styles.noteLabel, { marginTop: 8 }]}>
+                        3. Beneficiary Reason / Feeding Program *
+                      </Text>
+                      <TextInput
+                        style={styles.textAreaInput}
+                        multiline
+                        value={appealReason}
+                        onChangeText={setAppealReason}
+                        placeholder="e.g. Community feeding program for 45 families in Brgy. Tejero..."
+                        placeholderTextColor={Colors.placeholder}
+                      />
+
+                      <Text style={styles.noteLabel}>
+                        Pickup Logistics / Coordinator Notes (Optional)
+                      </Text>
+                      <TextInput
+                        style={styles.textAreaInput}
+                        multiline
+                        value={appealAdditional}
+                        onChangeText={setAppealAdditional}
+                        placeholder="e.g. Volunteer coordinator will arrive at 4:00 PM with insulated crates..."
+                        placeholderTextColor={Colors.placeholder}
+                      />
+
+                      <TouchableOpacity
+                        style={[
+                          styles.completeBigBtn,
+                          { marginTop: 8 },
+                          pickedCount === 0 && { opacity: 0.6 },
+                        ]}
+                        onPress={handleSubmitInventoryAppeal}
+                        disabled={submittingAppeal}
+                      >
+                        <Ionicons
+                          name="send-outline"
+                          size={17}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.completeBigBtnText}>
+                          {submittingAppeal
+                            ? "SUBMITTING APPEAL..."
+                            : `Submit Appeal (${pickedCount} Item${
+                                pickedCount === 1 ? "" : "s"
+                              })`}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </>
+              )}
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
@@ -975,7 +1486,7 @@ const styles = StyleSheet.create({
   uiCardActions: { flexDirection: "row", borderTopWidth: 1, borderTopColor: Colors.border, padding: 10, justifyContent: "space-between" },
   uiActionBtn: { flexDirection: "row", alignItems: "center", gap: 5 },
   uiActionBtnText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary1 },
-  emptyCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingVertical: 38, paddingHorizontal: 20, alignItems: "center" },
+  emptyCard: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, paddingVertical: 34, paddingHorizontal: 20, alignItems: "center" },
   emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center", marginBottom: 8 },
   emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
   emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, textAlign: "center", marginTop: 3 },
@@ -995,17 +1506,37 @@ const styles = StyleSheet.create({
   actionPillBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.white },
   lineItemRow: { paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.border },
   lineItemName: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
-  noteLabel: { fontFamily: "PoppinsSemiBold", fontSize: 11.5, color: Colors.primary2, marginBottom: 5 },
+  noteLabel: { fontFamily: "PoppinsSemiBold", fontSize: 11.5, color: Colors.primary2, marginBottom: 6 },
   noteBox: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary2, backgroundColor: Colors.input, padding: 10, borderRadius: 8 },
   withdrawBigBtn: { height: 48, borderRadius: 12, borderWidth: 1, borderColor: "#E5B8B4", backgroundColor: "#FDF3F2", flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  withdrawBigBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: "#B3261E" },
+  withdrawBigBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: "#B3261E" },
   completeBigBtn: { height: 48, borderRadius: 12, backgroundColor: Colors.button, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  completeBigBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.white },
-  typeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
-  typeChip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border },
-  typeChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  typeChipText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary2 },
-  typeChipTextActive: { color: Colors.white },
-  singleInput: { height: 44, backgroundColor: Colors.white, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, fontFamily: "PoppinsMedium", fontSize: 13, color: Colors.primary2, marginBottom: 12 },
-  textAreaInput: { minHeight: 80, backgroundColor: Colors.white, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, padding: 12, fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary2, textAlignVertical: "top", marginBottom: 12 },
+  completeBigBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.white },
+  sectorRow: { flexDirection: "row", gap: 8, marginBottom: 14 },
+  sectorChip: { flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, alignItems: "center" },
+  sectorChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  sectorChipText: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary2 },
+  sectorChipTextActive: { fontFamily: "PoppinsSemiBold", color: Colors.white },
+  merchantPillCard: { minWidth: 165, maxWidth: 220, backgroundColor: Colors.white, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 12, paddingVertical: 10 },
+  merchantPillCardActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  merchantPillName: { fontFamily: "PoppinsBold", fontSize: 12.5, color: Colors.primary2 },
+  merchantPillMeta: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: 2 },
+  pickerListingCard: { backgroundColor: Colors.white, borderRadius: 12, borderWidth: 1, borderColor: Colors.border, overflow: "hidden", marginBottom: 10 },
+  pickerListingCardSelected: { borderColor: Colors.primary, borderWidth: 1.5, backgroundColor: "#F7FBF8" },
+  pickerListingTop: { flexDirection: "row", alignItems: "center", padding: 10, gap: 10 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: Colors.primary, alignItems: "center", justifyContent: "center", backgroundColor: Colors.white },
+  checkboxActive: { backgroundColor: Colors.primary },
+  pickerListingImg: { width: 62, height: 62, borderRadius: 9, backgroundColor: Colors.input },
+  qtyStepperBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingHorizontal: 12, paddingVertical: 8, backgroundColor: "#EFF6F2", borderTopWidth: 1, borderTopColor: Colors.border },
+  qtyStepperLabel: { fontFamily: "PoppinsSemiBold", fontSize: 11, color: Colors.primary2 },
+  stepperBox: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.white, borderRadius: 8, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 6, height: 32, gap: 10 },
+  stepperBtn: { padding: 4 },
+  stepperVal: { fontFamily: "PoppinsBold", fontSize: 12.5, color: Colors.primary2, minWidth: 18, textAlign: "center" },
+  textAreaInput: { minHeight: 74, backgroundColor: Colors.white, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, padding: 12, fontFamily: "PoppinsRegular", fontSize: 12, color: Colors.primary2, textAlignVertical: "top", marginBottom: 12 },
+  qrModalCenter: { flex: 1, backgroundColor: "rgba(18,55,44,0.55)", justifyContent: "center", alignItems: "center", padding: 20 },
+  qrVoucherCard: { width: "100%", maxWidth: 360, backgroundColor: Colors.white, borderRadius: 18, padding: 20, alignItems: "center" },
+  qrImageWrapper: { padding: 14, backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.border, marginBottom: 12 },
+  voucherCodePill: { backgroundColor: "#E8EFEA", paddingHorizontal: 18, paddingVertical: 8, borderRadius: 10, alignItems: "center", borderWidth: 1, borderColor: Colors.border },
+  voucherCodePillLabel: { fontFamily: "PoppinsMedium", fontSize: 9, color: Colors.primary1, letterSpacing: 1 },
+  voucherCodePillValue: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary },
 });

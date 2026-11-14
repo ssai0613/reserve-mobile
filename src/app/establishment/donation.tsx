@@ -1,11 +1,15 @@
 import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { Camera, CameraView } from "expo-camera";
+import * as ImagePicker from "expo-image-picker";
+import React, { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   DeviceEventEmitter,
   Image,
   Linking,
   Modal,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -14,6 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { WebView } from "react-native-webview";
 import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
@@ -45,6 +50,7 @@ type AppealLineItem = {
 type FoodBankAppeal = {
   donation_req_id: number;
   batch_code: string;
+  voucher_code?: string;
   food_name: string;
   food_type: string;
   qty_needed: number;
@@ -80,6 +86,7 @@ type ActiveInventoryListing = {
 
 type PostedDonation = {
   donation_id: number;
+  voucher_code?: string;
   food_name: string;
   food_type: string;
   qty_donated: number;
@@ -95,6 +102,23 @@ type PostedDonation = {
   food_bank_phone?: string | null;
   food_bank_email?: string | null;
   food_bank_address?: string | null;
+};
+
+type HandoffPreview = {
+  record_type: "donation" | "appeal";
+  voucher_code: string;
+  donation_id?: number;
+  donation_req_id?: number;
+  batch_code?: string;
+  status: string;
+  food_bank_name: string;
+  food_bank_contact_person: string;
+  food_bank_phone: string;
+  food_bank_address: string;
+  expiry_display: string;
+  total_qty: string;
+  items_breakdown: { name: string; qty: number; unit: string }[];
+  image_path?: string | null;
 };
 
 let cachedDonationHubMemory = {
@@ -145,6 +169,22 @@ export default function DonationHub() {
     null
   );
   const [editPostedQty, setEditPostedQty] = useState("1");
+
+  // Live QR Scanner & Chain-of-Custody Verification State
+  const [qrModalVisible, setQrModalVisible] = useState(false);
+  const [verifyMode, setVerifyMode] = useState<
+    "choose" | "live_scan" | "manual"
+  >("choose");
+  const [manualVoucherCode, setManualVoucherCode] = useState("");
+  const [decodingQr, setDecodingQr] = useState(false);
+  const [qrBase64ToDecode, setQrBase64ToDecode] = useState<string | null>(null);
+  const [hasScannedLock, setHasScannedLock] = useState(false);
+  const [torchEnabled, setTorchEnabled] = useState(false);
+  const scanLockRef = useRef(false);
+
+  const [qrPreviewHandoff, setQrPreviewHandoff] =
+    useState<HandoffPreview | null>(null);
+  const [confirmingQrHandoff, setConfirmingQrHandoff] = useState(false);
 
   const [confirmState, setConfirmState] = useState<{
     visible: boolean;
@@ -257,6 +297,207 @@ export default function DonationHub() {
     setRefreshing(false);
   };
 
+  // =========================================================
+  // LIVE QR CAMERA SCANNER & VOUCHER VERIFICATION HANDLERS
+  // =========================================================
+  const openQrScannerModal = () => {
+    setVerifyMode("choose");
+    setManualVoucherCode("");
+    setDecodingQr(false);
+    setQrBase64ToDecode(null);
+    setHasScannedLock(false);
+    setTorchEnabled(false);
+    scanLockRef.current = false;
+    setQrModalVisible(true);
+  };
+
+  const closeQrScannerModal = () => {
+    setQrModalVisible(false);
+    setVerifyMode("choose");
+    setTorchEnabled(false);
+    setHasScannedLock(false);
+    scanLockRef.current = false;
+  };
+
+  const lookupDonationVoucher = async (rawCode: string) => {
+    const cleaned = String(rawCode || "")
+      .replace(/^RESERVE:/i, "")
+      .trim()
+      .toUpperCase();
+    if (!cleaned) {
+      scanLockRef.current = false;
+      setHasScannedLock(false);
+      showModal(
+        "Unrecognized QR Code",
+        "Could not read a valid Food Bank Donation Voucher (e.g. DON-12 or BREQ-12345).",
+        "warning"
+      );
+      return;
+    }
+
+    setDecodingQr(true);
+    try {
+      const activeId =
+        merchantId || (await getAppStorage("profile_id")) || "1";
+      const res = await api.post("donations/verify-qr/", {
+        action: "preview",
+        qr_code: cleaned,
+        merchant: Number(activeId),
+      });
+      if (res.data?.handoff) {
+        closeQrScannerModal();
+        setManualVoucherCode("");
+        setQrPreviewHandoff(res.data.handoff);
+      }
+    } catch (e: any) {
+      scanLockRef.current = false;
+      setHasScannedLock(false);
+      showModal(
+        "Voucher Not Found",
+        e.response?.data?.error ||
+          `No pending or ongoing donation at your store matches "${cleaned}".`,
+        "error"
+      );
+    } finally {
+      setDecodingQr(false);
+    }
+  };
+
+  const executeConfirmQrHandoff = async () => {
+    if (!qrPreviewHandoff) return;
+    setConfirmingQrHandoff(true);
+    try {
+      const activeId =
+        merchantId || (await getAppStorage("profile_id")) || "1";
+      const res = await api.post("donations/verify-qr/", {
+        action: "confirm",
+        qr_code: qrPreviewHandoff.voucher_code,
+        merchant: Number(activeId),
+      });
+      setQrPreviewHandoff(null);
+      await loadAllDonationData();
+      DeviceEventEmitter.emit("merchant_donations_updated");
+      DeviceEventEmitter.emit("merchant_listings_updated");
+      DeviceEventEmitter.emit("merchant_notifs_updated");
+      showModal(
+        "Chain-of-Custody Verified!",
+        res.data?.message ||
+          "Donation handoff marked as Successful and ESG impact metrics updated!",
+        "success"
+      );
+    } catch (e: any) {
+      showModal(
+        "Verification Failed",
+        e.response?.data?.error || "Could not complete QR donation handoff.",
+        "error"
+      );
+    } finally {
+      setConfirmingQrHandoff(false);
+    }
+  };
+
+  const handleStartLiveCameraScan = async () => {
+    try {
+      if (Platform.OS !== "web") {
+        const { status } = await Camera.requestCameraPermissionsAsync();
+        if (status !== "granted") {
+          showModal(
+            "Camera Permission Required",
+            "Please allow camera access to scan Food Bank QR Pickup Vouchers live.",
+            "warning"
+          );
+          return;
+        }
+      }
+      scanLockRef.current = false;
+      setHasScannedLock(false);
+      setTorchEnabled(false);
+      setVerifyMode("live_scan");
+    } catch (err) {
+      showModal(
+        "Camera Error",
+        "Could not start live camera scanner. You can upload a QR image or type the Voucher ID.",
+        "warning"
+      );
+    }
+  };
+
+  const handleLiveBarcodeScanned = ({
+    data,
+  }: {
+    type?: string;
+    data: string;
+  }) => {
+    if (scanLockRef.current || !data) return;
+    scanLockRef.current = true;
+    setHasScannedLock(true);
+    lookupDonationVoucher(data);
+  };
+
+  useEffect(() => {
+    if (Platform.OS === "web" && qrModalVisible && verifyMode === "live_scan") {
+      const handleWebMessage = (event: MessageEvent) => {
+        if (
+          event.data &&
+          event.data.type === "RESERVE_DONATION_QR_SCANNED" &&
+          event.data.data
+        ) {
+          handleLiveBarcodeScanned({ data: String(event.data.data) });
+        }
+      };
+      window.addEventListener("message", handleWebMessage);
+      return () => window.removeEventListener("message", handleWebMessage);
+    }
+  }, [qrModalVisible, verifyMode, merchantId]);
+
+  const handlePickQrFromGallery = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+        base64: true,
+      });
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        setDecodingQr(true);
+        if (Platform.OS === "web") {
+          const formData = new FormData();
+          const blobRes = await fetch(asset.uri);
+          const blob = await blobRes.blob();
+          formData.append("file", blob, "qr.png");
+          const qrRes = await fetch(
+            "https://api.qrserver.com/v1/read-qr-code/",
+            {
+              method: "POST",
+              body: formData,
+            }
+          );
+          const qrJson = await qrRes.json();
+          const decodedText = qrJson?.[0]?.symbol?.[0]?.data;
+          setDecodingQr(false);
+          if (decodedText) {
+            await lookupDonationVoucher(decodedText);
+          } else {
+            showModal(
+              "QR Code Not Detected",
+              "No valid QR code was detected in the selected image.",
+              "warning"
+            );
+          }
+          return;
+        }
+        if (asset.base64) {
+          setQrBase64ToDecode(asset.base64);
+        } else {
+          setDecodingQr(false);
+        }
+      }
+    } catch (err) {
+      setDecodingQr(false);
+      showModal("Gallery Error", "Could not read QR image.", "error");
+    }
+  };
+
   const toggleSelectInventoryItem = (item: ActiveInventoryListing) => {
     setSelectedInventoryMap((prev) => {
       const next = { ...prev };
@@ -302,7 +543,7 @@ export default function DonationHub() {
     setConfirmState({
       visible: true,
       title: "Post Surplus Donations?",
-      message: `Publish ${selectedIds.length} selected listing(s) to the Food Bank donation feed? Food Banks within 10km will be able to appeal and accept them.`,
+      message: `Publish ${selectedIds.length} selected listing(s) to the Food Bank donation feed? Food Banks within 10km will be able to claim partial or full quantities.`,
       confirmText: "Yes, Post Donations",
       onConfirm: async () => {
         setConfirmState((p) => ({ ...p, visible: false }));
@@ -375,7 +616,7 @@ export default function DonationHub() {
       complete: "Mark Handshake as Successful?",
     };
     const messages = {
-      approve: `Approve request ${selectedAppeal.batch_code} for ${selectedAppeal.food_bank_name} with the quantities set above? Status will move to Ongoing.`,
+      approve: `Approve request ${selectedAppeal.batch_code} for ${selectedAppeal.food_bank_name} with the quantities set above? Status will move to Ongoing and generate their QR Pickup Voucher.`,
       reject: `Decline request ${selectedAppeal.batch_code} from ${selectedAppeal.food_bank_name}?`,
       complete: `Confirm that the food items for ${selectedAppeal.batch_code} have been handed over to ${selectedAppeal.food_bank_name}? Status will reflect as Successful.`,
     };
@@ -414,7 +655,7 @@ export default function DonationHub() {
           DeviceEventEmitter.emit("merchant_listings_updated");
           showModal(
             "Request Updated",
-            res.data?.message || `Request status updated!`,
+            res.data?.message || "Request status updated!",
             "success"
           );
         } catch (err: any) {
@@ -509,11 +750,121 @@ export default function DonationHub() {
     return (
       !q ||
       (d.food_name || "").toLowerCase().includes(q) ||
-      (d.food_bank_name || "").toLowerCase().includes(q)
+      (d.food_bank_name || "").toLowerCase().includes(q) ||
+      `don-${d.donation_id}`.includes(q)
     );
   });
 
   const selectedCount = Object.keys(selectedInventoryMap).length;
+
+  const qrDecoderHtml = qrBase64ToDecode
+    ? `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    </head>
+    <body>
+      <canvas id="canvas"></canvas>
+      <script>
+        (function() {
+          var img = new Image();
+          img.onload = function() {
+            var canvas = document.getElementById('canvas');
+            var ctx = canvas.getContext('2d');
+            var maxDim = 900;
+            var w = img.width;
+            var h = img.height;
+            if (w > maxDim || h > maxDim) {
+              if (w > h) { h = Math.round((h * maxDim) / w); w = maxDim; }
+              else { w = Math.round((w * maxDim) / h); h = maxDim; }
+            }
+            canvas.width = w;
+            canvas.height = h;
+            ctx.drawImage(img, 0, 0, w, h);
+            var imageData = ctx.getImageData(0, 0, w, h);
+            var code = window.jsQR ? window.jsQR(imageData.data, imageData.width, imageData.height) : null;
+            var result = code && code.data ? { ok: true, data: code.data } : { ok: false };
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify(result));
+            }
+          };
+          img.onerror = function() {
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({ ok: false }));
+            }
+          };
+          img.src = "data:image/jpeg;base64,${qrBase64ToDecode}";
+        })();
+      </script>
+    </body>
+    </html>
+  `
+    : "";
+
+  const webLiveScannerHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+      <style>
+        html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #000; overflow: hidden; display: flex; align-items: center; justify-content: center; font-family: sans-serif; }
+        video { width: 100%; height: 100%; object-fit: cover; }
+        .reticle { position: absolute; width: 210px; height: 210px; border: 3px solid #3A826D; border-radius: 18px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.45); pointer-events: none; }
+        .status { position: absolute; bottom: 14px; background: rgba(18,55,44,0.88); color: #fff; padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+      </style>
+    </head>
+    <body>
+      <video id="video" playsinline muted></video>
+      <div class="reticle"></div>
+      <div id="status" class="status">Point camera at Food Bank's QR Voucher...</div>
+      <canvas id="canvas" style="display:none;"></canvas>
+      <script>
+        var video = document.getElementById('video');
+        var canvas = document.getElementById('canvas');
+        var ctx = canvas.getContext('2d');
+        var statusEl = document.getElementById('status');
+        var locked = false;
+
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+          .then(function(stream) {
+            video.srcObject = stream;
+            video.setAttribute('playsinline', true);
+            video.play();
+            requestAnimationFrame(tick);
+          })
+          .catch(function() {
+            statusEl.innerText = 'Camera permission denied or unavailable.';
+          });
+
+        function tick() {
+          if (locked) return;
+          if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.height = video.videoHeight;
+            canvas.width = video.videoWidth;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            if (window.jsQR) {
+              var code = window.jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: 'dontInvert'
+              });
+              if (code && code.data) {
+                locked = true;
+                statusEl.innerText = 'QR Detected: ' + code.data;
+                if (window.parent) {
+                  window.parent.postMessage({ type: 'RESERVE_DONATION_QR_SCANNED', data: code.data }, '*');
+                }
+                return;
+              }
+            }
+          }
+          requestAnimationFrame(tick);
+        }
+      </script>
+    </body>
+    </html>
+  `;
 
   return (
     <View style={styles.container}>
@@ -532,11 +883,33 @@ export default function DonationHub() {
         }
       >
         <View style={styles.pageHeader}>
-          <Text style={styles.pageTitle}>Donation & Request Hub</Text>
+          <Text style={styles.pageTitle}>Donation &amp; Request Hub</Text>
           <Text style={styles.pageSubtitle}>
-            Review Food Bank appeals with editable quantities or donate active surplus listings
+            Scan Food Bank QR vouchers live, fulfill appeals, or post surplus
+            donations
           </Text>
         </View>
+
+        {/* LIVE QR CAMERA SCANNER CTA FOR FOOD BANK HANDOFFS */}
+        <TouchableOpacity
+          style={styles.scanVoucherBanner}
+          activeOpacity={0.85}
+          onPress={openQrScannerModal}
+        >
+          <View style={styles.scanVoucherIcon}>
+            <Ionicons name="qr-code-outline" size={20} color={Colors.white} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.scanVoucherTitle}>
+              Scan Food Bank QR / Verify Handoff
+            </Text>
+            <Text style={styles.scanVoucherSub}>
+              Live camera QR detection for DON-XXX &amp; BREQ-XXXXX pickup
+              vouchers
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={19} color={Colors.white} />
+        </TouchableOpacity>
 
         <View style={styles.primaryTabsRow}>
           <TouchableOpacity
@@ -701,7 +1074,7 @@ export default function DonationHub() {
                             }}
                             numberOfLines={1}
                           >
-                            Reason: "{req.reason}"
+                            Reason: &quot;{req.reason}&quot;
                           </Text>
                         ) : null}
                       </View>
@@ -731,7 +1104,7 @@ export default function DonationHub() {
                                 itemCount > 1 ? "s" : ""
                               })`
                             : req.status === "Ongoing"
-                            ? "View Contact / Mark Successful"
+                            ? "Scan QR / Mark Successful"
                             : "View Request Summary"}
                         </Text>
                       </TouchableOpacity>
@@ -794,8 +1167,8 @@ export default function DonationHub() {
                   />
                   <Text style={styles.helperBannerText}>
                     Tap multiple active listings below and adjust the quantity
-                    you want to donate, then tap "Post Selected Donations" at
-                    the bottom.
+                    you want to donate, then tap &quot;Post Selected
+                    Donations&quot; at the bottom.
                   </Text>
                 </View>
 
@@ -967,7 +1340,8 @@ export default function DonationHub() {
                             <StatusPill status={don.status} />
                           </View>
                           <Text style={styles.uiCardSubtitle}>
-                            {don.qty_donated} {don.unit_name} • {don.food_type}
+                            DON-{don.donation_id} • {don.qty_donated}{" "}
+                            {don.unit_name} ({don.food_type})
                           </Text>
                           <Text style={styles.explicitExpiry}>
                             Exp: {don.expiry_display}
@@ -1008,7 +1382,7 @@ export default function DonationHub() {
                               },
                             ]}
                           >
-                            View Details & Manage
+                            View Details &amp; Manage
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -1020,8 +1394,8 @@ export default function DonationHub() {
                       No posted donations yet
                     </Text>
                     <Text style={styles.emptyDescription}>
-                      Select items under "Select Active Listings" to post
-                      donations.
+                      Select items under &quot;Select Active Listings&quot; to
+                      post donations.
                     </Text>
                   </View>
                 )}
@@ -1034,6 +1408,507 @@ export default function DonationHub() {
       </ScrollView>
 
       <EstablishmentBottomNav activeTab="Donation" />
+
+      {/* ========================================================= */}
+      {/* LIVE QR CAMERA SCANNER & MANUAL VOUCHER MODAL             */}
+      {/* ========================================================= */}
+      <Modal
+        visible={qrModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeQrScannerModal}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <View
+            style={[
+              styles.qrCard,
+              verifyMode === "live_scan" && { maxWidth: 400 },
+            ]}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+              }}
+            >
+              <Text style={styles.modalTitle}>Verify Food Bank Handoff</Text>
+              <TouchableOpacity onPress={closeQrScannerModal}>
+                <Ionicons name="close" size={22} color={Colors.primary2} />
+              </TouchableOpacity>
+            </View>
+
+            {Platform.OS !== "web" && qrBase64ToDecode && (
+              <View style={{ width: 1, height: 1, opacity: 0 }}>
+                <WebView
+                  originWhitelist={["*"]}
+                  source={{ html: qrDecoderHtml }}
+                  javaScriptEnabled
+                  onMessage={async (event) => {
+                    setQrBase64ToDecode(null);
+                    setDecodingQr(false);
+                    try {
+                      const parsed = JSON.parse(event.nativeEvent.data);
+                      if (parsed.ok && parsed.data) {
+                        await lookupDonationVoucher(parsed.data);
+                      } else {
+                        showModal(
+                          "QR Code Not Detected",
+                          "Could not detect a valid QR voucher in the selected image.",
+                          "warning"
+                        );
+                      }
+                    } catch (e) {
+                      showModal(
+                        "QR Scan Error",
+                        "Could not decode QR image.",
+                        "warning"
+                      );
+                    }
+                  }}
+                />
+              </View>
+            )}
+
+            {decodingQr ? (
+              <View
+                style={{ paddingVertical: 28, alignItems: "center", gap: 10 }}
+              >
+                <ActivityIndicator size="large" color={Colors.primary} />
+                <Text
+                  style={{
+                    fontFamily: "PoppinsSemiBold",
+                    fontSize: 13,
+                    color: Colors.primary2,
+                  }}
+                >
+                  Verifying Food Bank Voucher...
+                </Text>
+              </View>
+            ) : verifyMode === "live_scan" ? (
+              <View style={{ marginTop: 4 }}>
+                <Text style={[styles.modalSubtitle, { marginBottom: 10 }]}>
+                  Center the Food Bank coordinator&apos;s QR Voucher inside the
+                  frame—it will detect automatically:
+                </Text>
+
+                <View style={styles.liveScannerFrame}>
+                  {Platform.OS === "web" ? (
+                    React.createElement("iframe", {
+                      srcDoc: webLiveScannerHtml,
+                      allow: "camera *",
+                      style: {
+                        width: "100%",
+                        height: "100%",
+                        border: "none",
+                      },
+                      title: "Live Web Donation QR Scanner",
+                    })
+                  ) : (
+                    <>
+                      <CameraView
+                        style={StyleSheet.absoluteFill}
+                        facing="back"
+                        enableTorch={torchEnabled}
+                        barcodeScannerSettings={{
+                          barcodeTypes: ["qr"],
+                        }}
+                        onBarcodeScanned={
+                          hasScannedLock ? undefined : handleLiveBarcodeScanned
+                        }
+                      />
+
+                      <View
+                        style={styles.scannerOverlayMask}
+                        pointerEvents="none"
+                      >
+                        <View style={styles.scannerReticleBox}>
+                          <View
+                            style={[styles.reticleCorner, styles.cornerTL]}
+                          />
+                          <View
+                            style={[styles.reticleCorner, styles.cornerTR]}
+                          />
+                          <View
+                            style={[styles.reticleCorner, styles.cornerBL]}
+                          />
+                          <View
+                            style={[styles.reticleCorner, styles.cornerBR]}
+                          />
+                        </View>
+                        <View style={styles.scannerLiveBadge}>
+                          <Ionicons
+                            name="scan-outline"
+                            size={13}
+                            color={Colors.white}
+                          />
+                          <Text style={styles.scannerLiveBadgeText}>
+                            {hasScannedLock
+                              ? "QR Detected! Loading handoff..."
+                              : "Scanning live for NGO QR code..."}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <TouchableOpacity
+                        style={[
+                          styles.torchToggleBtn,
+                          torchEnabled && { backgroundColor: Colors.button },
+                        ]}
+                        activeOpacity={0.8}
+                        onPress={() => setTorchEnabled((prev) => !prev)}
+                      >
+                        <Ionicons
+                          name={torchEnabled ? "flash" : "flash-off-outline"}
+                          size={18}
+                          color={Colors.white}
+                        />
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+                  <TouchableOpacity
+                    style={styles.qrActionBtnOutline}
+                    onPress={() => {
+                      setTorchEnabled(false);
+                      setVerifyMode("choose");
+                    }}
+                  >
+                    <Text style={styles.qrActionBtnOutlineText}>← Back</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.qrActionBtnOutline,
+                      {
+                        backgroundColor: Colors.primary,
+                        borderColor: Colors.primary,
+                      },
+                    ]}
+                    onPress={() => {
+                      setTorchEnabled(false);
+                      setVerifyMode("manual");
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.qrActionBtnOutlineText,
+                        { color: Colors.white },
+                      ]}
+                    >
+                      Type Voucher ID
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : verifyMode === "choose" ? (
+              <View style={{ gap: 12, marginTop: 6 }}>
+                <Text style={styles.modalSubtitle}>
+                  Scan the Food Bank&apos;s official QR Pickup Voucher
+                  (DON-XXX or BREQ-XXXXX) or enter the Voucher ID:
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.qrOptionPrimary}
+                  activeOpacity={0.85}
+                  onPress={handleStartLiveCameraScan}
+                >
+                  <View style={styles.qrOptionPrimaryIcon}>
+                    <Ionicons
+                      name="scan-outline"
+                      size={22}
+                      color={Colors.white}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.qrOptionPrimaryTitle}>
+                      Live QR Camera Scanner
+                    </Text>
+                    <Text style={styles.qrOptionPrimarySub}>
+                      Point camera at Food Bank&apos;s QR code to auto-verify
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={Colors.white}
+                  />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.qrOptionSecondary}
+                  activeOpacity={0.85}
+                  onPress={handlePickQrFromGallery}
+                >
+                  <View style={styles.qrOptionSecondaryIcon}>
+                    <Ionicons
+                      name="image-outline"
+                      size={20}
+                      color={Colors.primary}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.qrOptionSecondaryTitle}>
+                      Upload QR Image from Gallery
+                    </Text>
+                    <Text style={styles.qrOptionSecondarySub}>
+                      Decode a screenshot of the NGO&apos;s QR voucher
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={Colors.primary2}
+                  />
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.qrOptionSecondary}
+                  activeOpacity={0.85}
+                  onPress={() => setVerifyMode("manual")}
+                >
+                  <View style={styles.qrOptionSecondaryIcon}>
+                    <Ionicons
+                      name="keypad-outline"
+                      size={20}
+                      color={Colors.primary}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.qrOptionSecondaryTitle}>
+                      Enter Voucher ID Manually
+                    </Text>
+                    <Text style={styles.qrOptionSecondarySub}>
+                      Type DON-12, BREQ-12345, or REQ-12345
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={Colors.primary2}
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={{ marginTop: 4 }}>
+                <Text style={[styles.modalSubtitle, { marginBottom: 12 }]}>
+                  Enter the Food Bank&apos;s Donation or Appeal Voucher ID (e.g.
+                  DON-12 or BREQ-48291):
+                </Text>
+                <TextInput
+                  value={manualVoucherCode}
+                  onChangeText={setManualVoucherCode}
+                  placeholder="e.g. DON-12 or BREQ-48291"
+                  autoCapitalize="characters"
+                  style={styles.qrInput}
+                />
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
+                  <TouchableOpacity
+                    style={styles.qrActionBtnOutline}
+                    onPress={() => setVerifyMode("choose")}
+                  >
+                    <Text style={styles.qrActionBtnOutlineText}>← Back</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.qrActionBtnOutline,
+                      {
+                        backgroundColor: Colors.button,
+                        borderColor: Colors.button,
+                      },
+                    ]}
+                    onPress={() => lookupDonationVoucher(manualVoucherCode)}
+                  >
+                    <Text
+                      style={[
+                        styles.qrActionBtnOutlineText,
+                        { color: Colors.white },
+                      ]}
+                    >
+                      Verify Voucher
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================= */}
+      {/* CHAIN-OF-CUSTODY HANDOFF CONFIRMATION MODAL               */}
+      {/* ========================================================= */}
+      <Modal
+        visible={!!qrPreviewHandoff}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setQrPreviewHandoff(null)}
+      >
+        <View style={styles.modalOverlayCenter}>
+          <View style={[styles.qrCard, { maxWidth: 420 }]}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 10,
+              }}
+            >
+              <View>
+                <Text style={styles.modalTitle}>
+                  Chain-of-Custody Verification
+                </Text>
+                <Text style={styles.modalSubtitle}>
+                  Confirm Food Bank identity &amp; food safety before release
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setQrPreviewHandoff(null)}>
+                <Ionicons name="close" size={22} color={Colors.primary2} />
+              </TouchableOpacity>
+            </View>
+
+            {qrPreviewHandoff && (
+              <View style={{ gap: 10 }}>
+                <View
+                  style={{
+                    backgroundColor: "#E9EFE9",
+                    padding: 12,
+                    borderRadius: 12,
+                    borderWidth: 1,
+                    borderColor: Colors.border,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsBold",
+                      fontSize: 14,
+                      color: Colors.primary2,
+                    }}
+                  >
+                    {qrPreviewHandoff.food_bank_name}
+                  </Text>
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsSemiBold",
+                      fontSize: 11.5,
+                      color: Colors.primary,
+                      marginTop: 2,
+                    }}
+                  >
+                    Voucher: {qrPreviewHandoff.voucher_code} • Total:{" "}
+                    {qrPreviewHandoff.total_qty}
+                  </Text>
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsRegular",
+                      fontSize: 11,
+                      color: Colors.primary1,
+                      marginTop: 2,
+                    }}
+                  >
+                    Coordinator: {qrPreviewHandoff.food_bank_contact_person} (
+                    {qrPreviewHandoff.food_bank_phone})
+                  </Text>
+                </View>
+
+                <View
+                  style={{
+                    backgroundColor: "#F8FAF9",
+                    borderRadius: 12,
+                    padding: 12,
+                    borderWidth: 1,
+                    borderColor: Colors.border,
+                    gap: 6,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsBold",
+                      fontSize: 11.5,
+                      color: Colors.primary2,
+                    }}
+                  >
+                    Items to Release:
+                  </Text>
+                  {qrPreviewHandoff.items_breakdown.map((it, idx) => (
+                    <View
+                      key={idx}
+                      style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontFamily: "PoppinsMedium",
+                          fontSize: 11.5,
+                          color: Colors.primary2,
+                        }}
+                      >
+                        • {it.name}
+                      </Text>
+                      <Text
+                        style={{
+                          fontFamily: "PoppinsBold",
+                          fontSize: 11.5,
+                          color: Colors.primary,
+                        }}
+                      >
+                        {it.qty} {it.unit}
+                      </Text>
+                    </View>
+                  ))}
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsMedium",
+                      fontSize: 10.5,
+                      color: "#A94A3A",
+                      marginTop: 4,
+                    }}
+                  >
+                    Safety Window: {qrPreviewHandoff.expiry_display}
+                  </Text>
+                </View>
+
+                <View style={{ flexDirection: "row", gap: 10, marginTop: 6 }}>
+                  <TouchableOpacity
+                    style={styles.qrActionBtnOutline}
+                    onPress={() => setQrPreviewHandoff(null)}
+                  >
+                    <Text style={styles.qrActionBtnOutlineText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.qrActionBtnOutline,
+                      {
+                        backgroundColor: Colors.button,
+                        borderColor: Colors.button,
+                        flex: 1.5,
+                      },
+                    ]}
+                    onPress={executeConfirmQrHandoff}
+                    disabled={confirmingQrHandoff}
+                  >
+                    <Text
+                      style={[
+                        styles.qrActionBtnOutlineText,
+                        { color: Colors.white },
+                      ]}
+                    >
+                      {confirmingQrHandoff
+                        ? "Confirming..."
+                        : "Confirm & Complete Handoff"}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       {/* MODAL 1: FOOD BANK APPEAL REVIEW + CONTACT + EDITABLE QTY */}
       <Modal
@@ -1070,7 +1945,7 @@ export default function DonationHub() {
                 >
                   <View style={styles.contactCard}>
                     <Text style={styles.sectionBlockTitle}>
-                      Food Bank Partner & Contact Information
+                      Food Bank Partner &amp; Contact Information
                     </Text>
                     <DetailRow
                       icon="business-outline"
@@ -1158,7 +2033,7 @@ export default function DonationHub() {
 
                   <View style={styles.contactCard}>
                     <Text style={styles.sectionBlockTitle}>
-                      Appeal Reason & Additional Notes
+                      Appeal Reason &amp; Additional Notes
                     </Text>
                     <Text style={styles.reasonLabel}>Reason for Request:</Text>
                     <Text style={styles.reasonValue}>
@@ -1179,7 +2054,7 @@ export default function DonationHub() {
 
                   <View style={styles.contactCard}>
                     <Text style={styles.sectionBlockTitle}>
-                      Requested Items & Editable Donation Quantity
+                      Requested Items &amp; Editable Donation Quantity
                     </Text>
                     <Text
                       style={{
@@ -1316,20 +2191,43 @@ export default function DonationHub() {
                   )}
 
                   {selectedAppeal.status === "Ongoing" && (
-                    <TouchableOpacity
-                      style={[styles.approveActionBtn, { flex: 0 }]}
-                      onPress={() => handleAppealDecision("complete")}
-                      disabled={processingAppeal}
-                    >
-                      <Ionicons
-                        name="checkmark-done-circle"
-                        size={18}
-                        color={Colors.white}
-                      />
-                      <Text style={styles.approveActionBtnText}>
-                        Handshake Done — Mark as Successful
-                      </Text>
-                    </TouchableOpacity>
+                    <View style={{ gap: 10 }}>
+                      <TouchableOpacity
+                        style={[
+                          styles.approveActionBtn,
+                          { flex: 0, backgroundColor: Colors.primary },
+                        ]}
+                        onPress={() => {
+                          setSelectedAppeal(null);
+                          openQrScannerModal();
+                        }}
+                      >
+                        <Ionicons
+                          name="qr-code-outline"
+                          size={18}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.approveActionBtnText}>
+                          Scan Food Bank&apos;s QR Voucher (
+                          {selectedAppeal.batch_code})
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.approveActionBtn, { flex: 0 }]}
+                        onPress={() => handleAppealDecision("complete")}
+                        disabled={processingAppeal}
+                      >
+                        <Ionicons
+                          name="checkmark-done-circle"
+                          size={18}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.approveActionBtnText}>
+                          Manual Override — Mark as Successful
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
                 </ScrollView>
               </>
@@ -1352,7 +2250,8 @@ export default function DonationHub() {
                 <View style={styles.modalHeader}>
                   <View>
                     <Text style={styles.modalTitle}>
-                      {selectedPosted.food_name}
+                      {selectedPosted.food_name} (DON-
+                      {selectedPosted.donation_id})
                     </Text>
                     <Text style={styles.modalSubtitle}>
                       Posted Donation • Status: {selectedPosted.status}
@@ -1380,6 +2279,11 @@ export default function DonationHub() {
 
                   <View style={styles.contactCard}>
                     <DetailRow
+                      icon="qr-code-outline"
+                      label="Donation Voucher ID"
+                      value={`DON-${selectedPosted.donation_id}`}
+                    />
+                    <DetailRow
                       icon="cube-outline"
                       label="Quantity Donated"
                       value={`${selectedPosted.qty_donated} ${selectedPosted.unit_name}`}
@@ -1393,7 +2297,7 @@ export default function DonationHub() {
                       <>
                         <DetailRow
                           icon="business-outline"
-                          label="Accepted by Food Bank"
+                          label="Claimed by Food Bank"
                           value={selectedPosted.food_bank_name}
                         />
                         <DetailRow
@@ -1416,7 +2320,7 @@ export default function DonationHub() {
                         }
                       >
                         <Text style={styles.rejectActionBtnText}>
-                          Cancel Donation
+                          Cancel Donation &amp; Restore Stock
                         </Text>
                       </TouchableOpacity>
                     </View>
@@ -1424,21 +2328,44 @@ export default function DonationHub() {
 
                   {(selectedPosted.status === "Ongoing" ||
                     selectedPosted.status === "Claimed") && (
-                    <TouchableOpacity
-                      style={[styles.approveActionBtn, { flex: 0 }]}
-                      onPress={() =>
-                        handlePostedDonationAction(selectedPosted, "complete")
-                      }
-                    >
-                      <Ionicons
-                        name="checkmark-done-circle"
-                        size={18}
-                        color={Colors.white}
-                      />
-                      <Text style={styles.approveActionBtnText}>
-                        Handshake Done — Mark as Successful
-                      </Text>
-                    </TouchableOpacity>
+                    <View style={{ gap: 10 }}>
+                      <TouchableOpacity
+                        style={[
+                          styles.approveActionBtn,
+                          { flex: 0, backgroundColor: Colors.primary },
+                        ]}
+                        onPress={() => {
+                          setSelectedPosted(null);
+                          openQrScannerModal();
+                        }}
+                      >
+                        <Ionicons
+                          name="qr-code-outline"
+                          size={18}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.approveActionBtnText}>
+                          Scan Food Bank QR Voucher (DON-
+                          {selectedPosted.donation_id})
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.approveActionBtn, { flex: 0 }]}
+                        onPress={() =>
+                          handlePostedDonationAction(selectedPosted, "complete")
+                        }
+                      >
+                        <Ionicons
+                          name="checkmark-done-circle"
+                          size={18}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.approveActionBtnText}>
+                          Manual Override — Mark as Successful
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
                   )}
                 </ScrollView>
               </>
@@ -1492,7 +2419,8 @@ function StatusPill({ status }: { status: string }) {
   } else if (
     status === "Rejected" ||
     status === "Withdrawn" ||
-    status === "Cancelled"
+    status === "Cancelled" ||
+    status === "Flagged"
   ) {
     bg = "#FBE4E1";
     fg = "#B3261E";
@@ -1535,6 +2463,10 @@ const styles = StyleSheet.create({
   pageHeader: { marginBottom: 14 },
   pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
   pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11.5, color: Colors.primary1, marginTop: 2 },
+  scanVoucherBanner: { minHeight: 64, backgroundColor: Colors.primary, borderRadius: 14, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", marginBottom: 14 },
+  scanVoucherIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center", marginRight: 12 },
+  scanVoucherTitle: { fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.white },
+  scanVoucherSub: { fontFamily: "PoppinsRegular", fontSize: 11, color: "rgba(255,255,255,0.82)", marginTop: 1 },
   primaryTabsRow: { flexDirection: "row", gap: 10, marginBottom: 14 },
   primaryTabBtn: { flex: 1, height: 46, borderRadius: 12, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
   primaryTabBtnActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
@@ -1581,6 +2513,30 @@ const styles = StyleSheet.create({
   emptyTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
   emptyDescription: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, textAlign: "center", marginTop: 3 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(18,55,44,0.5)", justifyContent: "flex-end" },
+  modalOverlayCenter: { flex: 1, backgroundColor: "rgba(18,55,44,0.55)", justifyContent: "center", alignItems: "center", padding: 20 },
+  qrCard: { width: "100%", maxWidth: 360, backgroundColor: Colors.white, borderRadius: 16, padding: 20 },
+  qrInput: { height: 45, borderWidth: 1, borderColor: Colors.border, borderRadius: 10, paddingHorizontal: 12, fontFamily: "PoppinsSemiBold", fontSize: 14, color: Colors.primary2, backgroundColor: Colors.input },
+  qrOptionPrimary: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.primary, padding: 15, borderRadius: 14, gap: 12 },
+  qrOptionPrimaryIcon: { width: 42, height: 42, borderRadius: 21, backgroundColor: Colors.button, alignItems: "center", justifyContent: "center" },
+  qrOptionPrimaryTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13.5, color: Colors.white },
+  qrOptionPrimarySub: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: "rgba(255,255,255,0.8)" },
+  qrOptionSecondary: { flexDirection: "row", alignItems: "center", backgroundColor: "#F3F6F4", borderWidth: 1, borderColor: Colors.border, padding: 13, borderRadius: 14, gap: 12 },
+  qrOptionSecondaryIcon: { width: 40, height: 40, borderRadius: 20, backgroundColor: "#E7EEE9", alignItems: "center", justifyContent: "center" },
+  qrOptionSecondaryTitle: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
+  qrOptionSecondarySub: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1 },
+  qrActionBtnOutline: { flex: 1, height: 46, borderRadius: 11, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.white, alignItems: "center", justifyContent: "center" },
+  qrActionBtnOutlineText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.primary2 },
+  liveScannerFrame: { width: "100%", height: 285, borderRadius: 16, overflow: "hidden", backgroundColor: "#000", position: "relative", borderWidth: 1, borderColor: Colors.border },
+  scannerOverlayMask: { ...StyleSheet.absoluteFill, alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.22)" },
+  scannerReticleBox: { width: 195, height: 195, borderRadius: 18, borderWidth: 1.5, borderColor: "rgba(255,255,255,0.45)", position: "relative" },
+  reticleCorner: { position: "absolute", width: 26, height: 26, borderColor: "#4ADE80", borderWidth: 4 },
+  cornerTL: { top: -2, left: -2, borderRightWidth: 0, borderBottomWidth: 0, borderTopLeftRadius: 16 },
+  cornerTR: { top: -2, right: -2, borderLeftWidth: 0, borderBottomWidth: 0, borderTopRightRadius: 16 },
+  cornerBL: { bottom: -2, left: -2, borderRightWidth: 0, borderTopWidth: 0, borderBottomLeftRadius: 16 },
+  cornerBR: { bottom: -2, right: -2, borderLeftWidth: 0, borderTopWidth: 0, borderBottomRightRadius: 16 },
+  scannerLiveBadge: { position: "absolute", bottom: 14, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "rgba(18,55,44,0.9)", paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20 },
+  scannerLiveBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.white },
+  torchToggleBtn: { position: "absolute", top: 12, right: 12, width: 38, height: 38, borderRadius: 19, backgroundColor: "rgba(0,0,0,0.55)", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "rgba(255,255,255,0.3)" },
   modalSheet: { width: "100%", maxHeight: "92%", backgroundColor: Colors.background, borderTopLeftRadius: 22, borderTopRightRadius: 22, overflow: "hidden" },
   modalHeader: { paddingHorizontal: 18, paddingVertical: 14, backgroundColor: Colors.white, borderBottomWidth: 1, borderBottomColor: Colors.border, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   modalTitle: { fontFamily: "PoppinsBold", fontSize: 17, color: Colors.primary2 },

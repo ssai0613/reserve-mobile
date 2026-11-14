@@ -2,11 +2,10 @@ import { Colors } from "@/constants/color";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, Stack } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   DeviceEventEmitter,
-  Modal,
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -20,53 +19,76 @@ import {
   getAppStorage,
   MERCHANT_DISMISSED_NOTIFS_KEY,
   MERCHANT_READ_NOTIFS_KEY,
+  MerchantTabName,
   switchMerchantTab,
 } from "../components/EstablishmentNav";
 
-type NotificationItem = {
+type MerchantNotificationItem = {
   id: string;
+  type: string;
   title: string;
   description: string;
   time: string;
   sort_ts?: number;
   target_route?: string;
-  audience?: string;
-  type:
-    | "order"
-    | "review"
-    | "donation"
-    | "system"
-    | "expiry_1hr"
-    | "suggested_expiry"
-    | "announcement";
+  read?: boolean;
 };
 
-export default function EstablishmentNotifications() {
-  const [merchId, setMerchId] = useState("1");
-  const [activeTab, setActiveTab] = useState<"activity" | "announcements">(
-    "activity"
+type MerchantAnnouncementItem = {
+  id: string;
+  audience: string;
+  title: string;
+  body: string;
+  date: string;
+  sort_ts?: number;
+  read?: boolean;
+};
+
+export default function EstablishmentNotificationsScreen() {
+  const [merchantId, setMerchantId] = useState("0");
+  const [activeTab, setActiveTab] = useState<"alerts" | "announcements">(
+    "alerts"
   );
-  const [activityItems, setActivityItems] = useState<NotificationItem[]>([]);
-  const [announcementItems, setAnnouncementItems] = useState<
-    NotificationItem[]
+  const [notifications, setNotifications] = useState<
+    MerchantNotificationItem[]
+  >([]);
+  const [announcements, setAnnouncements] = useState<
+    MerchantAnnouncementItem[]
   >([]);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [selectedBroadcast, setSelectedBroadcast] =
-    useState<NotificationItem | null>(null);
 
-  useEffect(() => {
-    loadAllFeeds();
-  }, []);
-
-  const loadAllFeeds = async () => {
+  const parseFallbackTimestamp = (timeStr?: string): number => {
+    if (!timeStr) return 0;
     try {
-      const storedId = (await getAppStorage("profile_id")) || "1";
-      const storedEmail = (await getAppStorage("user_email")) || "";
-      setMerchId(storedId);
+      const cleaned = String(timeStr)
+        .replace(/•/g, "")
+        .replace(/\|/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      const parsed = Date.parse(cleaned);
+      return isNaN(parsed) ? 0 : parsed / 1000;
+    } catch (e) {
+      return 0;
+    }
+  };
 
-      const [notifRes, annRes, savedReads, savedDismissed] = await Promise.all([
+  const loadNotificationsFeed = useCallback(async (showSpinner = false) => {
+    if (showSpinner) setLoading(true);
+    try {
+      const storedId = (await getAppStorage("profile_id")) || "0";
+      const storedEmail = (await getAppStorage("user_email")) || "";
+
+      if (storedId === "0" && !storedEmail) {
+        router.replace("/consumer");
+        return;
+      }
+
+      setMerchantId(storedId);
+
+      const [notifRes, annRes, rawRead, rawDismissed] = await Promise.all([
         api
           .get(
             `listings/notifications/?merchant=${storedId}&email=${encodeURIComponent(
@@ -85,311 +107,293 @@ export default function EstablishmentNotifications() {
         AsyncStorage.getItem(`${MERCHANT_DISMISSED_NOTIFS_KEY}_${storedId}`),
       ]);
 
-      let rSet = new Set<string>();
-      if (savedReads) {
+      let readSet = new Set<string>();
+      if (rawRead) {
         try {
-          rSet = new Set(JSON.parse(savedReads));
+          readSet = new Set(JSON.parse(rawRead).map(String));
         } catch (e) {}
       }
-      setReadIds(rSet);
 
-      let dSet = new Set<string>();
-      if (savedDismissed) {
+      let dismissedSet = new Set<string>();
+      if (rawDismissed) {
         try {
-          dSet = new Set(JSON.parse(savedDismissed));
+          dismissedSet = new Set(JSON.parse(rawDismissed).map(String));
         } catch (e) {}
       }
-      setDismissedIds(dSet);
 
-      const rawNotifs: any[] = Array.isArray(notifRes.data)
-        ? notifRes.data
-        : notifRes.data?.notifications || [];
+      setReadIds(readSet);
+      setDismissedIds(dismissedSet);
 
-      const formattedActivity: NotificationItem[] = rawNotifs
-        .filter((item) => !dSet.has(String(item.id)))
-        .map((item) => ({
-          id: String(item.id),
-          title: item.title || "Notification",
-          description: item.description || item.message || "",
-          time: item.time || "Recent",
-          sort_ts: Number(item.sort_ts || 0),
-          target_route: item.target_route,
-          type: item.type || "system",
+      const rawNotifs: MerchantNotificationItem[] = (
+        Array.isArray(notifRes.data)
+          ? notifRes.data
+          : notifRes.data?.notifications || []
+      )
+        .filter((n: any) => !dismissedSet.has(String(n.id)))
+        .map((n: any) => ({
+          id: String(n.id),
+          type: String(n.type || "system"),
+          title: String(n.title || "Store Update"),
+          description: String(n.description || n.message || ""),
+          time: String(n.time || n.timestamp || "Recent"),
+          sort_ts:
+            Number(n.sort_ts || 0) ||
+            parseFallbackTimestamp(n.time || n.timestamp),
+          target_route: n.target_route || "/establishment/dashboard",
+          read: readSet.has(String(n.id)),
         }))
-        .sort((a, b) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0));
+        .sort(
+          (a: MerchantNotificationItem, b: MerchantNotificationItem) =>
+            Number(b.sort_ts || 0) - Number(a.sort_ts || 0)
+        );
 
-      const rawAnns: any[] = Array.isArray(annRes.data) ? annRes.data : [];
-      const formattedAnnouncements: NotificationItem[] = rawAnns
-        .map((b) => ({
-          id: String(b.id),
-          title: b.title || "System Announcement",
-          description: b.body || "",
-          audience: b.audience || "Merchants",
-          time: b.date || "Official Broadcast",
-          sort_ts: Number(b.sort_ts || 0),
-          type: "announcement" as const,
+      const rawAnns: MerchantAnnouncementItem[] = (
+        Array.isArray(annRes.data) ? annRes.data : []
+      )
+        .map((a: any) => ({
+          id: String(a.id),
+          audience: String(a.audience || "All Users (System-wide)"),
+          title: String(a.title || "System Announcement"),
+          body: String(a.body || a.message || ""),
+          date: String(a.date || a.timestamp || "Official Broadcast"),
+          sort_ts:
+            Number(a.sort_ts || 0) ||
+            parseFallbackTimestamp(a.date || a.timestamp),
+          read: readSet.has(String(a.id)),
         }))
-        .sort((a, b) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0));
+        .sort(
+          (a: MerchantAnnouncementItem, b: MerchantAnnouncementItem) =>
+            Number(b.sort_ts || 0) - Number(a.sort_ts || 0)
+        );
 
-      setActivityItems(formattedActivity);
-      setAnnouncementItems(formattedAnnouncements);
-    } catch (error) {
-      console.warn("Could not fetch merchant notifications:", error);
+      setNotifications(rawNotifs);
+      setAnnouncements(rawAnns);
+    } catch (err) {
+      console.log("Merchant notifications fetch error:", err);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadNotificationsFeed(true);
+
+    const sub = DeviceEventEmitter.addListener("merchant_notifs_updated", () => {
+      loadNotificationsFeed(false);
+    });
+    return () => sub.remove();
+  }, [loadNotificationsFeed]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadAllFeeds();
+    await loadNotificationsFeed(false);
     setRefreshing(false);
   };
 
-  const persistReadSet = async (nextSet: Set<string>) => {
-    setReadIds(new Set(nextSet));
-    await AsyncStorage.setItem(
-      `${MERCHANT_READ_NOTIFS_KEY}_${merchId}`,
-      JSON.stringify(Array.from(nextSet))
+  const markSingleRead = async (itemId: string) => {
+    const nextRead = new Set(readIds);
+    nextRead.add(String(itemId));
+    setReadIds(nextRead);
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === itemId ? { ...n, read: true } : n))
     );
-    DeviceEventEmitter.emit("merchant_notifs_updated");
+    setAnnouncements((prev) =>
+      prev.map((a) => (a.id === itemId ? { ...a, read: true } : a))
+    );
+    try {
+      await AsyncStorage.setItem(
+        `${MERCHANT_READ_NOTIFS_KEY}_${merchantId}`,
+        JSON.stringify(Array.from(nextRead))
+      );
+      DeviceEventEmitter.emit("merchant_notifs_updated");
+    } catch (e) {}
   };
 
-  const markSingleRead = async (id: string) => {
-    const next = new Set(readIds);
-    next.add(String(id));
-    await persistReadSet(next);
+  const markAllRead = async () => {
+    const nextRead = new Set(readIds);
+    notifications.forEach((n) => nextRead.add(String(n.id)));
+    announcements.forEach((a) => nextRead.add(String(a.id)));
+    setReadIds(nextRead);
+    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    setAnnouncements((prev) => prev.map((a) => ({ ...a, read: true })));
+    try {
+      await AsyncStorage.setItem(
+        `${MERCHANT_READ_NOTIFS_KEY}_${merchantId}`,
+        JSON.stringify(Array.from(nextRead))
+      );
+      DeviceEventEmitter.emit("merchant_notifs_updated");
+    } catch (e) {}
   };
 
-  const handleMarkAllAsRead = async () => {
-    const next = new Set(readIds);
-    activityItems.forEach((n) => next.add(String(n.id)));
-    announcementItems.forEach((a) => next.add(String(a.id)));
-    await persistReadSet(next);
-  };
-
-  const deleteNotification = async (id: string) => {
-    setActivityItems((prev) => prev.filter((item) => item.id !== id));
+  const dismissNotification = async (itemId: string) => {
     const nextDismissed = new Set(dismissedIds);
-    nextDismissed.add(String(id));
+    nextDismissed.add(String(itemId));
     setDismissedIds(nextDismissed);
-    await AsyncStorage.setItem(
-      `${MERCHANT_DISMISSED_NOTIFS_KEY}_${merchId}`,
-      JSON.stringify(Array.from(nextDismissed))
-    );
-    DeviceEventEmitter.emit("merchant_notifs_updated");
+    setNotifications((prev) => prev.filter((n) => n.id !== itemId));
+    try {
+      await AsyncStorage.setItem(
+        `${MERCHANT_DISMISSED_NOTIFS_KEY}_${merchantId}`,
+        JSON.stringify(Array.from(nextDismissed))
+      );
+      DeviceEventEmitter.emit("merchant_notifs_updated");
+    } catch (e) {}
   };
 
-  const handleNotificationPress = async (item: NotificationItem) => {
+  const resolveRouteToTab = (routeStr?: string): MerchantTabName => {
+    const r = String(routeStr || "").toLowerCase();
+    if (r.includes("order")) return "Orders";
+    if (r.includes("earning")) return "Earnings";
+    if (r.includes("impact")) return "Impact";
+    if (r.includes("donat")) return "Donation";
+    if (r.includes("listing")) return "Listings";
+    if (r.includes("profile")) return "Profile";
+    return "Home";
+  };
+
+  const handlePressNotification = async (item: MerchantNotificationItem) => {
     await markSingleRead(item.id);
-
-    if (item.type === "announcement") {
-      setSelectedBroadcast(item);
-      return;
-    }
-
-    const route = String(item.target_route || "");
-    if (route.includes("/orders") || item.type === "order") {
-      DeviceEventEmitter.emit("merchant_orders_updated");
-      switchMerchantTab("Orders");
-    } else if (route.includes("/impact") || item.type === "review") {
-      switchMerchantTab("Impact");
-    } else if (route.includes("/donation") || item.type === "donation") {
-      DeviceEventEmitter.emit("merchant_donations_updated");
-      switchMerchantTab("Donation");
-    } else if (route.includes("/earnings")) {
-      switchMerchantTab("Earnings");
-    } else if (
-      route.includes("/listing") ||
-      route.includes("/market_listing") ||
-      item.type === "expiry_1hr" ||
-      item.type === "suggested_expiry"
-    ) {
-      DeviceEventEmitter.emit("merchant_listings_updated");
-      switchMerchantTab("Listings");
-    } else {
-      switchMerchantTab("Profile");
-    }
-
-    if (router.canGoBack()) {
-      router.back();
-    } else {
-      router.replace("/establishment/dashboard" as any);
-    }
+    const targetTab = resolveRouteToTab(item.target_route);
+    switchMerchantTab(targetTab);
+    router.replace((item.target_route || "/establishment/dashboard") as any);
   };
 
-  const unreadActivityCount = useMemo(
-    () => activityItems.filter((n) => !readIds.has(String(n.id))).length,
-    [activityItems, readIds]
-  );
-
-  const unreadAnnouncementsCount = useMemo(
-    () => announcementItems.filter((a) => !readIds.has(String(a.id))).length,
-    [announcementItems, readIds]
-  );
-
-  const displayedList =
-    activeTab === "activity" ? activityItems : announcementItems;
-
-  const getIconConfig = (type: NotificationItem["type"], isRead: boolean) => {
-    if (!isRead) {
+  const getIconConfig = (typeStr: string) => {
+    const t = (typeStr || "").toLowerCase();
+    if (t.includes("order")) {
       return {
-        name:
-          type === "announcement"
-            ? "megaphone-outline"
-            : type === "donation"
-            ? "gift-outline"
-            : type === "review"
-            ? "star"
-            : type === "expiry_1hr" || type === "suggested_expiry"
-            ? "alarm-outline"
-            : "notifications-outline",
-        bg: Colors.primary,
-        color: Colors.white,
+        icon: "receipt-outline" as const,
+        bg: "#E8EFEA",
+        color: Colors.primary,
+      };
+    }
+    if (t.includes("review")) {
+      return {
+        icon: "star-outline" as const,
+        bg: "#FEF3C7",
+        color: "#D97706",
+      };
+    }
+    if (t.includes("expiry") || t.includes("flag")) {
+      return {
+        icon: "time-outline" as const,
+        bg: "#FBE4E1",
+        color: "#B3261E",
+      };
+    }
+    if (t.includes("donation")) {
+      return {
+        icon: "gift-outline" as const,
+        bg: "#E4F0E8",
+        color: "#15803D",
       };
     }
     return {
-      name:
-        type === "announcement"
-          ? "megaphone-outline"
-          : type === "donation"
-          ? "gift-outline"
-          : type === "review"
-          ? "star-outline"
-          : type === "expiry_1hr" || type === "suggested_expiry"
-          ? "alarm-outline"
-          : "notifications-outline",
+      icon: "notifications-outline" as const,
       bg: "#E8EFEA",
       color: Colors.primary,
     };
   };
 
-  return (
-    <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-      <Stack.Screen options={{ animation: "none", gestureEnabled: false }} />
+  const unreadAlertsCount = notifications.filter((n) => !n.read).length;
+  const unreadAnnsCount = announcements.filter((a) => !a.read).length;
 
-      {/* STATUS-BAR-SAFE HEADER */}
+  return (
+    <SafeAreaView
+      style={styles.container}
+      edges={["top", "left", "right", "bottom"]}
+    >
+      <Stack.Screen options={{ animation: "none" }} />
+
+      {/* HEADER BAR */}
       <View style={styles.header}>
         <TouchableOpacity
-          style={styles.backButton}
-          activeOpacity={0.7}
+          style={styles.backBtn}
+          activeOpacity={0.75}
           onPress={() => {
-            if (router.canGoBack()) router.back();
-            else router.replace("/establishment/dashboard" as any);
+            if (router.canGoBack()) {
+              router.back();
+            } else {
+              switchMerchantTab("Home");
+              router.replace("/establishment/dashboard" as any);
+            }
           }}
         >
-          <Ionicons name="arrow-back" size={20} color={Colors.primary} />
+          <Ionicons name="arrow-back" size={20} color={Colors.primary2} />
         </TouchableOpacity>
 
-        <View style={styles.headerTextContainer}>
-          <Text style={styles.headerTitle}>Notifications &amp; Updates</Text>
+        <View style={{ flex: 1, marginLeft: 10 }}>
+          <Text style={styles.headerTitle}>Store Notifications</Text>
           <Text style={styles.headerSubtitle}>
-            Sorted latest to oldest • Tap any alert to open
+            Sorted from latest to oldest • Tap any alert to open
           </Text>
         </View>
 
         <TouchableOpacity
           style={styles.markAllBtn}
-          activeOpacity={0.75}
-          onPress={handleMarkAllAsRead}
+          activeOpacity={0.8}
+          onPress={markAllRead}
         >
           <Ionicons
             name="checkmark-done-outline"
             size={15}
             color={Colors.primary}
           />
-          <Text style={styles.markAllBtnText}>Mark all as read</Text>
+          <Text style={styles.markAllText}>Mark all read</Text>
         </TouchableOpacity>
       </View>
 
-      {/* DEDICATED TABS: NOTIFICATIONS vs. SYSTEM ANNOUNCEMENTS */}
+      {/* TABS */}
       <View style={styles.tabsWrapper}>
         <TouchableOpacity
           style={[
-            styles.tabButton,
-            activeTab === "activity" && styles.tabButtonActive,
+            styles.tabBtn,
+            activeTab === "alerts" && styles.tabBtnActive,
           ]}
           activeOpacity={0.85}
-          onPress={() => setActiveTab("activity")}
+          onPress={() => setActiveTab("alerts")}
         >
-          <Ionicons
-            name="notifications-outline"
-            size={15}
-            color={activeTab === "activity" ? Colors.white : Colors.primary2}
-          />
           <Text
             style={[
-              styles.tabButtonText,
-              activeTab === "activity" && styles.tabButtonTextActive,
+              styles.tabBtnText,
+              activeTab === "alerts" && styles.tabBtnTextActive,
             ]}
           >
-            Notifications ({activityItems.length})
+            Operational Alerts ({notifications.length})
           </Text>
-          {unreadActivityCount > 0 && (
-            <View
-              style={[
-                styles.tabUnreadPill,
-                activeTab === "activity" && { backgroundColor: Colors.white },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tabUnreadPillText,
-                  activeTab === "activity" && { color: Colors.primary },
-                ]}
-              >
-                {unreadActivityCount}
-              </Text>
+          {unreadAlertsCount > 0 && (
+            <View style={styles.unreadPill}>
+              <Text style={styles.unreadPillText}>{unreadAlertsCount}</Text>
             </View>
           )}
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[
-            styles.tabButton,
-            activeTab === "announcements" && styles.tabButtonActive,
+            styles.tabBtn,
+            activeTab === "announcements" && styles.tabBtnActive,
           ]}
           activeOpacity={0.85}
           onPress={() => setActiveTab("announcements")}
         >
-          <Ionicons
-            name="megaphone-outline"
-            size={15}
-            color={
-              activeTab === "announcements" ? Colors.white : Colors.primary2
-            }
-          />
           <Text
             style={[
-              styles.tabButtonText,
-              activeTab === "announcements" && styles.tabButtonTextActive,
+              styles.tabBtnText,
+              activeTab === "announcements" && styles.tabBtnTextActive,
             ]}
           >
-            Announcements ({announcementItems.length})
+            Announcements ({announcements.length})
           </Text>
-          {unreadAnnouncementsCount > 0 && (
-            <View
-              style={[
-                styles.tabUnreadPill,
-                activeTab === "announcements" && {
-                  backgroundColor: Colors.white,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tabUnreadPillText,
-                  activeTab === "announcements" && { color: Colors.primary },
-                ]}
-              >
-                {unreadAnnouncementsCount}
-              </Text>
+          {unreadAnnsCount > 0 && (
+            <View style={styles.unreadPill}>
+              <Text style={styles.unreadPillText}>{unreadAnnsCount}</Text>
             </View>
           )}
         </TouchableOpacity>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -399,187 +403,116 @@ export default function EstablishmentNotifications() {
           />
         }
       >
-        {displayedList.length > 0 ? (
-          displayedList.map((item, idx) => {
-            const isRead = readIds.has(String(item.id));
-            const iconCfg = getIconConfig(item.type, isRead);
-
-            return (
-              <TouchableOpacity
-                key={item.id || idx}
-                style={[
-                  styles.notificationCard,
-                  isRead ? styles.cardRead : styles.cardUnread,
-                ]}
-                activeOpacity={0.8}
-                onPress={() => handleNotificationPress(item)}
-              >
-                <View
+        {loading ? (
+          <View style={styles.emptyBox}>
+            <ActivityIndicator size="large" color={Colors.primary} />
+            <Text style={[styles.emptySubtitle, { marginTop: 10 }]}>
+              Loading latest store notifications...
+            </Text>
+          </View>
+        ) : activeTab === "alerts" ? (
+          notifications.length > 0 ? (
+            notifications.map((item) => {
+              const cfg = getIconConfig(item.type);
+              return (
+                <TouchableOpacity
+                  key={item.id}
                   style={[
-                    styles.iconCircle,
-                    { backgroundColor: iconCfg.bg, borderColor: iconCfg.bg },
+                    styles.notifCard,
+                    !item.read && styles.notifCardUnread,
                   ]}
+                  activeOpacity={0.85}
+                  onPress={() => handlePressNotification(item)}
                 >
-                  <Ionicons
-                    name={iconCfg.name as any}
-                    size={19}
-                    color={iconCfg.color}
-                  />
-                </View>
-
-                <View style={styles.notificationContent}>
-                  <View style={styles.titleRow}>
-                    <Text
-                      style={[
-                        styles.notificationTitle,
-                        !isRead && { fontFamily: "PoppinsBold" },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {item.title}
-                    </Text>
-
-                    <View
-                      style={[
-                        styles.stateBadge,
-                        isRead
-                          ? styles.stateBadgeRead
-                          : styles.stateBadgeUnread,
-                      ]}
-                    >
-                      {!isRead && <View style={styles.unreadDot} />}
-                      <Text
-                        style={[
-                          styles.stateBadgeText,
-                          isRead
-                            ? styles.stateBadgeTextRead
-                            : styles.stateBadgeTextUnread,
-                        ]}
-                      >
-                        {isRead ? "Read ✓" : "NEW"}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <Text
-                    style={[
-                      styles.notificationText,
-                      !isRead && { color: Colors.primary2 },
-                    ]}
+                  <View
+                    style={[styles.iconCircle, { backgroundColor: cfg.bg }]}
                   >
-                    {item.description}
-                  </Text>
-
-                  <View style={styles.footerRow}>
-                    <View style={styles.timeRow}>
-                      <Ionicons
-                        name="time-outline"
-                        size={12}
-                        color={Colors.icon}
-                      />
-                      <Text style={styles.timeText}>{item.time}</Text>
-                    </View>
-
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 10,
-                      }}
-                    >
-                      <Text style={styles.openHintText}>
-                        {item.type === "announcement"
-                          ? "Read Broadcast →"
-                          : "Open Module →"}
-                      </Text>
-                      {item.type !== "announcement" && (
-                        <TouchableOpacity
-                          onPress={(e) => {
-                            e.stopPropagation?.();
-                            deleteNotification(item.id);
-                          }}
-                          style={{ padding: 2 }}
-                        >
-                          <Ionicons
-                            name="trash-outline"
-                            size={14}
-                            color={Colors.icon}
-                          />
-                        </TouchableOpacity>
-                      )}
-                    </View>
+                    <Ionicons name={cfg.icon} size={19} color={cfg.color} />
                   </View>
+
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.cardTopRow}>
+                      <Text style={styles.cardTitle} numberOfLines={1}>
+                        {item.title}
+                      </Text>
+                      {!item.read && <View style={styles.unreadDot} />}
+                    </View>
+                    <Text style={styles.cardDesc}>{item.description}</Text>
+                    <Text style={styles.cardTime}>{item.time}</Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.dismissBtn}
+                    onPress={() => dismissNotification(item.id)}
+                  >
+                    <Ionicons name="close" size={16} color={Colors.icon} />
+                  </TouchableOpacity>
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <View style={styles.emptyBox}>
+              <View style={styles.emptyIconCircle}>
+                <Ionicons
+                  name="notifications-off-outline"
+                  size={26}
+                  color={Colors.primary}
+                />
+              </View>
+              <Text style={styles.emptyTitle}>No operational alerts yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Customer reservations, pickup confirmations, ratings, and TTT
+                expiry warnings will appear here from latest to oldest.
+              </Text>
+            </View>
+          )
+        ) : announcements.length > 0 ? (
+          announcements.map((ann) => (
+            <TouchableOpacity
+              key={ann.id}
+              style={[styles.notifCard, !ann.read && styles.notifCardUnread]}
+              activeOpacity={0.85}
+              onPress={() => markSingleRead(ann.id)}
+            >
+              <View
+                style={[styles.iconCircle, { backgroundColor: "#E8EFEA" }]}
+              >
+                <Ionicons
+                  name="megaphone-outline"
+                  size={19}
+                  color={Colors.primary}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <View style={styles.cardTopRow}>
+                  <Text style={styles.audienceBadgeText}>{ann.audience}</Text>
+                  {!ann.read && <View style={styles.unreadDot} />}
                 </View>
-              </TouchableOpacity>
-            );
-          })
+                <Text style={[styles.cardTitle, { marginTop: 2 }]}>
+                  {ann.title}
+                </Text>
+                <Text style={styles.cardDesc}>{ann.body}</Text>
+                <Text style={styles.cardTime}>{ann.date}</Text>
+              </View>
+            </TouchableOpacity>
+          ))
         ) : (
           <View style={styles.emptyBox}>
-            <Ionicons
-              name={
-                activeTab === "announcements"
-                  ? "megaphone-outline"
-                  : "notifications-off-outline"
-              }
-              size={32}
-              color={Colors.icon}
-            />
-            <Text style={styles.emptyTitle}>
-              {activeTab === "announcements"
-                ? "No system announcements yet"
-                : "No notifications yet"}
-            </Text>
-            <Text style={styles.emptySubtext}>
-              {activeTab === "announcements"
-                ? "Official broadcasts from ReServe Admin will appear here."
-                : "Orders, customer reviews, TTT weather alerts, and Food Bank updates will appear here."}
+            <View style={styles.emptyIconCircle}>
+              <Ionicons
+                name="megaphone-outline"
+                size={26}
+                color={Colors.primary}
+              />
+            </View>
+            <Text style={styles.emptyTitle}>No system announcements</Text>
+            <Text style={styles.emptySubtitle}>
+              Official broadcasts published by ReServe Admin will appear here.
             </Text>
           </View>
         )}
       </ScrollView>
-
-      {/* ANNOUNCEMENT DETAIL MODAL */}
-      <Modal
-        visible={!!selectedBroadcast}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSelectedBroadcast(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setSelectedBroadcast(null)}
-          />
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeaderRow}>
-              <View style={styles.modalBadge}>
-                <Ionicons
-                  name="megaphone-outline"
-                  size={15}
-                  color={Colors.primary}
-                />
-                <Text style={styles.modalBadgeText}>
-                  {selectedBroadcast?.audience || "Official Broadcast"}
-                </Text>
-              </View>
-              <TouchableOpacity onPress={() => setSelectedBroadcast(null)}>
-                <Ionicons name="close" size={20} color={Colors.primary2} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.modalTitle}>{selectedBroadcast?.title}</Text>
-            <Text style={styles.modalTime}>{selectedBroadcast?.time}</Text>
-            <Text style={styles.modalBody}>
-              {selectedBroadcast?.description}
-            </Text>
-            <TouchableOpacity
-              style={styles.modalCloseBtn}
-              onPress={() => setSelectedBroadcast(null)}
-            >
-              <Text style={styles.modalCloseBtnText}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -587,36 +520,35 @@ export default function EstablishmentNotifications() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   header: {
-    minHeight: 60,
+    minHeight: 62,
     paddingHorizontal: 16,
-    backgroundColor: Colors.background,
+    paddingVertical: 10,
+    backgroundColor: Colors.white,
     borderBottomWidth: 1,
     borderBottomColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
   },
-  backButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
-    backgroundColor: Colors.white,
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.background,
     borderWidth: 1,
     borderColor: Colors.border,
     alignItems: "center",
     justifyContent: "center",
   },
-  headerTextContainer: { flex: 1, marginLeft: 10, marginRight: 8 },
   headerTitle: {
     fontFamily: "PoppinsBold",
-    fontSize: 15,
+    fontSize: 16,
     color: Colors.primary2,
   },
   headerSubtitle: {
     fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
+    fontSize: 10,
     color: Colors.primary1,
-    marginTop: -1,
+    marginTop: -2,
   },
   markAllBtn: {
     flexDirection: "row",
@@ -625,258 +557,161 @@ const styles = StyleSheet.create({
     backgroundColor: "#E8EFEA",
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.border,
+    borderRadius: 9,
   },
-  markAllBtnText: {
+  markAllText: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
+    fontSize: 10.5,
     color: Colors.primary,
   },
   tabsWrapper: {
     flexDirection: "row",
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 6,
+    backgroundColor: "#EBEFEB",
+    borderRadius: 12,
+    padding: 4,
+    marginHorizontal: 16,
+    marginTop: 14,
+    marginBottom: 8,
   },
-  tabButton: {
+  tabBtn: {
     flex: 1,
-    height: 40,
-    borderRadius: 10,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    paddingVertical: 8,
+    borderRadius: 9,
     gap: 6,
-    paddingHorizontal: 8,
   },
-  tabButtonActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
+  tabBtnActive: {
+    backgroundColor: Colors.white,
   },
-  tabButtonText: {
+  tabBtnText: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 11.5,
+    color: Colors.primary1,
+  },
+  tabBtnTextActive: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 11,
     color: Colors.primary2,
   },
-  tabButtonTextActive: {
-    color: Colors.white,
-  },
-  tabUnreadPill: {
+  unreadPill: {
     minWidth: 18,
     height: 18,
-    paddingHorizontal: 5,
     borderRadius: 9,
     backgroundColor: "#B3261E",
+    paddingHorizontal: 5,
     alignItems: "center",
     justifyContent: "center",
   },
-  tabUnreadPillText: {
+  unreadPillText: {
     fontFamily: "PoppinsBold",
-    fontSize: 9,
+    fontSize: 9.5,
     color: Colors.white,
   },
-  content: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 32 },
-  notificationCard: {
-    width: "100%",
-    borderRadius: 14,
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 28,
+  },
+  notifCard: {
     flexDirection: "row",
     alignItems: "flex-start",
+    backgroundColor: Colors.white,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: Colors.border,
     padding: 13,
     marginBottom: 10,
-    borderWidth: 1,
+    gap: 11,
   },
-  cardUnread: {
-    backgroundColor: "#E8EFEA",
-    borderColor: "#3A826D",
-    borderWidth: 1.2,
-  },
-  cardRead: {
-    backgroundColor: Colors.white,
-    borderColor: Colors.border,
-    opacity: 0.85,
+  notifCardUnread: {
+    backgroundColor: "#F4F9F6",
+    borderColor: Colors.primary,
   },
   iconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "#E8EFEA",
-    borderWidth: 1,
-    borderColor: Colors.border,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 11,
     marginTop: 2,
   },
-  notificationContent: { flex: 1 },
-  titleRow: {
+  cardTopRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 6,
-    marginBottom: 3,
   },
-  notificationTitle: {
+  cardTitle: {
     flex: 1,
     fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
+    fontSize: 13,
     color: Colors.primary2,
   },
-  stateBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 7,
+  unreadDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.primary,
+  },
+  cardDesc: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 11.5,
+    color: Colors.primary1,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  cardTime: {
+    fontFamily: "PoppinsMedium",
+    fontSize: 10,
+    color: Colors.placeholder,
+    marginTop: 5,
+  },
+  audienceBadgeText: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 9.5,
+    color: Colors.primary,
+    backgroundColor: "#E8EFEA",
+    paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 6,
   },
-  stateBadgeUnread: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: "#3A826D",
-  },
-  stateBadgeRead: {
-    backgroundColor: "#F3F6F4",
-  },
-  unreadDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#3A826D",
-  },
-  stateBadgeText: {
-    fontFamily: "PoppinsBold",
-    fontSize: 8.5,
-  },
-  stateBadgeTextUnread: {
-    color: Colors.primary,
-  },
-  stateBadgeTextRead: {
-    color: Colors.primary1,
-    fontFamily: "PoppinsMedium",
-  },
-  notificationText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    lineHeight: 16,
-    color: Colors.primary1,
-  },
-  footerRow: {
-    flexDirection: "row",
+  dismissBtn: {
+    width: 26,
+    height: 26,
     alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: 8,
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(0,0,0,0.05)",
-  },
-  timeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  timeText: {
-    fontFamily: "PoppinsMedium",
-    fontSize: 9.5,
-    color: Colors.primary1,
-  },
-  openHintText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    color: Colors.primary,
+    justifyContent: "center",
   },
   emptyBox: {
     backgroundColor: Colors.white,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 14,
     paddingVertical: 42,
-    paddingHorizontal: 20,
+    paddingHorizontal: 22,
     alignItems: "center",
-    marginTop: 12,
+    marginTop: 10,
+  },
+  emptyIconCircle: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: "#E8EFEA",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 10,
   },
   emptyTitle: {
     fontFamily: "PoppinsSemiBold",
-    fontSize: 13.5,
+    fontSize: 14,
     color: Colors.primary2,
-    marginTop: 8,
   },
-  emptySubtext: {
+  emptySubtitle: {
     fontFamily: "PoppinsRegular",
     fontSize: 11,
     color: Colors.primary1,
     textAlign: "center",
-    marginTop: 3,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(18,55,44,0.55)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 18,
-  },
-  modalCard: {
-    width: "100%",
-    maxWidth: 400,
-    backgroundColor: Colors.white,
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  modalHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  },
-  modalBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: "#E8EFEA",
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  modalBadgeText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    color: Colors.primary,
-  },
-  modalTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 16,
-    color: Colors.primary2,
-  },
-  modalTime: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.icon,
-    marginTop: 2,
-    marginBottom: 10,
-  },
-  modalBody: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 12,
-    color: Colors.primary1,
-    lineHeight: 19,
-    marginBottom: 16,
-  },
-  modalCloseBtn: {
-    height: 44,
-    backgroundColor: Colors.button,
-    borderRadius: 10,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  modalCloseBtnText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: Colors.white,
+    marginTop: 4,
+    lineHeight: 16,
   },
 });

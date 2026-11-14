@@ -27,11 +27,15 @@ import {
   FoodBankHeader,
   FoodBankMapModal,
   getFoodBankStorage,
+  setFoodBankStorage,
   useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
 
 export type DonationOffer = {
   donation_id: number;
+  voucher_code?: string;
+  qr_payload?: string;
+  radius_km?: number;
   food_name: string;
   food_type: string;
   description?: string;
@@ -58,18 +62,24 @@ export type DonationOffer = {
 type Tab = "available" | "ongoing" | "history";
 
 let cachedFbOffersMemory: DonationOffer[] = [];
+let cachedDonationsRadiusKm = 10;
 
 export default function FoodBankDonationsScreen() {
   const isInsideShell = useIsInsideFoodBankShell();
   if (!isInsideShell) return null;
 
   const [offers, setOffers] = useState<DonationOffer[]>(cachedFbOffersMemory);
+  const [radiusKm, setRadiusKm] = useState<number>(cachedDonationsRadiusKm);
   const [loading, setLoading] = useState(cachedFbOffersMemory.length === 0);
   const [refreshing, setRefreshing] = useState(false);
 
   const [tab, setTab] = useState<Tab>("available");
   const [search, setSearch] = useState("");
   const [detail, setDetail] = useState<DonationOffer | null>(null);
+  const [claimQty, setClaimQty] = useState<number>(1);
+  const [qrVoucherTarget, setQrVoucherTarget] = useState<DonationOffer | null>(
+    null
+  );
 
   const [mapTarget, setMapTarget] = useState<{
     name: string;
@@ -111,14 +121,30 @@ export default function FoodBankDonationsScreen() {
     try {
       const orgId = (await getFoodBankStorage("profile_id")) || "1";
       const email = (await getFoodBankStorage("user_email")) || "";
+      const storedRad = await getFoodBankStorage("gov_radius_km");
+      if (storedRad && Number(storedRad) > 0) {
+        cachedDonationsRadiusKm = Number(storedRad);
+        setRadiusKm(Number(storedRad));
+      }
+
       const res = await api.get(
         `donations/available/?org_id=${orgId}&email=${encodeURIComponent(
           email
         )}`
       );
-      const nextOffers = Array.isArray(res.data) ? res.data : [];
+      const nextOffers: DonationOffer[] = Array.isArray(res.data)
+        ? res.data
+        : [];
       cachedFbOffersMemory = nextOffers;
       setOffers(nextOffers);
+
+      const firstRadius = Number(nextOffers[0]?.radius_km || 0);
+      if (firstRadius > 0) {
+        cachedDonationsRadiusKm = firstRadius;
+        setRadiusKm(firstRadius);
+        await setFoodBankStorage("gov_radius_km", String(firstRadius));
+        DeviceEventEmitter.emit("fb_radius_updated", { radiusKm: firstRadius });
+      }
     } catch (e) {
       console.log("Load offers error:", e);
     } finally {
@@ -139,10 +165,20 @@ export default function FoodBankDonationsScreen() {
     const profSub = DeviceEventEmitter.addListener("fb_profile_updated", () => {
       loadOffers();
     });
+    const radSub = DeviceEventEmitter.addListener(
+      "fb_radius_updated",
+      (payload?: { radiusKm?: number }) => {
+        if (payload?.radiusKm) {
+          cachedDonationsRadiusKm = payload.radiusKm;
+          setRadiusKm(payload.radiusKm);
+        }
+      }
+    );
 
     return () => {
       donSub.remove();
       profSub.remove();
+      radSub.remove();
     };
   }, [loadOffers]);
 
@@ -165,69 +201,102 @@ export default function FoodBankDonationsScreen() {
         !q ||
         (o.food_name || "").toLowerCase().includes(q) ||
         (o.merchant_name || "").toLowerCase().includes(q) ||
-        (o.food_type || "").toLowerCase().includes(q)
+        (o.food_type || "").toLowerCase().includes(q) ||
+        `don-${o.donation_id}`.includes(q)
       );
     });
   }, [offers, tab, search]);
 
+  const openOfferDetail = (offer: DonationOffer) => {
+    setDetail(offer);
+    setClaimQty(Number(offer.qty_donated || 1));
+  };
+
   const promptOfferAction = (
     offer: DonationOffer,
-    action: "accept" | "decline" | "received"
+    action: "accept" | "release_claim" | "received",
+    overrideQty?: number
   ) => {
+    const qtyToClaim = overrideQty ?? offer.qty_donated;
+    const isPartial =
+      action === "accept" && qtyToClaim < Number(offer.qty_donated || 1);
+
     setConfirmState({
       visible: true,
       title:
         action === "accept"
-          ? "Appeal & Accept Donation?"
+          ? isPartial
+            ? "Claim Partial Quantity?"
+            : "Claim Full Donation Batch?"
           : action === "received"
-          ? "Mark Handshake as Successful?"
-          : "Decline Donation Offer?",
+          ? "Confirm Handoff Received?"
+          : "Release Claim Back to Pool?",
       message:
         action === "accept"
-          ? `Accept ${offer.qty_donated} ${offer.unit_name || "items"} of ${
-              offer.food_name
-            } from ${offer.merchant_name}? Status will move to Ongoing.`
-          : action === "received"
-          ? `Confirm that your organization has received ${offer.qty_donated} ${
+          ? `Claim ${qtyToClaim} of ${offer.qty_donated} ${
               offer.unit_name || "items"
-            } of ${offer.food_name}?`
-          : `Decline this donation offer from ${offer.merchant_name}?`,
+            } of ${offer.food_name} from ${offer.merchant_name}?${
+              isPartial
+                ? ` The remaining ${
+                    offer.qty_donated - qtyToClaim
+                  } ${offer.unit_name || "items"} will stay Available for other Food Banks.`
+                : ""
+            } Your QR Pickup Voucher will be generated immediately.`
+          : action === "received"
+          ? `Confirm that your organization has inspected and received ${
+              offer.qty_donated
+            } ${offer.unit_name || "items"} of ${offer.food_name}?`
+          : `Release your claim on ${offer.qty_donated} ${
+              offer.unit_name || "items"
+            } of ${
+              offer.food_name
+            } so other nearby Food Banks within ${radiusKm}km can claim it before expiry?`,
       confirmText:
         action === "accept"
-          ? "Accept (Ongoing)"
+          ? "Claim & Get QR Voucher"
           : action === "received"
           ? "Mark Successful"
-          : "Yes, Decline",
-      isDestructive: action === "decline",
+          : "Yes, Release Claim",
+      isDestructive: action === "release_claim",
       onConfirm: async () => {
         setConfirmState((p) => ({ ...p, visible: false }));
         try {
           const orgId = (await getFoodBankStorage("profile_id")) || "1";
           const email = (await getFoodBankStorage("user_email")) || "";
-          await api.patch(`donations/respond/${offer.donation_id}/`, {
-            org_id: orgId,
-            email,
-            action,
-          });
+          const res = await api.patch(
+            `donations/respond/${offer.donation_id}/`,
+            {
+              org_id: orgId,
+              email,
+              action,
+              claimed_qty: qtyToClaim,
+            }
+          );
           setDetail(null);
           await loadOffers();
           DeviceEventEmitter.emit("fb_donations_updated");
           DeviceEventEmitter.emit("fb_notifs_updated");
-          showModal(
-            action === "accept"
-              ? "Donation Accepted (Ongoing)!"
-              : action === "received"
-              ? "Donation Completed!"
-              : "Donation Declined",
-            action === "accept"
-              ? `Coordinate pickup with ${offer.merchant_name} via phone/SMS before ${offer.expiry_display}.`
-              : "Your donation records have been updated.",
-            "success"
-          );
+
+          if (action === "accept") {
+            setTab("ongoing");
+            if (res.data?.donation_id) {
+              setQrVoucherTarget(res.data);
+            }
+          } else {
+            showModal(
+              action === "received"
+                ? "Donation Handoff Completed!"
+                : "Claim Released to Pool",
+              action === "received"
+                ? "Chain-of-custody recorded and rescued units credited to your organization!"
+                : `The surplus items have been returned to the open ${radiusKm}km donation pool.`,
+              "success"
+            );
+          }
         } catch (e: any) {
           showModal(
             "Action Failed",
-            "Could not update donation status.",
+            e.response?.data?.error || "Could not update donation status.",
             "error"
           );
         }
@@ -242,19 +311,22 @@ export default function FoodBankDonationsScreen() {
       <View style={styles.topSection}>
         <Text style={styles.pageTitle}>Posted Surplus Donations</Text>
         <Text style={styles.pageSubtitle}>
-          Surplus food posted by merchants within 10km. Appeal to accept and coordinate pickup
+          Claim partial or full quantities from merchants within {radiusKm}km
+          and present your QR Pickup Voucher at handoff
         </Text>
 
         <View style={styles.tabsBar}>
           {(
             [
               { key: "available", label: "Available" },
-              { key: "ongoing", label: "Ongoing" },
+              { key: "ongoing", label: "Ongoing (QR)" },
               { key: "history", label: "History" },
             ] as const
           ).map((t) => {
             const active = tab === t.key;
-            const count = offers.filter((o) => tabOf(o.status) === t.key).length;
+            const count = offers.filter(
+              (o) => tabOf(o.status) === t.key
+            ).length;
             return (
               <TouchableOpacity
                 key={t.key}
@@ -275,7 +347,7 @@ export default function FoodBankDonationsScreen() {
           <Ionicons name="search-outline" size={18} color={Colors.icon} />
           <TextInput
             style={styles.searchInput}
-            placeholder="Search food item, category, or merchant..."
+            placeholder="Search voucher ID, food item, or merchant..."
             placeholderTextColor={Colors.placeholder}
             value={search}
             onChangeText={setSearch}
@@ -318,7 +390,8 @@ export default function FoodBankDonationsScreen() {
               </View>
               <Text style={styles.emptyTitle}>No donations in this tab</Text>
               <Text style={styles.emptyDescription}>
-                You can also browse active listings directly under the Merchants tab to request food!
+                You can also browse active listings directly under the Merchants
+                tab to request food within {radiusKm}km!
               </Text>
             </View>
           }
@@ -327,7 +400,7 @@ export default function FoodBankDonationsScreen() {
               <TouchableOpacity
                 style={styles.uiCardTop}
                 activeOpacity={0.85}
-                onPress={() => setDetail(item)}
+                onPress={() => openOfferDetail(item)}
               >
                 <Image
                   source={{
@@ -346,7 +419,8 @@ export default function FoodBankDonationsScreen() {
                   </View>
 
                   <Text style={styles.uiCardSubtitle} numberOfLines={1}>
-                    {item.merchant_name} • {item.distance || "Within 10km"}
+                    DON-{item.donation_id} • {item.merchant_name} (
+                    {item.distance || `Within ${radiusKm}km`})
                   </Text>
 
                   <Text style={styles.qtyText}>
@@ -363,7 +437,7 @@ export default function FoodBankDonationsScreen() {
               <View style={styles.uiCardActions}>
                 <TouchableOpacity
                   style={styles.uiActionBtn}
-                  onPress={() => setDetail(item)}
+                  onPress={() => openOfferDetail(item)}
                 >
                   <Ionicons
                     name="eye-outline"
@@ -376,40 +450,21 @@ export default function FoodBankDonationsScreen() {
                       { color: Colors.primary, fontFamily: "PoppinsSemiBold" },
                     ]}
                   >
-                    View Full Details
+                    {item.status === "Active" || item.status === "Available"
+                      ? "Select Qty & Claim"
+                      : "View Details"}
                   </Text>
                 </TouchableOpacity>
-
-                {(item.status === "Active" || item.status === "Available") && (
-                  <TouchableOpacity
-                    style={styles.uiActionBtn}
-                    onPress={() => promptOfferAction(item, "accept")}
-                  >
-                    <Ionicons
-                      name="checkmark-circle-outline"
-                      size={16}
-                      color={Colors.button}
-                    />
-                    <Text
-                      style={[
-                        styles.uiActionBtnText,
-                        { color: Colors.button, fontFamily: "PoppinsSemiBold" },
-                      ]}
-                    >
-                      Accept Donation
-                    </Text>
-                  </TouchableOpacity>
-                )}
 
                 {(item.status === "Ongoing" ||
                   item.status === "Claimed" ||
                   item.status === "In-Transit") && (
                   <TouchableOpacity
                     style={styles.uiActionBtn}
-                    onPress={() => promptOfferAction(item, "received")}
+                    onPress={() => setQrVoucherTarget(item)}
                   >
                     <Ionicons
-                      name="checkmark-done-circle-outline"
+                      name="qr-code-outline"
                       size={16}
                       color={Colors.button}
                     />
@@ -419,7 +474,7 @@ export default function FoodBankDonationsScreen() {
                         { color: Colors.button, fontFamily: "PoppinsSemiBold" },
                       ]}
                     >
-                      Mark Successful
+                      Show QR Voucher (DON-{item.donation_id})
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -429,7 +484,7 @@ export default function FoodBankDonationsScreen() {
         />
       )}
 
-      {/* FULL DONATION DETAILS + MERCHANT CONTACT + MAP MODAL */}
+      {/* FULL DONATION DETAILS + PARTIAL/FULL CLAIM STEPPER MODAL */}
       <Modal
         visible={!!detail}
         transparent
@@ -443,7 +498,7 @@ export default function FoodBankDonationsScreen() {
                 <View style={styles.modalHeader}>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.modalTitle} numberOfLines={1}>
-                      {detail.food_name}
+                      {detail.food_name} (DON-{detail.donation_id})
                     </Text>
                     <Text style={styles.modalSubtitle}>
                       Posted by {detail.merchant_name}
@@ -469,13 +524,70 @@ export default function FoodBankDonationsScreen() {
                     style={styles.viewImage}
                   />
 
+                  {/* PARTIAL / FULL QUANTITY SELECTOR FOR AVAILABLE DONATIONS */}
+                  {(detail.status === "Active" ||
+                    detail.status === "Available") && (
+                    <View style={styles.claimStepperCard}>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Text style={styles.boxHeading}>
+                          Select Quantity to Claim
+                        </Text>
+                        <Text
+                          style={{
+                            fontFamily: "PoppinsRegular",
+                            fontSize: 10.5,
+                            color: Colors.primary1,
+                          }}
+                        >
+                          Available Pool: {detail.qty_donated}{" "}
+                          {detail.unit_name || "items"}. Unclaimed units stay in
+                          the {radiusKm}km pool for other NGOs.
+                        </Text>
+                      </View>
+                      <View style={styles.stepperBox}>
+                        <TouchableOpacity
+                          style={styles.stepperBtn}
+                          onPress={() =>
+                            setClaimQty((prev) => Math.max(1, prev - 1))
+                          }
+                        >
+                          <Ionicons
+                            name="remove"
+                            size={16}
+                            color={Colors.primary}
+                          />
+                        </TouchableOpacity>
+                        <Text style={styles.stepperVal}>{claimQty}</Text>
+                        <TouchableOpacity
+                          style={styles.stepperBtn}
+                          onPress={() =>
+                            setClaimQty((prev) =>
+                              Math.min(detail.qty_donated, prev + 1)
+                            )
+                          }
+                        >
+                          <Ionicons
+                            name="add"
+                            size={16}
+                            color={Colors.primary}
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+
                   <View style={styles.infoBox}>
                     <Text style={styles.boxHeading}>
-                      Food Listing & Expiry Information
+                      Food Listing &amp; Expiry Information
                     </Text>
                     <DetailRow
+                      icon="qr-code-outline"
+                      label="Voucher Reference"
+                      value={`DON-${detail.donation_id}`}
+                    />
+                    <DetailRow
                       icon="cube-outline"
-                      label="Quantity Available"
+                      label="Batch Quantity"
                       value={`${detail.qty_donated} ${
                         detail.unit_name || "items"
                       }`}
@@ -502,7 +614,7 @@ export default function FoodBankDonationsScreen() {
 
                   <View style={styles.infoBox}>
                     <Text style={styles.boxHeading}>
-                      Donor Merchant & Contact Information
+                      Donor Merchant &amp; Contact Information
                     </Text>
                     <DetailRow
                       icon="storefront-outline"
@@ -601,48 +713,174 @@ export default function FoodBankDonationsScreen() {
 
                   {(detail.status === "Active" ||
                     detail.status === "Available") && (
-                    <View style={{ flexDirection: "row", gap: 10 }}>
-                      <TouchableOpacity
-                        style={styles.declineBtn}
-                        onPress={() => promptOfferAction(detail, "decline")}
-                      >
-                        <Text style={styles.declineBtnText}>Decline</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.acceptBtn}
-                        onPress={() => promptOfferAction(detail, "accept")}
-                      >
-                        <Ionicons
-                          name="checkmark-circle-outline"
-                          size={18}
-                          color={Colors.white}
-                        />
-                        <Text style={styles.acceptBtnText}>
-                          Accept Donation
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                    <TouchableOpacity
+                      style={[styles.acceptBtn, { flex: 0 }]}
+                      onPress={() =>
+                        promptOfferAction(detail, "accept", claimQty)
+                      }
+                    >
+                      <Ionicons
+                        name="qr-code-outline"
+                        size={18}
+                        color={Colors.white}
+                      />
+                      <Text style={styles.acceptBtnText}>
+                        Claim {claimQty} {detail.unit_name || "items"} &amp;
+                        Generate QR Voucher
+                      </Text>
+                    </TouchableOpacity>
                   )}
 
                   {(detail.status === "Ongoing" ||
                     detail.status === "Claimed" ||
                     detail.status === "In-Transit") && (
-                    <TouchableOpacity
-                      style={[styles.acceptBtn, { flex: 0 }]}
-                      onPress={() => promptOfferAction(detail, "received")}
-                    >
-                      <Ionicons
-                        name="checkmark-done-circle"
-                        size={18}
-                        color={Colors.white}
-                      />
-                      <Text style={styles.acceptBtnText}>
-                        Handshake Done — Mark as Successful
-                      </Text>
-                    </TouchableOpacity>
+                    <View style={{ gap: 10 }}>
+                      <TouchableOpacity
+                        style={[
+                          styles.acceptBtn,
+                          { flex: 0, backgroundColor: Colors.primary },
+                        ]}
+                        onPress={() => {
+                          const target = detail;
+                          setDetail(null);
+                          setQrVoucherTarget(target);
+                        }}
+                      >
+                        <Ionicons
+                          name="qr-code-outline"
+                          size={18}
+                          color={Colors.white}
+                        />
+                        <Text style={styles.acceptBtnText}>
+                          Show QR Pickup Voucher (DON-{detail.donation_id})
+                        </Text>
+                      </TouchableOpacity>
+
+                      <View style={{ flexDirection: "row", gap: 10 }}>
+                        <TouchableOpacity
+                          style={styles.declineBtn}
+                          onPress={() =>
+                            promptOfferAction(detail, "release_claim")
+                          }
+                        >
+                          <Text style={styles.declineBtnText}>
+                            Release Claim to Pool
+                          </Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.acceptBtn}
+                          onPress={() => promptOfferAction(detail, "received")}
+                        >
+                          <Ionicons
+                            name="checkmark-done-circle"
+                            size={18}
+                            color={Colors.white}
+                          />
+                          <Text style={styles.acceptBtnText}>
+                            Mark Received
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
                   )}
                 </ScrollView>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* OFFICIAL QR DONATION PICKUP VOUCHER MODAL */}
+      <Modal
+        visible={!!qrVoucherTarget}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setQrVoucherTarget(null)}
+      >
+        <View style={styles.qrModalCenter}>
+          <View style={styles.qrVoucherCard}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                width: "100%",
+                marginBottom: 8,
+              }}
+            >
+              <Text style={styles.modalTitle}>Official QR Pickup Voucher</Text>
+              <TouchableOpacity onPress={() => setQrVoucherTarget(null)}>
+                <Ionicons name="close" size={22} color={Colors.primary2} />
+              </TouchableOpacity>
+            </View>
+
+            {qrVoucherTarget && (
+              <>
+                <Text
+                  style={{
+                    fontFamily: "PoppinsRegular",
+                    fontSize: 11,
+                    color: Colors.primary1,
+                    textAlign: "center",
+                    marginBottom: 12,
+                  }}
+                >
+                  Present this QR code to{" "}
+                  <Text
+                    style={{
+                      fontFamily: "PoppinsBold",
+                      color: Colors.primary2,
+                    }}
+                  >
+                    {qrVoucherTarget.merchant_name}
+                  </Text>{" "}
+                  so they can scan and release your donation batch:
+                </Text>
+
+                <View style={styles.qrImageWrapper}>
+                  <Image
+                    source={{
+                      uri: `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(
+                        `RESERVE:DON-${qrVoucherTarget.donation_id}`
+                      )}`,
+                    }}
+                    style={{ width: 200, height: 200 }}
+                  />
+                </View>
+
+                <View style={styles.voucherCodePill}>
+                  <Text style={styles.voucherCodePillLabel}>VOUCHER CODE</Text>
+                  <Text style={styles.voucherCodePillValue}>
+                    DON-{qrVoucherTarget.donation_id}
+                  </Text>
+                </View>
+
+                <Text
+                  style={{
+                    fontFamily: "PoppinsSemiBold",
+                    fontSize: 13,
+                    color: Colors.primary2,
+                    marginTop: 8,
+                  }}
+                >
+                  {qrVoucherTarget.qty_donated}{" "}
+                  {qrVoucherTarget.unit_name || "items"} —{" "}
+                  {qrVoucherTarget.food_name}
+                </Text>
+                <Text style={styles.explicitExpiry}>
+                  Pickup Before: {qrVoucherTarget.expiry_display}
+                </Text>
+
+                <TouchableOpacity
+                  style={[
+                    styles.acceptBtn,
+                    { flex: 0, width: "100%", marginTop: 14 },
+                  ]}
+                  onPress={() => setQrVoucherTarget(null)}
+                >
+                  <Text style={styles.acceptBtnText}>Done</Text>
+                </TouchableOpacity>
               </>
             )}
           </View>
@@ -694,7 +932,11 @@ function StatusPill({ status }: { status: string }) {
     bg = "#E4F0E8";
     fg = "#1F6B52";
     label = "Successful";
-  } else if (status === "Declined" || status === "Cancelled") {
+  } else if (
+    status === "Declined" ||
+    status === "Cancelled" ||
+    status === "Flagged"
+  ) {
     bg = "#FBE4E1";
     fg = "#B3261E";
     label = status;
@@ -769,16 +1011,26 @@ const styles = StyleSheet.create({
   modalSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1 },
   closeBtn: { width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, alignItems: "center", justifyContent: "center" },
   viewImage: { width: "100%", height: 190, borderRadius: 12, backgroundColor: Colors.input, marginBottom: 14 },
+  claimStepperCard: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", backgroundColor: "#EFF6F2", borderRadius: 14, borderWidth: 1.5, borderColor: Colors.primary, padding: 14, marginBottom: 14 },
+  stepperBox: { flexDirection: "row", alignItems: "center", backgroundColor: Colors.white, borderRadius: 10, borderWidth: 1, borderColor: Colors.border, paddingHorizontal: 8, height: 38, gap: 12 },
+  stepperBtn: { padding: 4 },
+  stepperVal: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.primary2, minWidth: 24, textAlign: "center" },
   infoBox: { backgroundColor: Colors.white, borderRadius: 14, borderWidth: 1, borderColor: Colors.border, padding: 14, marginBottom: 14 },
-  boxHeading: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2, marginBottom: 10 },
-  detailRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  boxHeading: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2, marginBottom: 4 },
+  detailRow: { flexDirection: "row", alignItems: "center", marginBottom: 8, marginTop: 4 },
   detailIcon: { width: 30, height: 30, borderRadius: 15, backgroundColor: "#E8EFEA", alignItems: "center", justifyContent: "center", marginRight: 10 },
   detailLabel: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1 },
   detailValue: { fontFamily: "PoppinsMedium", fontSize: 11.5, color: Colors.primary2 },
   actionPillBtn: { flex: 1, height: 38, borderRadius: 9, backgroundColor: Colors.primary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 5 },
   actionPillBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 10.5, color: Colors.white },
   declineBtn: { flex: 1, height: 48, borderRadius: 12, borderWidth: 1, borderColor: "#E5B8B4", backgroundColor: "#FDF3F2", alignItems: "center", justifyContent: "center" },
-  declineBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: "#B3261E" },
+  declineBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: "#B3261E" },
   acceptBtn: { flex: 1.4, height: 48, borderRadius: 12, backgroundColor: Colors.button, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6 },
-  acceptBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.white },
+  acceptBtnText: { fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.white },
+  qrModalCenter: { flex: 1, backgroundColor: "rgba(18,55,44,0.55)", justifyContent: "center", alignItems: "center", padding: 20 },
+  qrVoucherCard: { width: "100%", maxWidth: 360, backgroundColor: Colors.white, borderRadius: 18, padding: 20, alignItems: "center" },
+  qrImageWrapper: { padding: 14, backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.border, marginBottom: 12 },
+  voucherCodePill: { backgroundColor: "#E8EFEA", paddingHorizontal: 18, paddingVertical: 8, borderRadius: 10, alignItems: "center", borderWidth: 1, borderColor: Colors.border },
+  voucherCodePillLabel: { fontFamily: "PoppinsMedium", fontSize: 9, color: Colors.primary1, letterSpacing: 1 },
+  voucherCodePillValue: { fontFamily: "PoppinsBold", fontSize: 16, color: Colors.primary },
 });

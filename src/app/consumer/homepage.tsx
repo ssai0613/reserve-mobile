@@ -59,6 +59,7 @@ type FoodItem = {
   price: number;
   originalPrice: number;
   floorPrice: number;
+  pricingMode?: string;
   discount: number;
   quantity: number;
   unit: string;
@@ -151,7 +152,8 @@ const getLivePricingData = (
   expDate: string,
   expTime: string,
   initialPrice: number,
-  minPrice: number
+  minPrice: number,
+  pricingMode?: string
 ) => {
   const startTime = parseSafeDate(prepDate);
   const endTime = parseSafeDate(expDate, expTime);
@@ -161,7 +163,12 @@ const getLivePricingData = (
   if (distance <= 0) {
     return {
       timeLeft: "Time's up",
-      livePrice: minPrice > 0 ? minPrice : initialPrice,
+      livePrice:
+        pricingMode === "fixed"
+          ? initialPrice
+          : minPrice > 0
+          ? minPrice
+          : initialPrice,
       isExpired: true,
     };
   }
@@ -172,6 +179,14 @@ const getLivePricingData = (
   const s = Math.floor((distance % (1000 * 60)) / 1000);
 
   const timeLeft = d > 0 ? `${d}d ${h}h ${m}m ${s}s` : `${h}h ${m}m ${s}s`;
+
+  if (pricingMode === "fixed") {
+    return {
+      timeLeft,
+      livePrice: Math.round(initialPrice * 100) / 100,
+      isExpired: false,
+    };
+  }
 
   const totalHours = (endTime - startTime) / (1000 * 60 * 60);
   const totalDrop = initialPrice - minPrice;
@@ -197,6 +212,7 @@ const LiveCountdown = ({
   expiryTime,
   initialPrice,
   floorPrice,
+  pricingMode,
   textStyle,
 }: {
   prepDate: string;
@@ -204,6 +220,7 @@ const LiveCountdown = ({
   expiryTime: string;
   initialPrice: number;
   floorPrice: number;
+  pricingMode?: string;
   textStyle?: any;
 }) => {
   const [data, setData] = useState(() =>
@@ -212,7 +229,8 @@ const LiveCountdown = ({
       expiryDate,
       expiryTime,
       initialPrice,
-      floorPrice
+      floorPrice,
+      pricingMode
     )
   );
 
@@ -224,13 +242,14 @@ const LiveCountdown = ({
           expiryDate,
           expiryTime,
           initialPrice,
-          floorPrice
+          floorPrice,
+          pricingMode
         )
       );
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [prepDate, expiryDate, expiryTime, initialPrice, floorPrice]);
+  }, [prepDate, expiryDate, expiryTime, initialPrice, floorPrice, pricingMode]);
 
   return (
     <View style={styles.timerRow}>
@@ -780,7 +799,8 @@ export default function Homepage() {
         selectedFood.expiryDate,
         selectedFood.expiryTime,
         selectedFood.price,
-        selectedFood.floorPrice
+        selectedFood.floorPrice,
+        selectedFood.pricingMode
       );
       setModalLivePrice(res.livePrice);
     }, 1000);
@@ -800,13 +820,22 @@ export default function Homepage() {
 
       const fallbackPrep = formatDynamicDateFallback(-2);
       const fallbackExp = formatDynamicDateFallback(24);
+      const nowMs = Date.now();
 
       const formatted: FoodItem[] = (
         Array.isArray(response.data) ? response.data : []
       )
-        .filter(
-          (item: any) => Number(item.qty_available ?? item.quantity ?? 0) > 0
-        )
+        .filter((item: any) => {
+          const qty = Number(item.qty_available ?? item.quantity ?? 0);
+          const st = String(item.status || "Active").trim();
+          if (qty <= 0 || st !== "Active") return false;
+
+          const expDateStr = item.expiry_date || fallbackExp.datePart;
+          const expTimeStr = item.expiry_time || fallbackExp.timePart;
+          const expTs = parseSafeDate(expDateStr, expTimeStr);
+          // Hide expired items and items within the 30-min TTT safety cutoff
+          return expTs - nowMs > 1800 * 1000;
+        })
         .map((item: any, index: number) => {
           const orig = Number(item.original_price || item.orig_price || 0);
           const current = Number(item.price || item.discounted_price || 0);
@@ -837,6 +866,7 @@ export default function Homepage() {
             price: current,
             originalPrice: orig > 0 ? orig : current,
             floorPrice: floor,
+            pricingMode: item.pricing_mode || "fixed",
             discount: discountVal,
             quantity: Number(item.qty_available ?? item.quantity ?? 0),
             unit: item.unit_name || "pcs",
@@ -905,6 +935,9 @@ export default function Homepage() {
           cart[existingIndex].quantity + qty
         );
         cart[existingIndex].price = finalCartPrice;
+        cart[existingIndex].originalPrice = food.originalPrice;
+        cart[existingIndex].floorPrice = food.floorPrice;
+        cart[existingIndex].pricingMode = food.pricingMode;
       } else {
         cart.push({
           ...food,
@@ -951,7 +984,8 @@ export default function Homepage() {
       food.expiryDate,
       food.expiryTime,
       food.price,
-      food.floorPrice
+      food.floorPrice,
+      food.pricingMode
     );
     setModalLivePrice(initialCalc.livePrice);
   };
@@ -972,8 +1006,11 @@ export default function Homepage() {
       item.expiryDate,
       item.expiryTime,
       item.price,
-      item.floorPrice
+      item.floorPrice,
+      item.pricingMode
     );
+
+    if (cardCalc.isExpired) return null;
 
     return (
       <TouchableOpacity
@@ -1024,6 +1061,7 @@ export default function Homepage() {
               expiryTime={item.expiryTime}
               initialPrice={item.price}
               floorPrice={item.floorPrice}
+              pricingMode={item.pricingMode}
             />
           </View>
 
@@ -1324,6 +1362,7 @@ export default function Homepage() {
                         expiryTime={selectedFood.expiryTime}
                         initialPrice={selectedFood.price}
                         floorPrice={selectedFood.floorPrice}
+                        pricingMode={selectedFood.pricingMode}
                         textStyle={{ fontSize: 16, fontFamily: "PoppinsBold" }}
                       />
                       <Text style={styles.modalTimerLabel}>
@@ -1388,7 +1427,7 @@ export default function Homepage() {
                                 marginTop: 2,
                               }}
                             >
-                              "{rev.comment}"
+                              &quot;{rev.comment}&quot;
                             </Text>
                           ) : null}
                         </View>

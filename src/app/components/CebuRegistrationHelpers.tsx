@@ -79,6 +79,163 @@ export const CEBU_CITY_BARANGAYS: BarangayCoord[] = [
   { name: "Zapatera", lat: 10.3086, lng: 123.9006 },
 ];
 
+export function TermsAndConditionsModal({
+  visible,
+  role = "Consumer",
+  onAccept,
+  onClose,
+}: {
+  visible: boolean;
+  role?: "Consumer" | "Merchant" | "FoodBank";
+  onAccept: () => void;
+  onClose: () => void;
+}) {
+  const roleLabel =
+    role === "Merchant"
+      ? "Food Establishments"
+      : role === "FoodBank"
+      ? "Food Bank & NGO Partners"
+      : "Consumers";
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalOverlay}>
+        <View style={[styles.modalCard, { maxWidth: 440, maxHeight: "88%" }]}>
+          <View style={styles.modalHeader}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <Ionicons
+                name="document-text-outline"
+                size={19}
+                color={Colors.primary}
+              />
+              <Text style={styles.modalTitle}>
+                ReServe Terms &amp; Conditions
+              </Text>
+            </View>
+            <TouchableOpacity onPress={onClose}>
+              <Ionicons name="close" size={20} color={Colors.primary2} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            style={{ paddingHorizontal: 18, paddingVertical: 14 }}
+            showsVerticalScrollIndicator={true}
+          >
+            <Text style={styles.termsRoleBanner}>
+              Official Platform Agreement for {roleLabel} (Cebu City Scope)
+            </Text>
+
+            <Text style={styles.termsSectionHeading}>
+              1. Service Scope &amp; Geolocation Matching
+            </Text>
+            <Text style={styles.termsParagraph}>
+              ReServe operates exclusively within Cebu City, Philippines. All
+              accounts must provide accurate Cebu City coordinates for Haversine
+              proximity matching and in-store pickup routing.
+            </Text>
+
+            <Text style={styles.termsSectionHeading}>
+              2. Account Verification &amp; Unique Identity
+            </Text>
+            <Text style={styles.termsParagraph}>
+              Each email address and Philippine mobile number (+639 / 09) may
+              only be registered to a single account. Food Establishments and
+              Food Banks must upload valid Cebu City Business Permits or DSWD /
+              LGU Accreditation Certificates subject to Admin KYB approval.
+              Submitting duplicate applications for a pending establishment is
+              strictly prohibited.
+            </Text>
+
+            <Text style={styles.termsSectionHeading}>
+              3. Food Safety &amp; Time-Temperature Tolerance (RA 10611)
+            </Text>
+            <Text style={styles.termsParagraph}>
+              Merchants warrant that all surplus food listings are safe for
+              human consumption, properly stored under declared Ambient or
+              Chilled conditions, and compliant with the Food Safety Act of 2013
+              (RA 10611). Listings reaching the 30-minute Time-Temperature
+              Tolerance (TTT) safety cutoff are automatically flagged and hidden
+              from the consumer feed.
+            </Text>
+
+            <Text style={styles.termsSectionHeading}>
+              4. 10% Reservation Deposit &amp; 3-Strike No-Show Policy
+            </Text>
+            <Text style={styles.termsParagraph}>
+              Consumers pay a 10% online reservation deposit via Xendit (GCash /
+              Maya) to lock their order and generate an official QR Rescue
+              Voucher. The remaining 90% balance is paid in cash upon store
+              pickup before the expiry deadline. Failure to claim an order past
+              its expiry deadline forfeits the 10% deposit to the merchant and
+              records one (1) No-Show strike. Accumulating three (3) strikes
+              results in automatic account suspension.
+            </Text>
+
+            <Text style={styles.termsSectionHeading}>
+              5. Merchant Inventory Rules &amp; Automated Payouts
+            </Text>
+            <Text style={styles.termsParagraph}>
+              Merchants cannot delete an active food listing while it has
+              pending customer reservations awaiting pickup. Accumulated wallet
+              balances strictly greater than ₱100.00 may be withdrawn via
+              automated Xendit GCash/Maya disbursement (0% fee for Pro Tier;
+              standard platform commission for Free Tier).
+            </Text>
+
+            <Text style={styles.termsSectionHeading}>
+              6. Data Privacy Act Compliance (RA 10173)
+            </Text>
+            <Text style={[styles.termsParagraph, { marginBottom: 18 }]}>
+              By accepting these terms, you consent to the collection and
+              processing of your name, contact details, GPS location, and
+              verification documents in accordance with the Data Privacy Act of
+              2012 (RA 10173) solely for surplus food rescue operations.
+            </Text>
+          </ScrollView>
+
+          <View style={styles.termsModalFooter}>
+            <TouchableOpacity
+              style={[
+                styles.verifyBtn,
+                {
+                  flex: 0.42,
+                  backgroundColor: "#F2F4F3",
+                  borderWidth: 1,
+                  borderColor: Colors.border,
+                },
+              ]}
+              activeOpacity={0.8}
+              onPress={onClose}
+            >
+              <Text style={[styles.verifyBtnText, { color: Colors.primary2 }]}>
+                Close
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.verifyBtn, { flex: 1, flexDirection: "row", gap: 6 }]}
+              activeOpacity={0.85}
+              onPress={onAccept}
+            >
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={17}
+                color={Colors.white}
+              />
+              <Text style={styles.verifyBtnText}>I Accept</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export function ReserveAlertModal({
   visible,
   title,
@@ -875,7 +1032,7 @@ export function CebuAddressMapPicker({
       <View style={styles.mapHeaderRow}>
         <View style={{ flex: 1, paddingRight: 8 }}>
           <Text style={styles.fieldLabel}>
-            Pin Exact Store Location on Map (Haversine 10km Matching) *
+            Pin Exact Location on Map (Haversine 10km Matching) *
           </Text>
           <Text style={styles.coordSubtext}>
             Pinned GPS: {latitude.toFixed(5)}° N, {longitude.toFixed(5)}° E
@@ -1438,5 +1595,38 @@ const styles = StyleSheet.create({
     fontFamily: "PoppinsMedium",
     fontSize: 10,
     lineHeight: 15,
+  },
+  termsRoleBanner: {
+    fontFamily: "PoppinsSemiBold",
+    fontSize: 11,
+    color: Colors.primary,
+    backgroundColor: "#E8EFEA",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  termsSectionHeading: {
+    fontFamily: "PoppinsBold",
+    fontSize: 11.5,
+    color: Colors.primary2,
+    marginTop: 8,
+    marginBottom: 3,
+  },
+  termsParagraph: {
+    fontFamily: "PoppinsRegular",
+    fontSize: 10.5,
+    lineHeight: 16,
+    color: Colors.primary1,
+    marginBottom: 6,
+  },
+  termsModalFooter: {
+    flexDirection: "row",
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    backgroundColor: Colors.background,
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
   },
 });

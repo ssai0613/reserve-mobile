@@ -17,6 +17,7 @@ import {
   FoodBankBottomNav,
   FoodBankHeader,
   getFoodBankStorage,
+  setFoodBankStorage,
   switchFoodBankTab,
   useIsInsideFoodBankShell,
 } from "../components/FoodBankNav";
@@ -28,6 +29,9 @@ export default function FoodBankDashboard() {
   if (!isInsideShell) return null;
 
   const [data, setData] = useState<any | null>(cachedFbDashboardMemory);
+  const [radiusKm, setRadiusKm] = useState<number>(
+    Number(cachedFbDashboardMemory?.radius_km || 10)
+  );
   const [loading, setLoading] = useState(!cachedFbDashboardMemory);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -43,6 +47,15 @@ export default function FoodBankDashboard() {
       );
       cachedFbDashboardMemory = response.data;
       setData(response.data);
+
+      const liveRadius = Number(
+        response.data?.radius_km ?? response.data?.stats?.radius_km ?? 10
+      );
+      if (liveRadius > 0) {
+        setRadiusKm(liveRadius);
+        await setFoodBankStorage("gov_radius_km", String(liveRadius));
+        DeviceEventEmitter.emit("fb_radius_updated", { radiusKm: liveRadius });
+      }
     } catch (e) {
       console.log("FoodBank dashboard error:", e);
     } finally {
@@ -115,13 +128,13 @@ export default function FoodBankDashboard() {
               />
               <StatCard
                 icon="gift-outline"
-                label="10km Donations"
+                label={`${radiusKm}km Donations`}
                 value={String(stats.offers_available || 0)}
                 onPress={() => switchFoodBankTab("Donations")}
               />
               <StatCard
                 icon="storefront-outline"
-                label="10km Merchants"
+                label={`${radiusKm}km Merchants`}
                 value={String(stats.partners || 0)}
                 onPress={() => switchFoodBankTab("Partners")}
               />
@@ -134,7 +147,7 @@ export default function FoodBankDashboard() {
             </View>
           )}
 
-          {/* BROWSE 10KM MERCHANTS & BULK REQUEST CTA */}
+          {/* BROWSE MERCHANTS & BULK REQUEST CTA */}
           <TouchableOpacity
             style={styles.createButton}
             activeOpacity={0.85}
@@ -145,7 +158,7 @@ export default function FoodBankDashboard() {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.createTitle}>
-                Browse Merchants Within 10km
+                Browse Merchants Within {radiusKm}km
               </Text>
               <Text style={styles.createSubtitle}>
                 View active listings and send single or bulk donation requests
@@ -161,7 +174,7 @@ export default function FoodBankDashboard() {
                 Available Surplus Donations
               </Text>
               <Text style={styles.sectionSubtitle}>
-                Posted by merchants within your 10km Cebu City radius
+                Posted by merchants within your {radiusKm}km Cebu City radius
               </Text>
             </View>
             <TouchableOpacity onPress={() => switchFoodBankTab("Donations")}>
@@ -214,12 +227,13 @@ export default function FoodBankDashboard() {
                 color={Colors.primary}
               />
               <Text style={styles.softCardText}>
-                No urgent posted donations right now. Tap "Browse Merchants Within 10km" above to request active listings!
+                No urgent posted donations right now. Tap &quot;Browse Merchants
+                Within {radiusKm}km&quot; above to request active listings!
               </Text>
             </View>
           )}
 
-          {/* RECENT ACTIVITY (CLICKABLE & SORTED LATEST FIRST) */}
+          {/* RECENT ACTIVITY */}
           <View style={[styles.sectionHeaderRow, { marginTop: 18 }]}>
             <View>
               <Text style={styles.sectionTitle}>Recent Activity</Text>

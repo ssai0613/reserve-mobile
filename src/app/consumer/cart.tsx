@@ -2,10 +2,12 @@ import { Colors } from "@/constants/color";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import * as SecureStore from "expo-secure-store";
+import { useCallback, useEffect, useState } from "react";
 import {
   DeviceEventEmitter,
   Image,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -13,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { api } from "../../../services/api";
 import {
   ReserveAlertModal,
   ReserveModalState,
@@ -25,6 +28,72 @@ import {
 } from "../components/ConsumerNav";
 
 const CART_STORAGE_KEY = "@reserve_cart";
+
+const getStorageItem = async (key: string): Promise<string | null> => {
+  if (Platform.OS === "web") return localStorage.getItem(key);
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch (e) {
+    return null;
+  }
+};
+
+const parseSafeDate = (dateStr: string, timeStr?: string) => {
+  try {
+    let full = timeStr ? `${dateStr} ${timeStr}` : dateStr;
+    full = full.replace(/,/g, "").replace(/\s+/g, " ").trim();
+    const parts = full.split(" ");
+    const monthIndex = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ].indexOf(parts[0]);
+    const day = parseInt(parts[1], 10);
+    const year = parseInt(parts[2], 10);
+    let hours = 0;
+    let minutes = 0;
+    if (parts[3]) {
+      const timeParts = parts[3].split(":");
+      hours = parseInt(timeParts[0], 10);
+      minutes = parseInt(timeParts[1], 10);
+      const fullUpper = full.toUpperCase();
+      if (fullUpper.includes("PM") && hours < 12) hours += 12;
+      if (fullUpper.includes("AM") && hours === 12) hours = 0;
+    }
+    return new Date(year, monthIndex, day, hours, minutes).getTime();
+  } catch (error) {
+    return new Date().getTime();
+  }
+};
+
+const computeCurrentLivePrice = (
+  prepDate: string,
+  expDate: string,
+  expTime: string,
+  initialPrice: number,
+  minPrice: number,
+  pricingMode?: string
+) => {
+  if (pricingMode === "fixed") {
+    return Math.round(initialPrice * 100) / 100;
+  }
+  const startTime = parseSafeDate(prepDate);
+  const endTime = parseSafeDate(expDate, expTime);
+  const now = Date.now();
+  if (endTime <= now) {
+    return minPrice > 0 ? minPrice : initialPrice;
+  }
+  const totalHours = (endTime - startTime) / (1000 * 60 * 60);
+  const totalDrop = initialPrice - minPrice;
+  const hourlyDropAmount = totalHours > 0 ? totalDrop / totalHours : 0;
+  const hoursPassed = Math.floor((now - startTime) / (1000 * 60 * 60));
+
+  let livePrice = initialPrice;
+  if (hoursPassed > 0 && minPrice > 0 && initialPrice > minPrice) {
+    livePrice = initialPrice - hourlyDropAmount * hoursPassed;
+    if (livePrice < minPrice) livePrice = minPrice;
+  }
+  return Math.round(livePrice * 100) / 100;
+};
 
 export default function CartScreen() {
   const isInsideShell = useIsInsideConsumerShell();
@@ -49,46 +118,147 @@ export default function CartScreen() {
     type: "success" | "error" | "info" | "warning" = "info"
   ) => setModalAlert({ visible: true, title, message, type });
 
-  useEffect(() => {
-    loadCart();
-    const cartListener = DeviceEventEmitter.addListener(
-      "consumer_cart_updated",
-      () => {
-        loadCart();
-      }
-    );
-    return () => {
-      cartListener.remove();
-    };
-  }, []);
-
-  const loadCart = async () => {
+  const loadAndSyncCart = useCallback(async (syncWithServer = true) => {
     try {
       const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
-      if (storedCart) {
-        const parsed = JSON.parse(storedCart);
-        setCartItems(parsed);
-        if (parsed.length > 0) {
-          setSelectedMerchantName((prev) =>
-            prev && parsed.some((i: any) => i.establishment === prev)
-              ? prev
-              : parsed[0].establishment || "Partner Merchant"
-          );
-        } else {
-          setSelectedMerchantName(null);
-        }
-      } else {
+      if (!storedCart) {
         setCartItems([]);
+        setSelectedMerchantName(null);
+        return;
+      }
+
+      let parsed: any[] = JSON.parse(storedCart);
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        setCartItems([]);
+        setSelectedMerchantName(null);
+        return;
+      }
+
+      if (syncWithServer) {
+        try {
+          const storedId = (await getStorageItem("profile_id")) || "0";
+          const storedEmail = (await getStorageItem("user_email")) || "";
+          const response = await api.get(
+            `listings/?consumer=${storedId}&email=${encodeURIComponent(
+              storedEmail
+            )}`
+          );
+          const liveFeed: any[] = Array.isArray(response.data)
+            ? response.data
+            : [];
+          const liveMap = new Map<string, any>();
+          liveFeed.forEach((lf) => {
+            const key = String(lf.prod_id || lf.id);
+            liveMap.set(key, lf);
+          });
+
+          const syncedCart: any[] = [];
+          for (const item of parsed) {
+            const liveItem = liveMap.get(String(item.id));
+            if (!liveItem) {
+              // Item was expired, flagged, sold out, or removed by merchant
+              continue;
+            }
+            const availStock = Number(
+              liveItem.qty_available ?? liveItem.quantity ?? 0
+            );
+            if (availStock <= 0) continue;
+
+            const basePrice = Number(
+              liveItem.price ?? liveItem.discounted_price ?? item.price ?? 0
+            );
+            const origPrice = Number(
+              liveItem.original_price ??
+                liveItem.orig_price ??
+                item.originalPrice ??
+                basePrice
+            );
+            const floorPrice = Number(
+              liveItem.floor_price ?? item.floorPrice ?? basePrice
+            );
+            const prepDate =
+              liveItem.safely_anchor_time ||
+              liveItem.preparation_date ||
+              item.preparationDate ||
+              "";
+            const expDate = liveItem.expiry_date || item.expiryDate || "";
+            const expTime = liveItem.expiry_time || item.expiryTime || "";
+            const pMode = liveItem.pricing_mode || item.pricingMode || "fixed";
+
+            const updatedLivePrice = computeCurrentLivePrice(
+              prepDate,
+              expDate,
+              expTime,
+              basePrice,
+              floorPrice,
+              pMode
+            );
+
+            syncedCart.push({
+              ...item,
+              name: liveItem.prod_name || item.name,
+              establishment: liveItem.merchant_name || item.establishment,
+              price: updatedLivePrice,
+              originalPrice: origPrice > 0 ? origPrice : updatedLivePrice,
+              floorPrice: floorPrice,
+              pricingMode: pMode,
+              maxStock: availStock,
+              quantity: Math.min(
+                availStock,
+                Math.max(1, Number(item.quantity || 1))
+              ),
+              expiryDate: expDate,
+              expiryTime: expTime,
+              image: liveItem.image_path || item.image,
+            });
+          }
+
+          parsed = syncedCart;
+          if (parsed.length === 0) {
+            await AsyncStorage.removeItem(CART_STORAGE_KEY);
+          } else {
+            await AsyncStorage.setItem(
+              CART_STORAGE_KEY,
+              JSON.stringify(parsed)
+            );
+          }
+        } catch (syncErr) {
+          console.log("Cart live price sync fallback notice:", syncErr);
+        }
+      }
+
+      setCartItems(parsed);
+      if (parsed.length > 0) {
+        setSelectedMerchantName((prev) =>
+          prev && parsed.some((i: any) => i.establishment === prev)
+            ? prev
+            : parsed[0].establishment || "Partner Merchant"
+        );
+      } else {
         setSelectedMerchantName(null);
       }
     } catch (e) {
       console.log("Cart load error:", e);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadAndSyncCart(true);
+
+    const cartListener = DeviceEventEmitter.addListener(
+      "consumer_cart_updated",
+      () => {
+        loadAndSyncCart(true);
+      }
+    );
+    return () => {
+      cartListener.remove();
+    };
+  }, [loadAndSyncCart]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadCart();
+    await loadAndSyncCart(true);
     setRefreshing(false);
   };
 
@@ -107,7 +277,6 @@ export default function CartScreen() {
     ) {
       setSelectedMerchantName(updated[0]?.establishment || null);
     }
-    DeviceEventEmitter.emit("consumer_cart_updated");
   };
 
   const changeQty = (id: string, delta: number) => {
@@ -142,7 +311,7 @@ export default function CartScreen() {
     ? merchantGroups[selectedMerchantName] || []
     : [];
 
-  const handleProceedToPaymentSummary = () => {
+  const handleProceedToPaymentSummary = async () => {
     if (!selectedMerchantName || activeMerchantItems.length === 0) {
       showModal(
         "Select a Merchant",
@@ -152,6 +321,7 @@ export default function CartScreen() {
       return;
     }
 
+    await loadAndSyncCart(true);
     router.push({
       pathname: "/consumer/payment-summary" as any,
       params: { merchant: selectedMerchantName },
@@ -177,8 +347,8 @@ export default function CartScreen() {
         <View style={styles.titleSection}>
           <Text style={styles.pageTitle}>My Rescue Cart</Text>
           <Text style={styles.pageSubtitle}>
-            Select a merchant establishment below and proceed to your payment
-            summary
+            Live merchant prices sync automatically when you view or refresh
+            your cart
           </Text>
         </View>
 
@@ -395,199 +565,38 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scrollContent: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24 },
   titleSection: { marginBottom: 16 },
-  pageTitle: {
-    fontFamily: "PoppinsBold",
-    fontSize: 24,
-    color: Colors.primary2,
-  },
-  pageSubtitle: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 11,
-    color: Colors.primary1,
-    marginTop: 2,
-  },
-  merchantGroupCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    borderColor: Colors.border,
-    marginBottom: 16,
-    overflow: "hidden",
-  },
-  merchantGroupCardActive: {
-    borderColor: Colors.primary,
-    backgroundColor: "#F9FCFA",
-  },
-  merchantHeaderBar: {
-    backgroundColor: "#E8EFEA",
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  merchantHeaderLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    flex: 1,
-  },
-  merchantRadio: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1.5,
-    borderColor: Colors.primary1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: Colors.white,
-  },
+  pageTitle: { fontFamily: "PoppinsBold", fontSize: 24, color: Colors.primary2 },
+  pageSubtitle: { fontFamily: "PoppinsRegular", fontSize: 11, color: Colors.primary1, marginTop: 2 },
+  merchantGroupCard: { backgroundColor: Colors.white, borderRadius: 16, borderWidth: 1.5, borderColor: Colors.border, marginBottom: 16, overflow: "hidden" },
+  merchantGroupCardActive: { borderColor: Colors.primary, backgroundColor: "#F9FCFA" },
+  merchantHeaderBar: { backgroundColor: "#E8EFEA", paddingHorizontal: 14, paddingVertical: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  merchantHeaderLeft: { flexDirection: "row", alignItems: "center", gap: 8, flex: 1 },
+  merchantRadio: { width: 18, height: 18, borderRadius: 9, borderWidth: 1.5, borderColor: Colors.primary1, alignItems: "center", justifyContent: "center", backgroundColor: Colors.white },
   merchantRadioActive: { borderColor: Colors.primary },
-  merchantRadioDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 4.5,
-    backgroundColor: Colors.primary,
-  },
-  merchantTitleText: {
-    fontFamily: "PoppinsBold",
-    fontSize: 13.5,
-    color: Colors.primary2,
-  },
-  merchantSubText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10.5,
-    color: Colors.primary1,
-  },
-  selectMerchantBadge: {
-    backgroundColor: Colors.primary,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-  },
-  selectMerchantBadgeText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 10,
-    color: Colors.white,
-  },
-  cartCard: {
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 14,
-    padding: 12,
-    flexDirection: "row",
-    marginBottom: 10,
-  },
-  productImage: {
-    width: 84,
-    height: 90,
-    borderRadius: 10,
-    backgroundColor: Colors.input,
-  },
+  merchantRadioDot: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: Colors.primary },
+  merchantTitleText: { fontFamily: "PoppinsBold", fontSize: 13.5, color: Colors.primary2 },
+  merchantSubText: { fontFamily: "PoppinsRegular", fontSize: 10.5, color: Colors.primary1 },
+  selectMerchantBadge: { backgroundColor: Colors.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  selectMerchantBadgeText: { fontFamily: "PoppinsSemiBold", fontSize: 10, color: Colors.white },
+  cartCard: { backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 14, padding: 12, flexDirection: "row", marginBottom: 10 },
+  productImage: { width: 84, height: 90, borderRadius: 10, backgroundColor: Colors.input },
   productInfo: { flex: 1, marginLeft: 12, justifyContent: "space-between" },
-  productTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-  },
+  productTopRow: { flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between" },
   productNameContainer: { flex: 1, paddingRight: 6 },
-  productName: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 13,
-    color: Colors.primary2,
-  },
-  establishmentName: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.primary1,
-    marginTop: 1,
-  },
+  productName: { fontFamily: "PoppinsSemiBold", fontSize: 13, color: Colors.primary2 },
+  establishmentName: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.primary1, marginTop: 1 },
   deleteButton: { width: 28, height: 28, alignItems: "center", justifyContent: "center" },
-  productDetail: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    marginTop: -15,
-  },
-  productDetailText: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.icon,
-  },
-  productBottomRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    marginTop: 8,
-  },
-  currentPrice: {
-    fontFamily: "PoppinsBold",
-    fontSize: 15,
-    color: Colors.primary,
-  },
-  oldPrice: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 10,
-    color: Colors.placeholder,
-    textDecorationLine: "line-through",
-  },
-  quantityContainer: {
-    height: 32,
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 8,
-    overflow: "hidden",
-  },
-  quantityButton: {
-    width: 30,
-    height: 32,
-    backgroundColor: Colors.input,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  quantityText: {
-    minWidth: 28,
-    textAlign: "center",
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: Colors.primary2,
-  },
-  addMoreButton: {
-    height: 46,
-    backgroundColor: Colors.white,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    marginBottom: 14,
-  },
-  addMoreText: {
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12,
-    color: Colors.primary,
-  },
-  checkoutButton: {
-    height: 50,
-    backgroundColor: Colors.button,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  checkoutText: {
-    flex: 1,
-    textAlign: "center",
-    fontFamily: "PoppinsSemiBold",
-    fontSize: 12.5,
-    color: Colors.white,
-  },
+  productDetail: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: -15 },
+  productDetailText: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.icon },
+  productBottomRow: { flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between", marginTop: 8 },
+  currentPrice: { fontFamily: "PoppinsBold", fontSize: 15, color: Colors.primary },
+  oldPrice: { fontFamily: "PoppinsRegular", fontSize: 10, color: Colors.placeholder, textDecorationLine: "line-through" },
+  quantityContainer: { height: 32, flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: Colors.border, borderRadius: 8, overflow: "hidden" },
+  quantityButton: { width: 30, height: 32, backgroundColor: Colors.input, alignItems: "center", justifyContent: "center" },
+  quantityText: { minWidth: 28, textAlign: "center", fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary2 },
+  addMoreButton: { height: 46, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginBottom: 14 },
+  addMoreText: { fontFamily: "PoppinsSemiBold", fontSize: 12, color: Colors.primary },
+  checkoutButton: { height: 50, backgroundColor: Colors.button, borderRadius: 12, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+  checkoutText: { flex: 1, textAlign: "center", fontFamily: "PoppinsSemiBold", fontSize: 12.5, color: Colors.white },
   bottomSpace: { height: 16 },
 });

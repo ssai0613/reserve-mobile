@@ -20,6 +20,7 @@ import {
   RegistrationOtpModal,
   ReserveAlertModal,
   ReserveModalState,
+  TermsAndConditionsModal,
 } from "../components/CebuRegistrationHelpers";
 
 export default function ConsumerSignup() {
@@ -44,11 +45,11 @@ export default function ConsumerSignup() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isAgreed, setIsAgreed] = useState(false);
+  const [termsModalVisible, setTermsModalVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpCode, setOtpCode] = useState("");
-  const [devOtpHint, setDevOtpHint] = useState("");
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
 
   const [modalAlert, setModalAlert] = useState<ReserveModalState>({
@@ -110,22 +111,17 @@ export default function ConsumerSignup() {
       return;
     }
     if (!isAgreed) {
-      showModal(
-        "Terms of Service",
-        "You must agree to the Terms of Service before creating your account.",
-        "warning"
-      );
+      setTermsModalVisible(true);
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await api.post("accounts/send-otp/", {
+      await api.post("accounts/send-otp/", {
         email: email.trim(),
         phone: phoneNumber.trim(),
         channel: "email",
       });
-      setDevOtpHint(res.data?.dev_otp_preview || "");
       setOtpCode("");
       setOtpModalVisible(true);
     } catch (error: any) {
@@ -244,7 +240,9 @@ export default function ConsumerSignup() {
             <View style={styles.sectionNumber}>
               <Text style={styles.sectionNumberText}>1</Text>
             </View>
-            <Text style={styles.sectionTitle}>Personal & Location Details</Text>
+            <Text style={styles.sectionTitle}>
+              Personal &amp; Location Details
+            </Text>
           </View>
 
           <View style={styles.fieldContainer}>
@@ -266,7 +264,6 @@ export default function ConsumerSignup() {
             </View>
           </View>
 
-          {/* INLINE PHONE OTP VERIFIER */}
           <PhoneOtpVerifier
             label="Phone Number (SMS OTP Required) *"
             phone={phoneNumber}
@@ -355,7 +352,6 @@ export default function ConsumerSignup() {
             </View>
           </View>
 
-          {/* CONFIRM PASSWORD FIELD */}
           <View style={styles.fieldContainer}>
             <Text style={styles.label}>Confirm Password *</Text>
             <View
@@ -396,7 +392,7 @@ export default function ConsumerSignup() {
           <TouchableOpacity
             style={styles.termsContainer}
             activeOpacity={0.7}
-            onPress={() => setIsAgreed(!isAgreed)}
+            onPress={() => setTermsModalVisible(true)}
           >
             <View
               style={[
@@ -409,8 +405,9 @@ export default function ConsumerSignup() {
               )}
             </View>
             <Text style={styles.termsText}>
-              I have read and agree to the{" "}
-              <Text style={styles.termsLink}>Terms of Service</Text>.
+              I accept the{" "}
+              <Text style={styles.termsLink}>Terms and Conditions</Text> (Tap to
+              read &amp; accept).
             </Text>
           </TouchableOpacity>
 
@@ -440,6 +437,16 @@ export default function ConsumerSignup() {
         </View>
       </ScrollView>
 
+      <TermsAndConditionsModal
+        visible={termsModalVisible}
+        role="Consumer"
+        onAccept={() => {
+          setIsAgreed(true);
+          setTermsModalVisible(false);
+        }}
+        onClose={() => setTermsModalVisible(false)}
+      />
+
       <RegistrationOtpModal
         visible={otpModalVisible}
         email={email}
@@ -450,7 +457,6 @@ export default function ConsumerSignup() {
         onResend={handleRequestOtp}
         onClose={() => setOtpModalVisible(false)}
         isVerifying={isVerifyingOtp}
-        devOtpHint={devOtpHint}
       />
 
       <ReserveAlertModal
@@ -460,7 +466,11 @@ export default function ConsumerSignup() {
         type={modalAlert.type}
         onClose={() => {
           const cb = modalAlert.onConfirm;
-          setModalAlert((prev) => ({ ...prev, visible: false, onConfirm: null }));
+          setModalAlert((prev) => ({
+            ...prev,
+            visible: false,
+            onConfirm: null,
+          }));
           if (cb) cb();
         }}
       />

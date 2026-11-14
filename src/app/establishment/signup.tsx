@@ -4,6 +4,7 @@ import * as ImagePicker from "expo-image-picker";
 import { router } from "expo-router";
 import { useState } from "react";
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -32,6 +33,19 @@ export default function EstablishmentSignup() {
   const isNarrowPhone = width < 360;
   const horizontalPadding = isNarrowPhone ? 12 : 15;
 
+  // Permit + Autofilled Editable Business Fields
+  const [permitFile, setPermitFile] = useState<any>(null);
+  const [isScanningOcr, setIsScanningOcr] = useState(false);
+  const [ocrStatusBanner, setOcrStatusBanner] = useState<string | null>(null);
+
+  const [busName, setBusName] = useState("");
+  const [address, setAddress] = useState("");
+  const [permitNumber, setPermitNumber] = useState("");
+  const [lineOfBusiness, setLineOfBusiness] = useState("");
+  const [tinNumber, setTinNumber] = useState("");
+  const [calendarYear, setCalendarYear] = useState("");
+  const [expiryDate, setExpiryDate] = useState("2026-12-31");
+
   const [latitude, setLatitude] = useState(10.3157);
   const [longitude, setLongitude] = useState(123.8854);
   const [contactPerson, setContactPerson] = useState("");
@@ -49,7 +63,6 @@ export default function EstablishmentSignup() {
   const [dropdownVisible, setDropdownVisible] = useState(false);
   const businessTypes = ["Bakeshop", "Market Vendor"];
 
-  const [permitFile, setPermitFile] = useState<any>(null);
   const [isAgreed, setIsAgreed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -74,21 +87,113 @@ export default function EstablishmentSignup() {
     setModalAlert({ visible: true, title, message, type, onConfirm });
   };
 
+  const scanPermitAndAutofill = async (pickedAsset: {
+    uri: string;
+    name: string;
+    mimeType: string;
+    file?: any;
+  }) => {
+    setIsScanningOcr(true);
+    setOcrStatusBanner(
+      "Scanning Business Permit with AI OCR to autofill your details..."
+    );
+
+    try {
+      const formData = new FormData();
+      if (Platform.OS === "web" && pickedAsset.file) {
+        formData.append("bus_permit_path", pickedAsset.file);
+      } else if (Platform.OS === "web" && pickedAsset.uri) {
+        const res = await fetch(pickedAsset.uri);
+        const blob = await res.blob();
+        formData.append(
+          "bus_permit_path",
+          blob,
+          pickedAsset.name || "business_permit.jpg"
+        );
+      } else {
+        formData.append("bus_permit_path", {
+          uri: pickedAsset.uri,
+          name: pickedAsset.name || "business_permit.jpg",
+          type: pickedAsset.mimeType || "image/jpeg",
+        } as any);
+      }
+
+      const res = await api.post("accounts/scan-permit/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      const ocr = res.data?.ocr_data || {};
+      let detectedCount = 0;
+
+      if (ocr.business_name) {
+        setBusName(ocr.business_name);
+        detectedCount++;
+      }
+      if (ocr.business_address) {
+        setAddress(ocr.business_address);
+        detectedCount++;
+      }
+      if (ocr.permit_number) {
+        setPermitNumber(ocr.permit_number);
+        detectedCount++;
+      }
+      if (ocr.nature_of_business) {
+        setLineOfBusiness(ocr.nature_of_business);
+        detectedCount++;
+      }
+      if (ocr.tin_number) {
+        setTinNumber(ocr.tin_number);
+        detectedCount++;
+      }
+      if (ocr.calendar_year) {
+        setCalendarYear(ocr.calendar_year);
+        detectedCount++;
+      }
+      if (ocr.expiry_date) {
+        setExpiryDate(ocr.expiry_date);
+      }
+      if (ocr.representative && !contactPerson.trim()) {
+        setContactPerson(ocr.representative);
+      }
+
+      if (detectedCount > 0) {
+        setOcrStatusBanner(
+          "AI OCR autofilled your permit details below! Please review and edit any field if needed."
+        );
+      } else {
+        setOcrStatusBanner(
+          "Permit uploaded! Could not auto-detect all text—please type or edit the fields below."
+        );
+      }
+    } catch (err) {
+      console.log("OCR Autofill Notice:", err);
+      setOcrStatusBanner(
+        "Permit attached! Please fill in or verify the business details below."
+      );
+    } finally {
+      setIsScanningOcr(false);
+    }
+  };
+
   const pickDocument = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        quality: 1,
+        quality: 0.8,
       });
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const asset = result.assets[0];
-        setPermitFile({
+        const rawName = asset.fileName || "business_permit.jpg";
+        const safeJpgName = rawName.replace(/\.(heic|heif)$/i, ".jpg");
+        const fileObj = {
           uri: asset.uri,
-          name: asset.fileName || "business_permit.jpg",
-          mimeType: asset.mimeType || "image/jpeg",
+          name: safeJpgName,
+          mimeType: "image/jpeg",
           file: (asset as any).file,
-        });
+        };
+        setPermitFile(fileObj);
+        await scanPermitAndAutofill(fileObj);
       }
     } catch (err) {
       console.log("Error picking document:", err);
@@ -97,17 +202,23 @@ export default function EstablishmentSignup() {
 
   const handleRequestOtp = async () => {
     if (
+      !permitFile ||
+      !busName.trim() ||
+      !address.trim() ||
+      !permitNumber.trim() ||
+      !lineOfBusiness.trim() ||
+      !tinNumber.trim() ||
+      !calendarYear.trim() ||
       !contactPerson.trim() ||
       !phone.trim() ||
       !email.trim() ||
       !password ||
       !confirmPassword ||
-      !merchType ||
-      !permitFile
+      !merchType
     ) {
       showModal(
         "Missing Required Details",
-        "Please fill in your Contact Person, verified Phone Number, Email, Password, Business Type, pin your location on the map, and upload your Cebu City Business Permit.",
+        "Please upload your Business Permit, review/complete all autofilled permit fields (Establishment Name, Address, Permit No., Line of Business, TIN, Calendar Year), select your Business Type, and complete your Contact & Account details.",
         "warning"
       );
       return;
@@ -203,11 +314,17 @@ export default function EstablishmentSignup() {
 
       formData.append("user_email", email.trim());
       formData.append("user_pass", password);
+      formData.append("bus_name", busName.trim());
+      formData.append("address", address.trim());
+      formData.append("permit_number", permitNumber.trim());
+      formData.append("line_of_business", lineOfBusiness.trim());
+      formData.append("tin_number", tinNumber.trim());
+      formData.append("calendar_year", calendarYear.trim());
       formData.append("contact_person", contactPerson.trim());
       formData.append("hotline", hotline.trim());
       formData.append("phone", phone.trim());
       formData.append("merch_type", merchType);
-      formData.append("bus_expiry_date", "2026-12-31");
+      formData.append("bus_expiry_date", expiryDate || "2026-12-31");
       formData.append("latitude", String(latitude));
       formData.append("longitude", String(longitude));
 
@@ -229,21 +346,15 @@ export default function EstablishmentSignup() {
         } as any);
       }
 
-      const regRes = await api.post("accounts/register/merchant/", formData, {
+      await api.post("accounts/register/merchant/", formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
       });
 
-      const ocrName = regRes.data?.ocr_analysis?.business_name;
-      const detectedMsg =
-        ocrName && ocrName !== "Not Detected"
-          ? `Detected Establishment: "${ocrName}". `
-          : "";
-
       showModal(
         "Application Submitted!",
-        `Phone & Email verified! ${detectedMsg}Your Business Permit has been scanned via AI OCR and sent to ReServe Admin for KYB verification.`,
+        `Phone & Email verified! Your registration for "${busName.trim()}" has been submitted to the ReServe Admin team for review and approval.`,
         "success",
         () => router.replace("/consumer")
       );
@@ -303,37 +414,206 @@ export default function EstablishmentSignup() {
               FOOD ESTABLISHMENT
             </Text>
             <Text style={styles.mainSubtitle}>
-              Register your establishment to list surplus food and help reduce
-              food waste.
+              Upload your Cebu City Business Permit to autofill your business
+              details via AI OCR, review or edit any field, and submit for Admin
+              approval.
             </Text>
           </View>
 
+          {/* STEP 1: UPLOAD PERMIT & AUTOFILL BUSINESS DETAILS */}
           <View style={styles.sectionHeader}>
             <View style={styles.sectionNumber}>
               <Text style={styles.sectionNumberText}>1</Text>
             </View>
-            <Text style={styles.sectionTitle}>
-              Store Location Pin &amp; Contact Details
-            </Text>
+            <View style={styles.sectionTitleArea}>
+              <Text style={styles.sectionTitle}>
+                Upload Business Permit (AI OCR Autofill)
+              </Text>
+              <Text style={styles.requiredText}>
+                Autofills Establishment Name, Address, Permit No., TIN &amp;
+                Line of Business
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.ocrNoticeBanner}>
+          <TouchableOpacity
+            style={styles.uploadBox}
+            activeOpacity={0.7}
+            onPress={pickDocument}
+            disabled={isScanningOcr}
+          >
+            <View style={styles.uploadIconCircle}>
+              {isScanningOcr ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <Ionicons
+                  name="document-text-outline"
+                  size={24}
+                  color={Colors.primary}
+                />
+              )}
+            </View>
+            <View style={styles.uploadContent}>
+              <Text style={styles.uploadTitle}>
+                Cebu City Mayor&apos;s Business Permit *
+              </Text>
+              <Text style={styles.uploadSubtitle}>
+                {isScanningOcr
+                  ? "Scanning permit with AI OCR..."
+                  : permitFile
+                  ? permitFile.name
+                  : "JPG, PNG, or HEIC Image"}
+              </Text>
+              <Text style={styles.uploadAction}>
+                {permitFile
+                  ? "Tap to upload a different permit & re-scan"
+                  : "Tap to upload & autofill fields below"}
+              </Text>
+            </View>
             <Ionicons
-              name="sparkles-outline"
-              size={18}
+              name={permitFile ? "checkmark-circle" : "cloud-upload-outline"}
+              size={23}
               color={Colors.primary}
             />
-            <Text style={styles.ocrNoticeText}>
-              <Text style={{ fontFamily: "PoppinsSemiBold" }}>
-                Automated AI OCR Onboarding:
-              </Text>{" "}
-              You do not need to type your Establishment Name or Business
-              Address manually—our AI OCR engine extracts them directly from
-              your uploaded Cebu City Business Permit in Step 4. Simply pin your
-              exact store coordinates on the map below!
+          </TouchableOpacity>
+
+          {ocrStatusBanner && (
+            <View style={styles.ocrNoticeBanner}>
+              <Ionicons
+                name={isScanningOcr ? "sync-outline" : "sparkles-outline"}
+                size={17}
+                color={Colors.primary}
+              />
+              <Text style={styles.ocrNoticeText}>{ocrStatusBanner}</Text>
+            </View>
+          )}
+
+          {/* EDITABLE AUTOFILLED PLACEHOLDERS */}
+          <View style={styles.fieldContainer}>
+            <Text style={styles.label}>
+              Establishment Name (Autofilled • Editable) *
             </Text>
+            <View style={styles.inputContainer}>
+              <Ionicons
+                name="storefront-outline"
+                size={19}
+                color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. TISA FRESH PRODUCE TRADING"
+                placeholderTextColor={Colors.placeholder}
+                value={busName}
+                onChangeText={setBusName}
+              />
+            </View>
           </View>
 
+          <View style={styles.fieldContainer}>
+            <Text style={styles.label}>
+              Business Address (Autofilled • Editable) *
+            </Text>
+            <View style={styles.inputContainer}>
+              <Ionicons
+                name="location-outline"
+                size={19}
+                color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Tisa Public Market, Katipunan Street, Tisa, Cebu City"
+                placeholderTextColor={Colors.placeholder}
+                value={address}
+                onChangeText={setAddress}
+              />
+            </View>
+          </View>
+
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <View style={[styles.fieldContainer, { flex: 1 }]}>
+              <Text style={styles.label}>Business Permit No. *</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons
+                  name="document-outline"
+                  size={18}
+                  color={Colors.primary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. 126225"
+                  placeholderTextColor={Colors.placeholder}
+                  value={permitNumber}
+                  onChangeText={setPermitNumber}
+                />
+              </View>
+            </View>
+
+            <View style={[styles.fieldContainer, { flex: 1 }]}>
+              <Text style={styles.label}>Calendar Year *</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons
+                  name="calendar-outline"
+                  size={18}
+                  color={Colors.primary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. 2026-2027"
+                  placeholderTextColor={Colors.placeholder}
+                  value={calendarYear}
+                  onChangeText={setCalendarYear}
+                />
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.fieldContainer}>
+            <Text style={styles.label}>
+              Line of Business (Autofilled • Editable) *
+            </Text>
+            <View style={styles.inputContainer}>
+              <Ionicons
+                name="briefcase-outline"
+                size={19}
+                color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Retail sale of fresh vegetables; Retail sale of seasonal fruits"
+                placeholderTextColor={Colors.placeholder}
+                value={lineOfBusiness}
+                onChangeText={setLineOfBusiness}
+              />
+            </View>
+          </View>
+
+          <View style={styles.fieldContainer}>
+            <Text style={styles.label}>
+              TIN Number (Autofilled • Editable) *
+            </Text>
+            <View style={styles.inputContainer}>
+              <Ionicons
+                name="card-outline"
+                size={19}
+                color={Colors.primary}
+                style={styles.inputIcon}
+              />
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. 345-678-901-000"
+                placeholderTextColor={Colors.placeholder}
+                value={tinNumber}
+                onChangeText={setTinNumber}
+              />
+            </View>
+          </View>
+
+          {/* MAP PIN FOR 10KM HAVERSINE MATCHING */}
           <CebuAddressMapPicker
             pinOnly
             latitude={latitude}
@@ -345,7 +625,9 @@ export default function EstablishmentSignup() {
           />
 
           <View style={styles.fieldContainer}>
-            <Text style={styles.label}>Contact Person *</Text>
+            <Text style={styles.label}>
+              Contact Person / Authorized Taxpayer *
+            </Text>
             <View style={styles.inputContainer}>
               <Ionicons
                 name="person-outline"
@@ -355,7 +637,7 @@ export default function EstablishmentSignup() {
               />
               <TextInput
                 style={styles.input}
-                placeholder="e.g. Kate Cogtas"
+                placeholder="e.g. Maria L. Santos"
                 placeholderTextColor={Colors.placeholder}
                 value={contactPerson}
                 onChangeText={setContactPerson}
@@ -383,7 +665,6 @@ export default function EstablishmentSignup() {
             </View>
           </View>
 
-          {/* INLINE PHONE OTP VERIFIER */}
           <PhoneOtpVerifier
             label="Contact Person Number (SMS OTP Required) *"
             phone={phone}
@@ -395,6 +676,7 @@ export default function EstablishmentSignup() {
 
           <View style={styles.sectionDivider} />
 
+          {/* STEP 2: ACCOUNT DETAILS */}
           <View style={styles.sectionHeader}>
             <View style={styles.sectionNumber}>
               <Text style={styles.sectionNumberText}>2</Text>
@@ -454,7 +736,6 @@ export default function EstablishmentSignup() {
             </View>
           </View>
 
-          {/* CONFIRM PASSWORD FIELD */}
           <View style={styles.fieldContainer}>
             <Text style={styles.label}>Confirm Password *</Text>
             <View
@@ -494,6 +775,7 @@ export default function EstablishmentSignup() {
 
           <View style={styles.sectionDivider} />
 
+          {/* STEP 3: BUSINESS TYPE */}
           <View style={styles.sectionHeader}>
             <View style={styles.sectionNumber}>
               <Text style={styles.sectionNumberText}>3</Text>
@@ -567,57 +849,6 @@ export default function EstablishmentSignup() {
             </TouchableOpacity>
           </Modal>
 
-          <View style={styles.sectionDivider} />
-
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionNumber}>
-              <Text style={styles.sectionNumberText}>4</Text>
-            </View>
-            <View style={styles.sectionTitleArea}>
-              <Text style={styles.sectionTitle}>
-                Upload Business Permit (AI OCR)
-              </Text>
-              <Text style={styles.requiredText}>
-                Extracts Establishment Name, Address &amp; Expiry automatically
-              </Text>
-            </View>
-          </View>
-
-          <Text style={styles.documentDescription}>
-            Upload a clear photo of your Cebu City Mayor&apos;s Business Permit.
-            Our AI OCR engine will automatically extract your Establishment Name,
-            Registered Address, Permit Number, and Expiry Date for Admin KYB
-            verification.
-          </Text>
-
-          <TouchableOpacity
-            style={styles.uploadBox}
-            activeOpacity={0.7}
-            onPress={pickDocument}
-          >
-            <View style={styles.uploadIconCircle}>
-              <Ionicons
-                name="document-text-outline"
-                size={24}
-                color={Colors.primary}
-              />
-            </View>
-            <View style={styles.uploadContent}>
-              <Text style={styles.uploadTitle}>Business Permit</Text>
-              <Text style={styles.uploadSubtitle}>
-                {permitFile ? permitFile.name : "JPG or PNG Image"}
-              </Text>
-              <Text style={styles.uploadAction}>
-                {permitFile ? "Tap to change file" : "Tap to upload"}
-              </Text>
-            </View>
-            <Ionicons
-              name={permitFile ? "checkmark-circle" : "cloud-upload-outline"}
-              size={23}
-              color={Colors.primary}
-            />
-          </TouchableOpacity>
-
           <View style={styles.securityNote}>
             <Ionicons
               name="shield-checkmark-outline"
@@ -625,8 +856,8 @@ export default function EstablishmentSignup() {
               color={Colors.primary}
             />
             <Text style={styles.secureText}>
-              Files are securely scanned via AI OCR and reviewed by ReServe
-              Admin.
+              Your verified permit and business details are securely transmitted
+              to the Admin team for approval.
             </Text>
           </View>
 
@@ -656,7 +887,7 @@ export default function EstablishmentSignup() {
             style={styles.submitButton}
             activeOpacity={0.85}
             onPress={handleRequestOtp}
-            disabled={isLoading}
+            disabled={isLoading || isScanningOcr}
           >
             <Text style={styles.submitText}>
               {isLoading
@@ -763,7 +994,6 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     color: "#777777",
     marginTop: 4,
-    maxWidth: 330,
   },
   sectionHeader: {
     flexDirection: "row",
@@ -798,20 +1028,20 @@ const styles = StyleSheet.create({
   },
   ocrNoticeBanner: {
     flexDirection: "row",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: 8,
     backgroundColor: "#E8EFEA",
     borderWidth: 1,
     borderColor: Colors.border,
-    borderRadius: 11,
-    padding: 11,
+    borderRadius: 10,
+    padding: 10,
     marginBottom: 12,
   },
   ocrNoticeText: {
     flex: 1,
-    fontFamily: "PoppinsRegular",
+    fontFamily: "PoppinsMedium",
     fontSize: 9.5,
-    lineHeight: 14.5,
+    lineHeight: 14,
     color: Colors.primary2,
   },
   sectionDivider: {
@@ -907,13 +1137,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.primary2,
   },
-  documentDescription: {
-    fontFamily: "PoppinsRegular",
-    fontSize: 9.5,
-    lineHeight: 14,
-    color: "#777777",
-    marginBottom: 10,
-  },
   uploadBox: {
     width: "100%",
     minHeight: 72,
@@ -925,7 +1148,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 10,
     paddingVertical: 9,
-    marginBottom: 9,
+    marginBottom: 10,
   },
   uploadIconCircle: {
     width: 44,
@@ -957,7 +1180,7 @@ const styles = StyleSheet.create({
   securityNote: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 2,
+    marginTop: 4,
     marginBottom: 15,
   },
   secureText: {
