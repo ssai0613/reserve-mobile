@@ -1987,10 +1987,10 @@ export default function EstablishmentListing() {
                     prepDate={selectedListing.preparationDate}
                     expDate={selectedListing.expiryDate}
                     expTime={selectedListing.expiryTime}
-                    initialPrice={selectedListing.originalPrice.replace(
-                      /[^\d.]/g,
-                      ""
-                    )}
+                    initialPrice={
+                      selectedListing.price.replace(/[^\d.]/g, "") ||
+                      selectedListing.originalPrice.replace(/[^\d.]/g, "")
+                    }
                     minPrice={selectedListing.floorPrice.replace(/[^\d.]/g, "")}
                     onStatusChange={() =>
                       fetchListings(merchantId, establishmentName)
@@ -2212,7 +2212,10 @@ function ListingCard({
 
     const startTime = parseSafeDate(item.preparationDate);
     const endTime = parseSafeDate(item.expiryDate, item.expiryTime);
-    const startP = Number(item.originalPrice.replace(/[^\d.]/g, "")) || 0;
+    const startP =
+      Number(item.price.replace(/[^\d.]/g, "")) ||
+      Number(item.originalPrice.replace(/[^\d.]/g, "")) ||
+      0;
     const floorP = Number(item.floorPrice.replace(/[^\d.]/g, "")) || 0;
 
     const totalHours = (endTime - startTime) / (1000 * 60 * 60);
