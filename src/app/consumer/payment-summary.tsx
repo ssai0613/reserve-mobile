@@ -3,25 +3,26 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    DeviceEventEmitter,
-    Image,
-    Linking,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  DeviceEventEmitter,
+  Image,
+  Linking,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { api } from "../../../services/api";
 import {
-    ReserveAlertModal,
-    ReserveModalState,
+  ReserveAlertModal,
+  ReserveModalState,
 } from "../components/CebuRegistrationHelpers";
 import { switchConsumerTab } from "../components/ConsumerNav";
 
@@ -29,7 +30,68 @@ const CART_STORAGE_KEY = "@reserve_cart";
 
 const getStorageItem = async (key: string): Promise<string | null> => {
   if (Platform.OS === "web") return localStorage.getItem(key);
-  return await SecureStore.getItemAsync(key);
+  try {
+    return await SecureStore.getItemAsync(key);
+  } catch (e) {
+    return null;
+  }
+};
+
+const parseSafeDate = (dateStr: string, timeStr?: string) => {
+  try {
+    let full = timeStr ? `${dateStr} ${timeStr}` : dateStr;
+    full = full.replace(/,/g, "").replace(/\s+/g, " ").trim();
+    const parts = full.split(" ");
+    const monthIndex = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ].indexOf(parts[0]);
+    const day = parseInt(parts[1], 10);
+    const year = parseInt(parts[2], 10);
+    let hours = 0;
+    let minutes = 0;
+    if (parts[3]) {
+      const timeParts = parts[3].split(":");
+      hours = parseInt(timeParts[0], 10);
+      minutes = parseInt(timeParts[1], 10);
+      const fullUpper = full.toUpperCase();
+      if (fullUpper.includes("PM") && hours < 12) hours += 12;
+      if (fullUpper.includes("AM") && hours === 12) hours = 0;
+    }
+    return new Date(year, monthIndex, day, hours, minutes).getTime();
+  } catch (error) {
+    return new Date().getTime();
+  }
+};
+
+const computeCurrentLivePrice = (
+  prepDate: string,
+  expDate: string,
+  expTime: string,
+  initialPrice: number,
+  minPrice: number,
+  pricingMode?: string
+) => {
+  if (pricingMode === "fixed") {
+    return Math.round(initialPrice * 100) / 100;
+  }
+  const startTime = parseSafeDate(prepDate);
+  const endTime = parseSafeDate(expDate, expTime);
+  const now = Date.now();
+  if (endTime <= now) {
+    return minPrice > 0 ? minPrice : initialPrice;
+  }
+  const totalHours = (endTime - startTime) / (1000 * 60 * 60);
+  const totalDrop = initialPrice - minPrice;
+  const hourlyDropAmount = totalHours > 0 ? totalDrop / totalHours : 0;
+  const hoursPassed = Math.floor((now - startTime) / (1000 * 60 * 60));
+
+  let livePrice = initialPrice;
+  if (hoursPassed > 0 && minPrice > 0 && initialPrice > minPrice) {
+    livePrice = initialPrice - hourlyDropAmount * hoursPassed;
+    if (livePrice < minPrice) livePrice = minPrice;
+  }
+  return Math.round(livePrice * 100) / 100;
 };
 
 export default function PaymentSummaryScreen() {
@@ -42,6 +104,7 @@ export default function PaymentSummaryScreen() {
     targetMerchant || "Partner Establishment"
   );
   const [paymentMethod, setPaymentMethod] = useState<"GCash" | "Maya">("GCash");
+  const [refreshing, setRefreshing] = useState(false);
 
   // Live Xendit Invoice Verification State
   const [gatewayModalVisible, setGatewayModalVisible] = useState(false);
@@ -67,12 +130,147 @@ export default function PaymentSummaryScreen() {
     type: "success" | "error" | "info" | "warning" = "info"
   ) => setModalAlert({ visible: true, title, message, type });
 
+  const loadSelectedMerchantCart = useCallback(
+    async (syncWithServer = true): Promise<any[]> => {
+      try {
+        const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
+        if (!storedCart) {
+          router.replace("/consumer/cart" as any);
+          return [];
+        }
+        let parsed: any[] = JSON.parse(storedCart);
+        if (!Array.isArray(parsed) || parsed.length === 0) {
+          router.replace("/consumer/cart" as any);
+          return [];
+        }
+
+        if (syncWithServer) {
+          try {
+            const storedId = (await getStorageItem("profile_id")) || "0";
+            const storedEmail = (await getStorageItem("user_email")) || "";
+            const response = await api.get(
+              `listings/?consumer=${storedId}&email=${encodeURIComponent(
+                storedEmail
+              )}`
+            );
+            const liveFeed: any[] = Array.isArray(response.data)
+              ? response.data
+              : [];
+            const liveMap = new Map<string, any>();
+            liveFeed.forEach((lf) => {
+              liveMap.set(String(lf.prod_id || lf.id), lf);
+            });
+
+            const syncedCart: any[] = [];
+            for (const item of parsed) {
+              const liveItem = liveMap.get(String(item.id));
+              if (!liveItem) continue;
+
+              const availStock = Number(
+                liveItem.qty_available ?? liveItem.quantity ?? 0
+              );
+              if (availStock <= 0) continue;
+
+              const basePrice = Number(
+                liveItem.price ?? liveItem.discounted_price ?? item.price ?? 0
+              );
+              const origPrice = Number(
+                liveItem.original_price ??
+                  liveItem.orig_price ??
+                  item.originalPrice ??
+                  basePrice
+              );
+              const floorPrice = Number(
+                liveItem.floor_price ?? item.floorPrice ?? basePrice
+              );
+              const prepDate =
+                liveItem.safely_anchor_time ||
+                liveItem.preparation_date ||
+                item.preparationDate ||
+                "";
+              const expDate = liveItem.expiry_date || item.expiryDate || "";
+              const expTime = liveItem.expiry_time || item.expiryTime || "";
+              const pMode =
+                liveItem.pricing_mode || item.pricingMode || "fixed";
+
+              const updatedLivePrice = computeCurrentLivePrice(
+                prepDate,
+                expDate,
+                expTime,
+                basePrice,
+                floorPrice,
+                pMode
+              );
+
+              syncedCart.push({
+                ...item,
+                name: liveItem.prod_name || item.name,
+                establishment: liveItem.merchant_name || item.establishment,
+                price: updatedLivePrice,
+                originalPrice: origPrice > 0 ? origPrice : updatedLivePrice,
+                floorPrice: floorPrice,
+                pricingMode: pMode,
+                maxStock: availStock,
+                quantity: Math.min(
+                  availStock,
+                  Math.max(1, Number(item.quantity || 1))
+                ),
+                expiryDate: expDate,
+                expiryTime: expTime,
+                image: liveItem.image_path || item.image,
+              });
+            }
+
+            parsed = syncedCart;
+            if (parsed.length === 0) {
+              await AsyncStorage.removeItem(CART_STORAGE_KEY);
+              DeviceEventEmitter.emit("consumer_cart_updated");
+              router.replace("/consumer/cart" as any);
+              return [];
+            } else {
+              await AsyncStorage.setItem(
+                CART_STORAGE_KEY,
+                JSON.stringify(parsed)
+              );
+            }
+          } catch (syncErr) {
+            console.log("Payment summary live price sync notice:", syncErr);
+          }
+        }
+
+        setAllCartItems(parsed);
+        const resolvedName =
+          targetMerchant ||
+          parsed[0]?.establishment ||
+          "Partner Establishment";
+        setMerchantName(resolvedName);
+
+        const filtered = parsed.filter(
+          (i) =>
+            (i.establishment || "Partner Establishment") === resolvedName
+        );
+        setMerchantItems(filtered);
+        return filtered;
+      } catch (e) {
+        console.log("Payment summary cart load error:", e);
+        return [];
+      }
+    },
+    [targetMerchant]
+  );
+
   useEffect(() => {
-    loadSelectedMerchantCart();
+    loadSelectedMerchantCart(true);
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
-  }, [targetMerchant]);
+  }, [loadSelectedMerchantCart]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadSelectedMerchantCart(true);
+    setRefreshing(false);
+  };
 
   useEffect(() => {
     if (gatewayModalVisible && activeInvoiceId) {
@@ -90,30 +288,6 @@ export default function PaymentSummaryScreen() {
       }
     };
   }, [gatewayModalVisible, activeInvoiceId]);
-
-  const loadSelectedMerchantCart = async () => {
-    try {
-      const storedCart = await AsyncStorage.getItem(CART_STORAGE_KEY);
-      if (!storedCart) {
-        router.replace("/consumer/cart" as any);
-        return;
-      }
-      const parsed: any[] = JSON.parse(storedCart);
-      setAllCartItems(parsed);
-
-      const resolvedName =
-        targetMerchant || parsed[0]?.establishment || "Partner Establishment";
-      setMerchantName(resolvedName);
-
-      const filtered = parsed.filter(
-        (i) =>
-          (i.establishment || "Partner Establishment") === resolvedName
-      );
-      setMerchantItems(filtered);
-    } catch (e) {
-      console.log("Payment summary cart load error:", e);
-    }
-  };
 
   const subtotal = merchantItems.reduce(
     (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
@@ -139,10 +313,11 @@ export default function PaymentSummaryScreen() {
   };
 
   const handleStartXenditCheckout = async () => {
-    if (merchantItems.length === 0) {
+    const latestMerchantItems = await loadSelectedMerchantCart(true);
+    if (latestMerchantItems.length === 0) {
       showModal(
-        "No Items Selected",
-        "Your selected merchant cart is empty.",
+        "Items Unavailable",
+        "The selected items have expired, entered the 30-minute safety cutoff, or sold out.",
         "warning"
       );
       return;
@@ -155,6 +330,12 @@ export default function PaymentSummaryScreen() {
       return;
     }
 
+    const latestSubtotal = latestMerchantItems.reduce(
+      (sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1),
+      0
+    );
+    const latestDeposit = Math.round(latestSubtotal * 0.1 * 100) / 100;
+
     setActiveInvoiceId(null);
     setActiveCheckoutUrl(null);
     setInvoiceStatusText("CREATING INVOICE...");
@@ -164,8 +345,8 @@ export default function PaymentSummaryScreen() {
     try {
       const pmRes = await api.post("listings/paymongo-checkout/", {
         action: "create_invoice",
-        amount: downpaymentFee,
-        description: `RESERVE 10% Deposit at ${merchantName} (${merchantItems
+        amount: latestDeposit,
+        description: `RESERVE 10% Deposit at ${merchantName} (${latestMerchantItems
           .map((i) => `${i.quantity}x ${i.name}`)
           .join(", ")})`,
         payment_method: paymentMethod,
@@ -339,7 +520,7 @@ export default function PaymentSummaryScreen() {
         <View style={styles.headerTextContainer}>
           <Text style={styles.headerTitle}>Payment Summary &amp; Checkout</Text>
           <Text style={styles.headerSubtitle} numberOfLines={1}>
-            Reserving from {merchantName}
+            Reserving from {merchantName} • Pull down to refresh live prices
           </Text>
         </View>
       </View>
@@ -347,6 +528,14 @@ export default function PaymentSummaryScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.primary}
+            colors={[Colors.primary]}
+          />
+        }
       >
         {/* SELECTED ITEMS PREVIEW */}
         <Text style={styles.sectionTitle}>
@@ -367,7 +556,8 @@ export default function PaymentSummaryScreen() {
                   {item.quantity}x {item.name}
                 </Text>
                 <Text style={styles.itemExpiry}>
-                  Exp: {item.expiryDate} • {item.expiryTime}
+                  Unit: ₱{Number(item.price || 0).toFixed(2)} • Exp:{" "}
+                  {item.expiryDate} • {item.expiryTime}
                 </Text>
               </View>
               <Text style={styles.itemSubtotal}>
@@ -530,8 +720,8 @@ export default function PaymentSummaryScreen() {
         </TouchableOpacity>
 
         <Text style={styles.secureText}>
-          Powered by Xendit ({paymentMethod}) • Verifies payment before
-          generating your QR Rescue Voucher
+          Powered by Xendit ({paymentMethod}) • Verifies live price &amp;
+          payment before generating your QR Rescue Voucher
         </Text>
       </ScrollView>
 

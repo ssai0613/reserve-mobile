@@ -80,7 +80,7 @@ export function EstablishmentHeader({
 
   useEffect(() => {
     loadHeaderData();
-    const interval = setInterval(loadHeaderData, 4000);
+    const interval = setInterval(loadHeaderData, 15000);
 
     const sub = DeviceEventEmitter.addListener("merchant_notifs_updated", () => {
       loadHeaderData();

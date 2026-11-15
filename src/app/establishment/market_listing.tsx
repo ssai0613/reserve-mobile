@@ -443,7 +443,7 @@ export default function SMEProduceListing() {
       await fetchListings(resolvedId, storedName);
       interval = setInterval(() => {
         fetchListings(resolvedId, storedName);
-      }, 6000);
+      }, 15000);
     };
     setup();
 
@@ -1923,11 +1923,20 @@ export default function SMEProduceListing() {
                 </View>
 
                 <LivePricingCard
+                  itemId={selectedListing.id}
+                  itemStatus={selectedListing.status}
                   prepDate={selectedListing.preparationDate}
                   expDate={selectedListing.expiryDate}
                   expTime={selectedListing.expiryTime}
-                  initialPrice={selectedListing.originalPrice.toString()}
+                  initialPrice={(
+                    Number(selectedListing.price) ||
+                    Number(selectedListing.originalPrice) ||
+                    0
+                  ).toString()}
                   minPrice={selectedListing.floorPrice.toString()}
+                  onStatusChange={() =>
+                    fetchListings(merchantId, establishmentName)
+                  }
                 />
 
                 <View style={styles.viewPriceBox}>
@@ -2137,7 +2146,7 @@ function ListingCard({
     hasFlaggedRef.current = item.status === "Flagged";
     const startTime = parseSafeDate(item.preparationDate);
     const endTime = parseSafeDate(item.expiryDate, item.expiryTime);
-    const startP = Number(item.originalPrice) || 0;
+    const startP = Number(item.price) || Number(item.originalPrice) || 0;
     const floorP = Number(item.floorPrice) || 0;
 
     const totalHours = (endTime - startTime) / (1000 * 60 * 60);
@@ -2361,21 +2370,28 @@ function StorageOption({
 }
 
 function LivePricingCard({
+  itemId,
+  itemStatus,
   prepDate,
   expDate,
   expTime,
   initialPrice,
   minPrice,
+  onStatusChange,
 }: {
+  itemId?: number;
+  itemStatus?: string;
   prepDate: string;
   expDate: string;
   expTime: string;
   initialPrice: string;
   minPrice: string;
+  onStatusChange?: () => void;
 }) {
   const [timeLeft, setTimeLeft] = useState("Calculating...");
   const [livePrice, setLivePrice] = useState(Number(initialPrice) || 0);
   const [isExpired, setIsExpired] = useState(false);
+  const hasFlaggedRef = useRef(itemStatus === "Flagged");
 
   const parseSafeDate = (dateStr: string, timeStr?: string) => {
     try {
@@ -2405,6 +2421,7 @@ function LivePricingCard({
   };
 
   useEffect(() => {
+    hasFlaggedRef.current = itemStatus === "Flagged";
     const startTime = parseSafeDate(prepDate);
     const endTime = parseSafeDate(expDate, expTime);
     const startP = Number(initialPrice) || 0;
@@ -2417,6 +2434,16 @@ function LivePricingCard({
     const timer = setInterval(() => {
       const now = new Date().getTime();
       const distance = endTime - now;
+
+      if (
+        distance / 1000 <= 1830 &&
+        itemId &&
+        itemStatus === "Active" &&
+        !hasFlaggedRef.current
+      ) {
+        hasFlaggedRef.current = true;
+        onStatusChange?.();
+      }
 
       if (distance <= 0) {
         setTimeLeft("Expired");
@@ -2445,7 +2472,16 @@ function LivePricingCard({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [prepDate, expDate, expTime, initialPrice, minPrice]);
+  }, [
+    itemId,
+    itemStatus,
+    prepDate,
+    expDate,
+    expTime,
+    initialPrice,
+    minPrice,
+    onStatusChange,
+  ]);
 
   return (
     <View style={styles.liveContainer}>

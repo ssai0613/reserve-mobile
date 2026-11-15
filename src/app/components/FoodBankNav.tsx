@@ -26,13 +26,11 @@ export type FoodBankTabName =
   | "Partners"
   | "Profile";
 
-// Indicates whether a Food Bank tab is rendered inside the persistent _layout.tsx shell
 export const FoodBankShellDirectRenderContext = createContext<boolean>(false);
 
 export const useIsInsideFoodBankShell = () =>
   useContext(FoodBankShellDirectRenderContext);
 
-// Instant 0ms tab switcher (no full page reload)
 export const switchFoodBankTab = (tab: FoodBankTabName) => {
   DeviceEventEmitter.emit("fb_switch_tab", { tab });
 };
@@ -213,7 +211,7 @@ export function FoodBankHeader({
 
   useEffect(() => {
     fetchHeaderCounts();
-    const timer = setInterval(fetchHeaderCounts, 4000);
+    const timer = setInterval(fetchHeaderCounts, 15000);
 
     const notifSub = DeviceEventEmitter.addListener("fb_notifs_updated", () => {
       fetchHeaderCounts();
@@ -231,10 +229,12 @@ export function FoodBankHeader({
 
   const fetchHeaderCounts = async () => {
     try {
-      const orgId = (await getFoodBankStorage("profile_id")) || "1";
+      const orgId = (await getFoodBankStorage("profile_id")) || "0";
       const email = (await getFoodBankStorage("user_email")) || "";
       const storedName = (await getFoodBankStorage("entity_name")) || "";
       if (storedName) setOrgName(storedName);
+
+      if (orgId === "0" && !email) return;
 
       const [actRes, annRes, rawReadIds, rawDismissedIds] = await Promise.all([
         api
@@ -269,8 +269,12 @@ export function FoodBankHeader({
         } catch (e) {}
       }
 
-      const actList = Array.isArray(actRes.data) ? actRes.data : [];
-      const annList = Array.isArray(annRes.data) ? annRes.data : [];
+      const actList = (Array.isArray(actRes.data) ? actRes.data : []).sort(
+        (a: any, b: any) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0)
+      );
+      const annList = (Array.isArray(annRes.data) ? annRes.data : []).sort(
+        (a: any, b: any) => Number(b.sort_ts || 0) - Number(a.sort_ts || 0)
+      );
 
       const activeNotifs = actList.filter(
         (i: any) => !dismissedSet.has(String(i.id))
@@ -327,7 +331,6 @@ export function FoodBankHeader({
         </View>
       </TouchableOpacity>
 
-      {/* FUSED SINGLE NOTIFICATION BELL + PROFILE BUTTON */}
       <View style={styles.headerActions}>
         <TouchableOpacity
           style={styles.headerIconBtn}

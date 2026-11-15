@@ -450,7 +450,7 @@ export default function EstablishmentListing() {
       await fetchListings(resolvedId, storedName);
       interval = setInterval(() => {
         fetchListings(resolvedId, storedName);
-      }, 6000);
+      }, 15000);
     };
     setup();
 
